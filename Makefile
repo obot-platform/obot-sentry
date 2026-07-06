@@ -9,8 +9,13 @@ GO_LD_FLAGS := "-s -w $(GIT_TAG)"
 build:
 	go build -ldflags=$(GO_LD_FLAGS) -o bin/obocop .
 
+# Cross-compiled Windows binaries.
+build-windows:
+	GOOS=windows GOARCH=amd64 go build -ldflags=$(GO_LD_FLAGS) -o bin/obocop.exe .
+	GOOS=windows GOARCH=arm64 go build -ldflags=$(GO_LD_FLAGS) -o bin/obocop-arm64.exe .
+
 clean:
-	rm -rf bin
+	rm -rf bin dist
 
 # Lint the project
 lint: lint-go
@@ -28,11 +33,15 @@ setup-env:
 lint-go: setup-env
 	golangci-lint run
 
+# Catches Windows-only compile errors without a Windows box.
+vet-windows:
+	GOOS=windows go vet ./...
+
 test:
 	go test -v -cover ./...
 
 # Runs Go linters and validates that the repo is clean.
-validate-go-code: tidy lint-go no-changes
+validate-go-code: tidy lint-go vet-windows no-changes
 
 no-changes:
 	@if [ -n "$$(git status --porcelain)" ]; then \
@@ -42,4 +51,4 @@ no-changes:
 		exit 1; \
 	fi
 
-.PHONY: default build clean lint lint-go tidy setup-env test validate-go-code no-changes
+.PHONY: default build build-windows clean lint lint-go vet-windows tidy setup-env test validate-go-code no-changes

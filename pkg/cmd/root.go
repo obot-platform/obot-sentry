@@ -13,6 +13,8 @@ type Obocop struct{}
 // New builds the root command with its subcommands.
 func New() *cobra.Command {
 	return obotcmd.Command(&Obocop{},
+		&Scan{},
+		&Enroll{},
 		&Version{},
 	)
 }
