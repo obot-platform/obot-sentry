@@ -13,6 +13,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/obot-platform/obocop/pkg/fileutil"
 )
 
 const stateFile = "state.json"
@@ -56,7 +58,7 @@ func (s State) Save(dir string) error {
 	if err != nil {
 		return err
 	}
-	return writeFileAtomic(filepath.Join(dir, stateFile), append(b, '\n'), 0o600)
+	return fileutil.WriteFileAtomic(filepath.Join(dir, stateFile), append(b, '\n'), 0o600)
 }
 
 // Enrolled reports whether s records an enrollment for this exact
@@ -110,7 +112,7 @@ func (s ScanState) Save(dir string) error {
 	if err != nil {
 		return err
 	}
-	return writeFileAtomic(filepath.Join(dir, scanStateFile), append(b, '\n'), 0o600)
+	return fileutil.WriteFileAtomic(filepath.Join(dir, scanStateFile), append(b, '\n'), 0o600)
 }
 
 // SubmittedWithin reports whether the last successful submission is
@@ -155,7 +157,7 @@ func AppendScanLog(dir string, record ScanLogRecord) error {
 	if err != nil {
 		return err
 	}
-	if err := writeFileAtomic(filepath.Join(logDir, name), append(b, '\n'), 0o600); err != nil {
+	if err := fileutil.WriteFileAtomic(filepath.Join(logDir, name), append(b, '\n'), 0o600); err != nil {
 		return err
 	}
 	return pruneScanLogs(logDir, time.Now())
@@ -226,25 +228,4 @@ func pruneScanLogs(logDir string, now time.Time) error {
 		total -= info.Size()
 	}
 	return nil
-}
-
-func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
-	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".tmp-*")
-	if err != nil {
-		return err
-	}
-	defer func() { _ = os.Remove(tmp.Name()) }()
-
-	if err := tmp.Chmod(perm); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if _, err := tmp.Write(data); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmp.Name(), path)
 }

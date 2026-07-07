@@ -16,7 +16,7 @@ type Enroll struct {
 func (e *Enroll) Customize(cmd *cobra.Command) {
 	cmd.Use = "enroll"
 	cmd.Short = "Enroll this device with the Obot server"
-	cmd.Long = "Enroll registers this (machine, user) identity's public key with the Obot server " +
+	cmd.Long = "Enroll registers this shared device identity's public key with the Obot server " +
 		"using the configured enrollment credential. It is idempotent: re-running with the same " +
 		"key is a no-op update. Scans enroll automatically, so this is mainly for verifying a " +
 		"deployment's configuration."

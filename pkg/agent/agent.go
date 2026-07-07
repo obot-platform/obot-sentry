@@ -111,3 +111,43 @@ func (a *Agent) SubmitScan(ctx context.Context, id *identity.Identity, st state.
 	}
 	return scan, nil
 }
+
+func (a *Agent) SubmitLocalAgentAuditLogs(ctx context.Context, id *identity.Identity, st state.State, logs []types.LocalAgentToolCallAuditLogInput) error {
+	err := a.Client.SubmitLocalAgentAuditLogs(ctx, id, logs)
+	if client.IsUnauthorized(err) {
+		// Without an enrollment key we cannot re-enroll, so a rejected device
+		// credential is a terminal auth failure. Return the original 401/403
+		// (an *ErrHTTP) so the caller fails open and discards rather than
+		// spooling an event that can never authenticate.
+		if a.Config.EnrollmentKey == "" {
+			return err
+		}
+		slog.Warn("device credentials rejected; re-enrolling and retrying local-agent audit submission once", "err", err)
+		// EnsureEnrolled reloads state from disk and short-circuits when the
+		// stored EnrolledAt is set, so clearing the in-memory field alone is not
+		// enough. Persist EnrolledAt=nil so the reload sees an unenrolled state
+		// and actually re-enrolls; otherwise the retry would reuse the same
+		// rejected credentials.
+		st.EnrolledAt = nil
+		if saveErr := st.Save(a.DataDir); saveErr != nil {
+			return saveErr
+		}
+		if id, st, err = a.EnsureEnrolled(ctx); err != nil {
+			return err
+		}
+		err = a.Client.SubmitLocalAgentAuditLogs(ctx, id, logs)
+	}
+	if err != nil {
+		return err
+	}
+
+	now := time.Now().UTC()
+	st.LastSubmitAt = &now
+	if err := st.Save(a.DataDir); err != nil {
+		// The server has already accepted the logs. Do not report this as a
+		// submit failure: callers would spool or retain an already-delivered
+		// batch and replay it unnecessarily.
+		slog.Warn("failed to persist successful local-agent audit submission timestamp", "err", err)
+	}
+	return nil
+}

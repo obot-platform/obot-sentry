@@ -7,7 +7,7 @@ require (
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/uuid v1.6.0
 	github.com/obot-platform/cmd v0.0.0-20260615195405-fab7a186f46c
-	github.com/obot-platform/obot/apiclient v0.0.0-20260707163133-446d097a9375
+	github.com/obot-platform/obot/apiclient v0.0.0-20260716212309-520c3a04a943
 	github.com/spf13/cobra v1.10.2
 	golang.org/x/sys v0.46.0
 	howett.net/plist v1.0.1

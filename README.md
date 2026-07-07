@@ -2,13 +2,15 @@
 
 Obocop is a command-line tool designed to be used by MDMs for device scanning and agent hook configuration.
 
-It enrolls each machine with an [Obot](https://github.com/obot-platform/obot) server as a single device shared by all of the machine's users, and submits device scan manifests attributed per user. Inventory collection (MCP servers, skills, plugins) is currently stubbed out — scans ship an empty manifest so the enrollment and submission flow works end to end while the scan engine lands separately.
+It enrolls each machine with an [Obot](https://github.com/obot-platform/obot) server as a single device shared by all of the machine's users, submits device scan manifests attributed per user, and provides managed local-agent audit hooks. Inventory collection (MCP servers, skills, plugins) is currently stubbed out — scans ship an empty manifest so the enrollment and submission flow works end to end while the scan engine lands separately.
 
 ## How it works
 
 - **One machine-wide scheduler entry, per-user scans.** The MDM installer registers a single machine-wide scheduler entry that the OS itself runs *as each signed-in user*: on Windows a scheduled task with a `BUILTIN\Users` group principal (logon + a 5-minute poll). Each run is a plain `obocop scan --submit --quiet` in the user's own session, so attribution, paths, and permissions are native — no privileged fan-out, no daemon of our own, and no MDM per-user scheduling. The poll is cheap: obocop throttles real submissions to the MDM-configured `ScanIntervalMinutes` (default 60, clamped to 15–1440) against its per-user scan state, so admins retune the cadence from the MDM alone. Users who aren't signed in aren't scanned; their inventory can't change while they're signed out, so nothing is missed beyond first-report latency for accounts that haven't signed in since install.
 - **Enrollment.** Configuration (server URL + an `ode1-...` enrollment credential) is pushed by the MDM — via registry values on Windows, a managed-preferences profile on macOS. On the machine's first scan — by whichever user runs first — obocop generates a shared Ed25519 identity key in the machine-scoped data dir (`%PROGRAMDATA%\obot\obocop` on Windows, `/Library/Application Support/obot/obocop` on macOS; both are prepared user-writable by the installer, with a per-user fallback when unavailable) and enrolls the public key via `POST /api/mdm/enroll` (trust-on-first-use). The device ID derives from the machine ID + key fingerprint, so all users present one device — and a lost key simply mints a fresh device ID instead of a TOFU conflict. Each user's first scan re-enrolls the same identity, which is an idempotent update server-side.
-- **Submission.** Every submission is authenticated with a short-lived self-signed JWT (`aud=obot/device`) verified server-side against the enrolled key; scans land via `POST /api/devices/scans`, attributed to the submitting user by the manifest's `username`.
+- **Submission.** Every submission is authenticated with a short-lived self-signed JWT (`aud=obot/device`) verified server-side against the enrolled key; scans land via `POST /api/devices/scans`, attributed to the submitting user by the manifest's `username`. Local-agent audit logs land via `POST /api/local-agent-audit-logs`, with the server stamping authoritative device attribution from the JWT.
+- **Local-agent audit hooks.** Managed hook configuration invokes the hidden `obocop audit submit` command for supported local agents. The hook parser normalizes terminal tool-call events, submits them fail-open, and writes only warnings to stderr when enrollment or submission is unavailable so agent execution is not blocked.
+- **Audit spool.** Transient audit-log submission failures are stored in an encrypted per-user spool under the obocop cache directory and replayed after a later successful live submit. Server-side client errors are discarded instead of retried.
 - **Scan state + logs.** Every scan run updates `scan.json` (last scan/submit times, status, last error) and appends a JSON record to `scan-logs/` — timestamp-sortable filenames, pruned by age and size — in obocop's per-user cache dir (`%LOCALAPPDATA%\obot\obocop` on Windows, `~/Library/Caches/obot/obocop` on macOS). Support and MDM freshness checks read these; recording problems never fail a scan.
 
 ## Commands
@@ -18,6 +20,8 @@ obocop scan              # build + print the manifest (add --submit to enroll + 
 obocop enroll            # explicit enrollment, for verifying a configuration
 obocop version
 ```
+
+`obocop audit submit` is hidden because it is intended for managed local-agent hook configurations, not direct operator use. It submits with enrolled-device JWT authentication.
 
 ## Configuration
 

@@ -10,6 +10,7 @@ import (
 	"runtime"
 
 	"github.com/adrg/xdg"
+	"github.com/obot-platform/obocop/pkg/fileutil"
 )
 
 // CacheDir returns the per-user obocop cache directory (scan state and
@@ -22,15 +23,15 @@ func CacheDir() (string, error) {
 	return filepath.Join(cacheDir, "obot", "obocop"), nil
 }
 
-// Dir returns the per-user obocop data directory, creating it (0700)
-// if needed:
+// Dir returns the per-user obocop data directory, creating it with
+// owner-only permissions or an equivalent platform-private ACL if needed:
 //
 //	windows: %LOCALAPPDATA%\obot\obocop
 //	darwin:  ~/Library/Application Support/obot/obocop
 //	linux:   ${XDG_DATA_HOME:-~/.local/share}/obot/obocop
 func Dir() (string, error) {
 	dir := filepath.Join(xdg.DataHome, "obot", "obocop")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := fileutil.MkdirAllPrivate(dir); err != nil {
 		return "", err
 	}
 	return dir, nil

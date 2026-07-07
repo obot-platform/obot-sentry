@@ -1,6 +1,7 @@
-// Package client wraps the obot apiclient for the two calls a device
+// Package client wraps the obot apiclient for the calls a device
 // makes: enrolling its identity key (bearer: ode1 enrollment
-// credential) and submitting scans (bearer: self-signed device JWT).
+// credential), submitting scans, and submitting local-agent audit logs
+// (bearer: self-signed device JWT).
 package client
 
 import (
@@ -60,4 +61,19 @@ func (c *Client) SubmitScan(ctx context.Context, id *identity.Identity, manifest
 		return nil, err
 	}
 	return c.api.WithToken(tok).SubmitDeviceScan(ctx, manifest)
+}
+
+// SubmitLocalAgentAuditLogs mints a fresh short-lived device JWT and submits
+// completed local-agent audit logs. The server stamps authoritative device
+// attribution from the JWT principal.
+func (c *Client) SubmitLocalAgentAuditLogs(ctx context.Context, id *identity.Identity, logs []types.LocalAgentToolCallAuditLogInput) error {
+	tok, err := id.MintDeviceJWT(identity.DefaultTokenTTL)
+	if err != nil {
+		return err
+	}
+	return c.submitLocalAgentAuditLogsWithBearer(ctx, tok, logs)
+}
+
+func (c *Client) submitLocalAgentAuditLogsWithBearer(ctx context.Context, token string, logs []types.LocalAgentToolCallAuditLogInput) error {
+	return c.api.WithToken(token).SubmitLocalAgentAuditLogs(ctx, logs)
 }
