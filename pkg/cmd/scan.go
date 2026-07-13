@@ -16,16 +16,18 @@ import (
 	"github.com/obot-platform/obot-sentry/pkg/agent"
 	"github.com/obot-platform/obot-sentry/pkg/datadir"
 	"github.com/obot-platform/obot-sentry/pkg/mdmconfig"
+	"github.com/obot-platform/obot-sentry/pkg/scan"
 	"github.com/obot-platform/obot-sentry/pkg/state"
 	"github.com/obot-platform/obot-sentry/pkg/version"
 )
 
 type Scan struct {
 	ConfigFlags
-	JSON    bool `usage:"Print the scan result as JSON"`
-	Quiet   bool `usage:"Suppress the result output" short:"q"`
-	Submit  bool `usage:"Submit the scan to the configured Obot server, enrolling first if needed" env:"OBOT_SENTRY_SCAN_SUBMIT"`
-	Timeout int  `usage:"Number of seconds to wait for the scan to complete" default:"300" env:"OBOT_SENTRY_SCAN_TIMEOUT"`
+	JSON     bool `usage:"Print the scan result as JSON"`
+	Quiet    bool `usage:"Suppress the result output" short:"q"`
+	Submit   bool `usage:"Submit the scan to the configured Obot server, enrolling first if needed" env:"OBOCOP_SCAN_SUBMIT"`
+	Timeout  int  `usage:"Number of seconds to wait for the scan to complete" default:"300" env:"OBOCOP_SCAN_TIMEOUT"`
+	MaxDepth int  `usage:"Maximum path depth (in segments below each scan root) to crawl for project-scope configs and skills" default:"5" env:"OBOCOP_SCAN_MAX_DEPTH"`
 }
 
 func (s *Scan) Customize(cmd *cobra.Command) {
@@ -74,7 +76,7 @@ func (s *Scan) Run(cmd *cobra.Command, _ []string) error {
 		}
 	}
 
-	manifest, err := collectScanManifest(ctx)
+	manifest, err := s.collectManifest(ctx)
 	if err != nil {
 		return err
 	}
@@ -133,11 +135,11 @@ func (s *Scan) submit(ctx context.Context, cmd *cobra.Command, cfg mdmconfig.Con
 	}
 	manifest.DeviceID = id.DeviceID
 
-	scan, err := a.SubmitScan(ctx, id, st, *manifest)
+	submitted, err := a.SubmitScan(ctx, id, st, *manifest)
 	if err != nil {
 		return fmt.Errorf("submit scan: %w", err)
 	}
-	_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Submitted scan (received_at=%s)\n", scan.ReceivedAt.GetTime().Format(time.RFC3339))
+	_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Submitted scan (received_at=%s)\n", submitted.ReceivedAt.GetTime().Format(time.RFC3339))
 	return nil
 }
 
@@ -164,33 +166,28 @@ func (s *Scan) recordScanOutcome(cmd *cobra.Command, cacheDir string, scanState 
 	}
 }
 
-// collectScanManifest fills the manifest envelope (device metadata) for
-// the current user.
-//
-// Inventory collection (MCP servers, skills, plugins, client presence)
-// is stubbed out for now: the manifest ships with empty observation
-// lists so the enrollment and submission flow is exercised end to end.
-// The scan engine lands in a follow-up.
-func collectScanManifest(_ context.Context) (types.DeviceScanManifest, error) {
-	hostname, _ := os.Hostname()
-	var username string
-	if u, err := user.Current(); err == nil {
-		username = u.Username
+// collectManifest runs the scan engine over this machine's roots (the
+// user's home, plus WSL homes on Windows) and fills the manifest
+// envelope with device metadata.
+func (s *Scan) collectManifest(ctx context.Context) (types.DeviceScanManifest, error) {
+	roots, err := scan.DefaultRoots(ctx)
+	if err != nil {
+		return types.DeviceScanManifest{}, err
+	}
+	manifest, err := scan.Scan(ctx, scan.Options{Roots: roots, MaxDepth: s.MaxDepth})
+	if err != nil {
+		return types.DeviceScanManifest{}, fmt.Errorf("scan: %w", err)
 	}
 
-	return types.DeviceScanManifest{
-		ScannerVersion: version.Get().String(),
-		ScannedAt:      types.Time{Time: time.Now().UTC()},
-		Hostname:       hostname,
-		OS:             runtime.GOOS,
-		Arch:           runtime.GOARCH,
-		Username:       username,
-		Files:          []types.DeviceScanFile{},
-		MCPServers:     []types.DeviceScanMCPServer{},
-		Skills:         []types.DeviceScanSkill{},
-		Plugins:        []types.DeviceScanPlugin{},
-		Clients:        []types.DeviceScanClient{},
-	}, nil
+	manifest.ScannerVersion = version.Get().String()
+	manifest.ScannedAt = types.Time{Time: time.Now().UTC()}
+	manifest.OS = runtime.GOOS
+	manifest.Arch = runtime.GOARCH
+	manifest.Hostname, _ = os.Hostname()
+	if u, err := user.Current(); err == nil {
+		manifest.Username = u.Username
+	}
+	return manifest, nil
 }
 
 func writeJSON(cmd *cobra.Command, v any) error {
@@ -209,23 +206,39 @@ func writeScanTable(cmd *cobra.Command, manifest types.DeviceScanManifest) error
 		_, _ = fmt.Fprintf(out, "Device ID: %s\n", tableCell(manifest.DeviceID))
 	}
 	_, _ = fmt.Fprintf(out, "Scanned:   %s\n", manifest.ScannedAt.GetTime().Format(time.RFC3339))
+
+	// A skill discoverable by several clients appears once per client
+	// in manifest.Skills; the total counts each skill once, while the
+	// per-client column counts every skill the client can discover.
+	var (
+		distinctSkills     = make(map[string]struct{})
+		unattributedSkills = make(map[string]struct{})
+		skillCounts        = make(map[string]int)
+	)
+	for _, skill := range manifest.Skills {
+		distinctSkills[skill.File] = struct{}{}
+		if skill.Client == "" || skill.Client == scan.MultiClient {
+			unattributedSkills[skill.File] = struct{}{}
+			continue
+		}
+		skillCounts[skill.Client]++
+	}
+
 	_, _ = fmt.Fprintf(out, "Found:     %d clients, %d MCP servers, %d skills, %d plugins, %d files\n\n",
-		len(manifest.Clients), len(manifest.MCPServers), len(manifest.Skills), len(manifest.Plugins), len(manifest.Files))
+		len(manifest.Clients), len(manifest.MCPServers), len(distinctSkills), len(manifest.Plugins), len(manifest.Files))
 
 	if len(manifest.Clients) == 0 {
 		_, _ = fmt.Fprintln(out, "No clients found")
 		return nil
 	}
 
-	mcpCounts := map[string]int{}
+	var (
+		mcpCounts    = make(map[string]int)
+		pluginCounts = make(map[string]int)
+	)
 	for _, server := range manifest.MCPServers {
 		mcpCounts[server.Client]++
 	}
-	skillCounts := map[string]int{}
-	for _, skill := range manifest.Skills {
-		skillCounts[skill.Client]++
-	}
-	pluginCounts := map[string]int{}
 	for _, plugin := range manifest.Plugins {
 		pluginCounts[plugin.Client]++
 	}
@@ -241,7 +254,14 @@ func writeScanTable(cmd *cobra.Command, manifest types.DeviceScanManifest) error
 			tableCell(client.ConfigPath),
 		)
 	}
-	return w.Flush()
+	if err := w.Flush(); err != nil {
+		return err
+	}
+
+	if n := len(unattributedSkills); n > 0 {
+		_, _ = fmt.Fprintf(out, "\n%d skills found outside any client's discovery paths\n", n)
+	}
+	return nil
 }
 
 // tableCell renders an empty value as a placeholder dash.
