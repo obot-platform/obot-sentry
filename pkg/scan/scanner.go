@@ -46,7 +46,19 @@ type Scanner interface {
 // new client = appending here + writing one file with a struct
 // implementing Scanner. Order is alphabetical so emit order is
 // deterministic.
-var scanners []Scanner
+var scanners = []Scanner{
+	claudeCodeScanner{},
+	claudeDesktopScanner{},
+	codexScanner{},
+	cursorScanner{},
+	gooseScanner{},
+	hermesScanner{},
+	openclawScanner{},
+	opencodeScanner{},
+	vscodeScanner{},
+	windsurfScanner{},
+	zedScanner{},
+}
 
 // observations groups what scanners and skill discovery emit. Slices
 // accumulate in the orchestrator; the shared file/client tables live on
