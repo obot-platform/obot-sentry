@@ -6,16 +6,16 @@ It enrolls each machine with an [Obot](https://github.com/obot-platform/obot) se
 
 ## How it works
 
-- **One-shot CLI, no daemon.** The MDM schedules `obocop scan --submit` per user. Each run enrolls if needed and submits a manifest; without `--submit` a scan is local-only.
-- **Enrollment.** Configuration (server URL + an `ode1-...` enrollment credential minted in the Obot admin UI) is pushed by the MDM. On the machine's first run, obocop generates a shared Ed25519 identity key in the machine-scoped data dir (`%PROGRAMDATA%\obot\obocop` on Windows, `/Library/Application Support/obot/obocop` on macOS; per-user fallback when unavailable) and enrolls the public key via `POST /api/mdm/enroll` (trust-on-first-use). The device ID derives from the machine ID + key fingerprint, so all users present one device — and a lost key simply mints a fresh device ID instead of a TOFU conflict. Each user's first scan re-enrolls the same identity, which is an idempotent update server-side.
+- **One machine-wide scheduler entry, per-user scans.** The MDM installer registers a single machine-wide scheduler entry that the OS itself runs *as each signed-in user*: on Windows a scheduled task with a `BUILTIN\Users` group principal (logon + a 5-minute poll). (The macOS installer follows the same pattern with a global LaunchAgent and lands with the Jamf packaging.) Each run is a plain `obocop scan --submit --quiet` in the user's own session, so attribution, paths, and permissions are native — no privileged fan-out, no daemon of our own, and no MDM per-user scheduling. The poll is cheap: obocop throttles real submissions to the MDM-configured `ScanIntervalMinutes` (default 60, clamped to 15–1440) against its per-user scan state, so admins retune the cadence from the MDM alone. Users who aren't signed in aren't scanned; their inventory can't change while they're signed out, so nothing is missed beyond first-report latency for accounts that haven't signed in since install.
+- **Enrollment.** Configuration (server URL + an `ode1-...` enrollment credential) is pushed by the MDM — via registry values on Windows, a managed-preferences profile on macOS. On the machine's first scan — by whichever user runs first — obocop generates a shared Ed25519 identity key in the machine-scoped data dir (`%PROGRAMDATA%\obot\obocop` on Windows, `/Library/Application Support/obot/obocop` on macOS; both are prepared user-writable by the installer, with a per-user fallback when unavailable) and enrolls the public key via `POST /api/mdm/enroll` (trust-on-first-use). The device ID derives from the machine ID + key fingerprint, so all users present one device — and a lost key simply mints a fresh device ID instead of a TOFU conflict. Each user's first scan re-enrolls the same identity, which is an idempotent update server-side.
 - **Submission.** Every submission is authenticated with a short-lived self-signed JWT (`aud=obot/device`) verified server-side against the enrolled key; scans land via `POST /api/devices/scans`, attributed to the submitting user by the manifest's `username`.
-- **Freshness marker.** After a successful submit, obocop writes an RFC3339 timestamp to `last_scan` in its per-user data dir (`%LOCALAPPDATA%\obot\obocop` on Windows, `~/Library/Application Support/obot/obocop` on macOS); MDM detection scripts can read this file to decide whether a new scan is due.
+- **Scan state + logs.** Every scan run updates `scan.json` (last scan/submit times, status, last error) and appends a JSON record to `scan-logs/` — timestamp-sortable filenames, pruned by age and size — in obocop's per-user cache dir (`%LOCALAPPDATA%\obot\obocop` on Windows, `~/Library/Caches/obot/obocop` on macOS). Support and MDM freshness checks read these; recording problems never fail a scan.
 
 ## Commands
 
 ```
-obocop scan     # build + print the manifest (add --submit to enroll + upload)
-obocop enroll   # explicit enrollment, for verifying a deployment's configuration
+obocop scan              # build + print the manifest (add --submit to enroll + upload)
+obocop enroll            # explicit enrollment, for verifying a configuration
 obocop version
 ```
 
@@ -27,16 +27,73 @@ Resolution order per key: flags > env > MDM store.
 |-----|------|-----|----------------------------------------|
 | Server URL | `--server-url` | `OBOCOP_SERVER_URL` | `ServerURL` |
 | Enrollment key | `--enrollment-key` | `OBOCOP_ENROLLMENT_KEY` | `EnrollmentKey` |
-| Username override | `--username` | `OBOCOP_USERNAME` | `Username` |
-| Device name override | `--device-name` | `OBOCOP_DEVICE_NAME` | `DeviceName` |
+| Scan interval (minutes) | `--scan-interval-minutes` | `OBOCOP_SCAN_INTERVAL_MINUTES` | `ScanIntervalMinutes` |
 
 MDM stores: `HKLM\SOFTWARE\Obot\Obocop` on Windows; `/Library/Managed Preferences/com.obot.obocop.plist` (fallback `/Library/Preferences/...`) on macOS.
+
+## MDM packaging
+
+Everything MDM-related lives in `build/`, one directory per OS with the
+MDM channels nested under the OS they deliver to:
+
+```
+build/
+  manifest.json          # authored: schemaVersion, fields, configurations (${VERSION} tokens)
+  mdm-assets.sh          # completes + sanity-checks the manifest, stages dist/mdm-assets/
+  windows/               # the Windows installer (MSI, WiX v4)
+    msi.ps1  obocop.wxs  scan-task.ps1  obocop.ico
+    intune/              # Intune channel: .intunewin wrap + instructions
+      intunewin.ps1  INSTRUCTIONS.md.tmpl
+  Dockerfile             # the scratch image obot mounts the assets from
+```
+
+The installers are tenant-agnostic; per-tenant configuration (server URL
++ an enrollment key created in obot) is applied at install time as MSI
+properties, so one installer serves every tenant. The Windows chain runs
+**on Windows**: [obocop.wxs](build/windows/obocop.wxs) via
+[WiX Toolset v4](https://docs.firegiant.com/wix/) (`dotnet tool install
+--global wix`), wrapped by Microsoft's
+[Win32 Content Prep Tool](https://github.com/microsoft/Microsoft-Win32-Content-Prep-Tool):
+
+```
+build\windows\msi.ps1 -Version 1.2.3 -Exe bin\obocop.exe  # dist\obocop.msi (version inside, name stable)
+build\windows\intune\intunewin.ps1                         # dist\obocop.intunewin
+build/mdm-assets.sh 1.2.3                                  # dist/mdm-assets/ (any OS)
+```
+
+CI (`build.yaml`) runs the same chain — a Linux job cross-compiles the
+exe, the Windows runner packages it — and `make mdm` dispatches that
+workflow on your fork and downloads the assembled `dist/mdm-assets`.
+
+`mdm-assets.sh` produces the tree obot consumes: the platform installers
+and instruction templates plus one `manifest.json`. The manifest is the
+whole contract: `fields` is a JSON Schema obot renders the admin form from and
+validates values against, and `configurations` lists the downloadable
+(platform, OS) units — display names, descriptions, setup instructions,
+and asset files included — so obot's wizard carries no platform
+knowledge of its own. Obot renders the `*.tmpl` assets and serves each
+unit as a zip. The enrollment key is never rendered — templates carry a
+`REPLACE_WITH_ENROLLMENT_KEY` placeholder the admin fills in the MDM.
+
+CI assembles the assets on every PR/push and publishes them as the
+data-only `ghcr.io/obot-platform/obocop/mdm-assets` image (`:main` for
+tip-of-tree, tagged + `:latest` on releases, cosign-signed) plus a
+tarball with a signed checksums file on releases. The Windows installers
+ship unsigned: Intune installs them silently in SYSTEM context, so
+nothing gates on Authenticode there. Forks stop at the workflow
+artifact — build an image locally with
+`docker build -f build/Dockerfile .` if you need one. Obot mounts the
+image directly as a Kubernetes image volume (chart `mdmAssets` values,
+K8s 1.35+) and reads it via `OBOT_SERVER_MDM_ASSETS_PATH`.
+
+| Platform | installer | scheduling | tenant config |
+|---|---|---|---|
+| Intune (Windows) | `.msi` wrapped as `.intunewin` | per-user scheduled task (logon + 5-min poll, submissions throttled to `ScanIntervalMinutes`) | MSI properties → `HKLM\SOFTWARE\Obot\Obocop` |
 
 ## Development
 
 ```
 make build          # bin/obocop
-make build-windows  # bin/obocop.exe (amd64 + arm64)
 make test
 make validate-go-code
 ```

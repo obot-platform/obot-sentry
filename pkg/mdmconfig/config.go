@@ -1,22 +1,30 @@
 // Package mdmconfig reads the deployment configuration an MDM pushes
-// to the machine: the obot server URL and enrollment key, plus optional
-// overrides. Sources are per-OS (Windows registry, macOS managed
-// preferences); CLI flags and env vars take precedence and are layered
-// on by the command layer via Merge.
+// to the machine: the obot server URL and enrollment key. Sources are
+// per-OS (Windows registry, macOS managed preferences); CLI flags and
+// env vars take precedence and are layered on by the command layer via
+// Merge.
 package mdmconfig
 
 import (
+	"strconv"
 	"strings"
+	"time"
 )
 
 // Canonical key names, shared verbatim by registry value names and
-// plist keys. packaging/CONTRACT.md is the compatibility contract for
-// these — the obot UI's generated deployment config writes them.
+// plist keys; the MDM-delivered configuration uses them exactly.
 const (
-	KeyServerURL     = "ServerURL"
-	KeyEnrollmentKey = "EnrollmentKey"
-	KeyUsername      = "Username"
-	KeyDeviceName    = "DeviceName"
+	KeyServerURL           = "ServerURL"
+	KeyEnrollmentKey       = "EnrollmentKey"
+	KeyScanIntervalMinutes = "ScanIntervalMinutes"
+)
+
+// ScanInterval bounds, mirrored by the fields schema in
+// build/manifest.json (obot's admin form enforces the same range).
+const (
+	defaultScanIntervalMinutes = 60
+	minScanIntervalMinutes     = 15
+	maxScanIntervalMinutes     = 1440
 )
 
 // Config is the resolved deployment configuration.
@@ -26,11 +34,27 @@ type Config struct {
 	// EnrollmentKey is the ode1-... enrollment credential. Only needed
 	// until the device is enrolled.
 	EnrollmentKey string
-	// Username optionally overrides the scan manifest's username
-	// attribution (e.g. to a corporate email).
-	Username string
-	// DeviceName optionally overrides the reported hostname.
-	DeviceName string
+	// ScanIntervalMinutes is the minimum number of minutes between
+	// submitted scans; 0 means unset. The OS scheduler polls faster and
+	// obocop throttles to this at runtime, so admins change the cadence
+	// by updating the MDM configuration alone.
+	ScanIntervalMinutes int
+}
+
+// ScanInterval returns the effective time between submitted scans: the
+// configured minutes clamped to the schema bounds, defaulting when
+// unset.
+func (c Config) ScanInterval() time.Duration {
+	minutes := c.ScanIntervalMinutes
+	switch {
+	case minutes == 0:
+		minutes = defaultScanIntervalMinutes
+	case minutes < minScanIntervalMinutes:
+		minutes = minScanIntervalMinutes
+	case minutes > maxScanIntervalMinutes:
+		minutes = maxScanIntervalMinutes
+	}
+	return time.Duration(minutes) * time.Minute
 }
 
 // Source is one place MDM-pushed values can come from. Read returns
@@ -55,11 +79,16 @@ func FromSource(src Source) (Config, error) {
 	get := func(key string) string {
 		return strings.TrimSpace(values[key])
 	}
+	// Lenient: an absent or non-numeric interval reads as 0 (unset) and
+	// the default applies, rather than failing every scan on the machine.
+	interval, err := strconv.Atoi(get(KeyScanIntervalMinutes))
+	if err != nil || interval < 0 {
+		interval = 0
+	}
 	return Config{
-		ServerURL:     get(KeyServerURL),
-		EnrollmentKey: get(KeyEnrollmentKey),
-		Username:      get(KeyUsername),
-		DeviceName:    get(KeyDeviceName),
+		ServerURL:           get(KeyServerURL),
+		EnrollmentKey:       get(KeyEnrollmentKey),
+		ScanIntervalMinutes: interval,
 	}, nil
 }
 
@@ -72,11 +101,8 @@ func (c Config) Merge(fallback Config) Config {
 	if c.EnrollmentKey == "" {
 		c.EnrollmentKey = fallback.EnrollmentKey
 	}
-	if c.Username == "" {
-		c.Username = fallback.Username
-	}
-	if c.DeviceName == "" {
-		c.DeviceName = fallback.DeviceName
+	if c.ScanIntervalMinutes == 0 {
+		c.ScanIntervalMinutes = fallback.ScanIntervalMinutes
 	}
 	return c
 }

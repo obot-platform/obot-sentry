@@ -1,6 +1,7 @@
 // Package datadir resolves the directories obocop persists its state
-// under: a machine-scoped one for the shared device identity and a
-// per-user one for enrollment state and the last-scan marker.
+// under: a machine-scoped one for the shared device identity, a
+// per-user data one for enrollment state, and a per-user cache one for
+// scan state and scan log records.
 package datadir
 
 import (
@@ -10,6 +11,16 @@ import (
 
 	"github.com/adrg/xdg"
 )
+
+// CacheDir returns the per-user obocop cache directory (scan state and
+// scan log records). The directory is not created by this function.
+func CacheDir() (string, error) {
+	cacheDir, err := os.UserCacheDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(cacheDir, "obot", "obocop"), nil
+}
 
 // Dir returns the per-user obocop data directory, creating it (0700)
 // if needed:

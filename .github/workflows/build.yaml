@@ -1,0 +1,145 @@
+name: build
+
+# Builds the MDM assets end to end: cross-compiled obocop.exe → platform
+# installers → assembled dist/mdm-assets (manifest + files), published
+# as the mdm-assets workflow artifact. In the obot-platform org (and
+# except on PRs) docker.yml then packages that artifact as the
+# ghcr.io/<repo>/mdm-assets image. Forks run the whole asset pipeline on
+# GitHub-hosted runners but stop at the artifact — `make mdm` dispatches
+# this workflow and downloads it (OBOT_SERVER_MDM_ASSETS_PATH); build an
+# image locally if you need one.
+#
+# release.yml calls this workflow with the tag version and promotes the
+# :<version> image to :vX.Y.Z/:latest.
+
+permissions:
+  id-token: write
+  contents: read
+  packages: write
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Artifact version (numeric x.y.z); leave empty for an auto-bumped 0.0.<run number> dev version"
+        default: ""
+  workflow_call:
+    inputs:
+      version:
+        description: "Artifact version (numeric x.y.z)"
+        type: string
+        required: true
+
+env:
+  # MSI ProductVersion must be numeric x.y.z, so dev builds version as
+  # 0.0.<run number> — monotonic, so successive main builds supersede
+  # each other as MSI upgrades on devices tracking the dev channel. (The
+  # build field caps at 65535; only a concern after 65k dev runs.)
+  VERSION: ${{ inputs.version || format('0.0.{0}', github.run_number) }}
+
+jobs:
+  # Cross-compiled obocop.exe, stamped with VERSION so the exe, the MSI
+  # ProductVersion, and the manifest's obocopVersion always agree.
+  binaries:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+      - name: Build binary
+        env:
+          GOOS: windows
+          GOARCH: amd64
+          CGO_ENABLED: "0"
+        run: go build -ldflags "-s -w -X 'github.com/obot-platform/obocop/pkg/version.Tag=v${VERSION}'" -o bin/obocop.exe .
+      - name: Upload binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: binaries
+          path: bin/*
+          if-no-files-found: error
+
+  # Windows MSI + .intunewin on a Windows runner: WiX Toolset v4 (the
+  # cross-platform `wix` .NET tool, pinned), wrapped by Microsoft's
+  # Win32 Content Prep Tool (Windows-only). Same scripts as local runs;
+  # the exe comes prebuilt from the binaries job.
+  windows:
+    needs: binaries
+    runs-on: windows-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Download binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: binaries
+          path: bin
+      - name: Install WiX Toolset v4
+        run: dotnet tool install --global wix --version 4.0.6
+      # Pinned download from Microsoft's official repository, put on PATH
+      # for intunewin.ps1 — same provisioning pattern as the WiX toolset.
+      - name: Install Win32 Content Prep Tool
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri 'https://github.com/microsoft/Microsoft-Win32-Content-Prep-Tool/raw/v1.8.6/IntuneWinAppUtil.exe' -OutFile "$env:RUNNER_TEMP\IntuneWinAppUtil.exe"
+          Add-Content -Path $env:GITHUB_PATH -Value $env:RUNNER_TEMP
+      - name: Build MSI + .intunewin
+        shell: pwsh
+        run: |
+          ./build/windows/msi.ps1 -Version $env:VERSION -Exe bin/obocop.exe
+          ./build/windows/intune/intunewin.ps1
+      - name: Upload installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: installers-windows
+          path: |
+            dist/*.msi
+            dist/*.intunewin
+          if-no-files-found: error
+
+  # Assemble dist/mdm-assets (build/mdm-assets.sh: manifest completion +
+  # sanity checks + staging) and publish it as a workflow artifact.
+  mdm-assets:
+    needs: windows
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Download installers
+        uses: actions/download-artifact@v4
+        with:
+          name: installers-windows
+          path: dist
+      - name: Assemble MDM assets
+        run: ./build/mdm-assets.sh "${VERSION}"
+      - name: Upload MDM assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: mdm-assets
+          path: dist/mdm-assets
+          if-no-files-found: error
+
+  # Package the artifact as the assets image obot mounts as a Kubernetes
+  # image volume. Org-only (Depot runner + project auth) and skipped on
+  # PRs (their token can't push packages, and a per-PR tag is noise).
+  # The version expression must mirror env.VERSION — env isn't available
+  # in reusable-workflow inputs.
+  image:
+    if: ${{ github.event_name != 'pull_request' && github.repository_owner == 'obot-platform' }}
+    needs: mdm-assets
+    uses: ./.github/workflows/docker.yml
+    permissions:
+      id-token: write
+      contents: read
+      packages: write
+    with:
+      version: ${{ inputs.version || format('0.0.{0}', github.run_number) }}

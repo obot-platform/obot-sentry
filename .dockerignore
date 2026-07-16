@@ -1,0 +1,5 @@
+# Build-context ignore for the MDM assets image (build/Dockerfile). At
+# the repo root so both BuildKit and the classic builder honor it. The
+# image is data-only: nothing but the staged assets enters the context.
+*
+!dist/mdm-assets

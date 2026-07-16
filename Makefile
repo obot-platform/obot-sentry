@@ -9,13 +9,14 @@ GO_LD_FLAGS := "-s -w $(GIT_TAG)"
 build:
 	go build -ldflags=$(GO_LD_FLAGS) -o bin/obocop .
 
-# Cross-compiled Windows binaries.
-build-windows:
-	GOOS=windows GOARCH=amd64 go build -ldflags=$(GO_LD_FLAGS) -o bin/obocop.exe .
-	GOOS=windows GOARCH=arm64 go build -ldflags=$(GO_LD_FLAGS) -o bin/obocop-arm64.exe .
-
 clean:
 	rm -rf bin dist
+
+# Build the MDM assets remotely: dispatch the build.yaml workflow on the
+# current branch of your fork via gh, wait, and download the result into
+# dist/mdm-assets. e.g. make mdm [VERSION=1.2.3]
+mdm:
+	scripts/mdm-remote.sh $(VERSION)
 
 # Lint the project
 lint: lint-go
@@ -51,4 +52,4 @@ no-changes:
 		exit 1; \
 	fi
 
-.PHONY: default build build-windows clean lint lint-go vet-windows tidy setup-env test validate-go-code no-changes
+.PHONY: default build clean mdm lint lint-go vet-windows tidy setup-env test validate-go-code no-changes

@@ -1,0 +1,151 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Obocop MSI, authored for WiX Toolset v4 (the `wix` .NET tool installed
+  via `dotnet tool install -g wix`). The source is arch-neutral —
+  ProgramFiles64Folder and the default component bitness follow the
+  `wix build -arch` flag (see msi.ps1) — but only x64 is built today;
+  x64 MSIs also install on ARM64 Windows under emulation.
+
+  One static, signable MSI serves every tenant:
+  deployment-specific values arrive as public properties on the msiexec
+  command line the admin configures in the MDM, and land as registry
+  values under HKLM\SOFTWARE\Obot\Obocop, where pkg/mdmconfig reads them.
+  Value names must match the pkg/mdmconfig.Key* constants.
+
+  The MSI also registers one machine-wide scheduled task (via
+  scan-task.ps1) whose BUILTIN\Users group principal runs a submitting
+  scan in each signed-in user's session, as that user, at logon and every
+  5 minutes. The 5-minute cadence is just a poll: obocop throttles real
+  submissions to the ScanIntervalMinutes registry value, so admins change
+  the effective cadence from the MDM without reinstalling. Scheduling is
+  device-local: no Intune Remediations (and no Enterprise licensing)
+  required.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package Name="Obocop" Manufacturer="Obot Platform"
+           Version="$(var.Version)" Scope="perMachine"
+           UpgradeCode="2AFEEC0F-F577-482E-B7A5-3EE19FE3F36E">
+    <SummaryInformation Description="Obocop device agent" />
+
+    <!-- AllowSameVersionUpgrades: the 0.0.<run> dev channel re-pushes the
+         same version, and admins re-run installs; both must supersede in
+         place rather than silently no-op or collide with the existing
+         product. Downgrades are refused. -->
+    <MajorUpgrade AllowSameVersionUpgrades="yes"
+                  DowngradeErrorMessage="Setup cannot continue: this machine already runs a newer Obocop." />
+
+    <!--
+      Tenant config rides as public, Secure properties on the msiexec
+      command line on EVERY install and upgrade — the install command
+      stored in the MDM's app definition carries them, so supersedence
+      upgrades re-supply them too. There is deliberately no registry
+      read-back (remember-property): the launch conditions below hard-fail
+      a property-less install or upgrade instead, so stale values can
+      never silently win and there is no AppSearch/custom-action machinery
+      to maintain. Secure="yes" keeps the public properties available to
+      the elevated (SYSTEM) execute sequence for a managed install.
+    -->
+    <Property Id="OBOT_SERVER_URL" Secure="yes" />
+    <Property Id="OBOT_ENROLLMENT_KEY" Secure="yes" />
+    <!-- Optional: minutes between submitted scans (obocop clamps to
+         15-1440 at runtime). Always written, so the default is concrete. -->
+    <Property Id="OBOT_SCAN_INTERVAL_MINUTES" Secure="yes" Value="60" />
+
+    <Launch Condition="OBOT_SERVER_URL OR REMOVE~=&quot;ALL&quot;"
+            Message="The OBOT_SERVER_URL property is required (obot server base URL). Install with the completed command from INSTRUCTIONS.md." />
+    <Launch Condition="OBOT_ENROLLMENT_KEY OR REMOVE~=&quot;ALL&quot;"
+            Message="The OBOT_ENROLLMENT_KEY property is required (ode1-... enrollment credential). Install with the completed command from INSTRUCTIONS.md." />
+
+    <!-- No ARP Change/Repair: a repair can't carry the properties and
+         would rewrite the registry config with empty values. -->
+    <Property Id="ARPNOMODIFY" Value="1" />
+    <Property Id="ARPNOREPAIR" Value="1" />
+    <!-- What Settings > Apps shows next to the entry: icon plus the
+         support/about links admins expect from managed software. -->
+    <Property Id="ARPPRODUCTICON" Value="obocop.ico" />
+    <Property Id="ARPURLINFOABOUT" Value="https://obot.ai" />
+    <Property Id="ARPHELPLINK" Value="https://docs.obot.ai" />
+    <Property Id="ARPCONTACT" Value="support@obot.ai" />
+    <Icon Id="obocop.ico" SourceFile="obocop.ico" />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="ObotDir" Name="Obot">
+        <Directory Id="INSTALLDIR" Name="Obocop">
+          <Component Id="MainExecutable" Guid="6C0B54D3-30A1-4D5E-9C3F-2F6A7B8C9D01">
+            <File Id="ObocopExe" Name="obocop.exe" Source="$(var.ExePath)" KeyPath="yes" />
+          </Component>
+          <!-- Registers/removes the per-user scan scheduled task at
+               install/uninstall (see the custom actions below). New GUID
+               with the manage-scan-task.ps1 -> scan-task.ps1 rename: the
+               component's resource changed, and MajorUpgrade (full
+               uninstall/reinstall) makes the swap safe. -->
+          <Component Id="TaskScript" Guid="A3D19C46-7B5E-4F2A-9C0D-8E51B6A2F307">
+            <File Id="ScanTaskScript" Name="scan-task.ps1" Source="scan-task.ps1" KeyPath="yes" />
+          </Component>
+          <Component Id="DeploymentRegistry" Guid="6C0B54D3-30A1-4D5E-9C3F-2F6A7B8C9D02">
+            <RegistryKey Root="HKLM" Key="SOFTWARE\Obot\Obocop">
+              <RegistryValue Name="ServerURL" Type="string" Value="[OBOT_SERVER_URL]" KeyPath="yes" />
+              <RegistryValue Name="EnrollmentKey" Type="string" Value="[OBOT_ENROLLMENT_KEY]" />
+              <RegistryValue Name="ScanIntervalMinutes" Type="string" Value="[OBOT_SCAN_INTERVAL_MINUTES]" />
+            </RegistryKey>
+          </Component>
+        </Directory>
+      </Directory>
+    </StandardDirectory>
+
+    <!--
+      %ProgramData%\obot\obocop holds the machine-scoped device identity
+      shared by every user (pkg/datadir.MachineDir). Default ProgramData
+      ACLs let any user create files in it, so whichever user scans first
+      creates the shared key and the rest read it (the key file is
+      world-readable by design).
+    -->
+    <StandardDirectory Id="CommonAppDataFolder">
+      <Directory Id="ObotDataDir" Name="obot">
+        <Directory Id="ObocopDataDir" Name="obocop">
+          <Component Id="MachineDataDir" Guid="0E8938A7-19B7-4D9C-9C5D-4B62E0E9B0D1">
+            <CreateFolder />
+          </Component>
+        </Directory>
+      </Directory>
+    </StandardDirectory>
+
+    <Feature Id="Main" Level="1">
+      <ComponentRef Id="MainExecutable" />
+      <ComponentRef Id="TaskScript" />
+      <ComponentRef Id="DeploymentRegistry" />
+      <ComponentRef Id="MachineDataDir" />
+    </Feature>
+
+    <!--
+      Register/remove the per-user scan task via scan-task.ps1
+      (registration needs elevation even though the task runs per user).
+      Deferred, no-impersonate custom actions run in the elevated (SYSTEM)
+      execute phase; SetPowerShellPath (immediate) resolves powershell.exe
+      into the POWERSHELL property. The ExeCommand fields are formatted when
+      the deferred actions are scheduled into the execution script (after
+      CostFinalize), so [INSTALLDIR] resolves. We pass the full obocop.exe
+      path (not the directory) so there is no trailing "\" immediately before
+      a closing quote to break CommandLineToArgvW parsing.
+
+      InstallScanTask runs on install/upgrade; -Force re-creates the task
+      idempotently. UninstallScanTask runs only on a true uninstall — the
+      NOT UPGRADINGPRODUCTCODE guard keeps the outgoing product's removal
+      during a major upgrade from deleting the task the new one just wrote.
+    -->
+    <CustomAction Id="SetPowerShellPath" Property="POWERSHELL"
+                  Value="[System64Folder]WindowsPowerShell\v1.0\powershell.exe" />
+    <CustomAction Id="InstallScanTask" Property="POWERSHELL"
+                  ExeCommand="-ExecutionPolicy Bypass -NonInteractive -NoProfile -File &quot;[INSTALLDIR]scan-task.ps1&quot; -Mode install -ExePath &quot;[INSTALLDIR]obocop.exe&quot;"
+                  Execute="deferred" Impersonate="no" Return="check" />
+    <CustomAction Id="UninstallScanTask" Property="POWERSHELL"
+                  ExeCommand="-ExecutionPolicy Bypass -NonInteractive -NoProfile -File &quot;[INSTALLDIR]scan-task.ps1&quot; -Mode uninstall"
+                  Execute="deferred" Impersonate="no" Return="ignore" />
+
+    <InstallExecuteSequence>
+      <Custom Action="SetPowerShellPath" After="CostFinalize" />
+      <Custom Action="InstallScanTask" After="InstallFiles" Condition="NOT (REMOVE~=&quot;ALL&quot;)" />
+      <Custom Action="UninstallScanTask" After="InstallInitialize" Condition="REMOVE~=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
+    </InstallExecuteSequence>
+  </Package>
+</Wix>

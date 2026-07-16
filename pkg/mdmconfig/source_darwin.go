@@ -3,6 +3,7 @@ package mdmconfig
 import (
 	"fmt"
 	"os"
+	"strconv"
 
 	"howett.net/plist"
 )
@@ -39,8 +40,15 @@ func (s plistSource) Read() (map[string]string, error) {
 		}
 		out := map[string]string{}
 		for k, v := range raw {
-			if s, ok := v.(string); ok {
-				out[k] = s
+			// Profiles carry strings, but numeric payload values (e.g.
+			// ScanIntervalMinutes as <integer>) decode as ints — keep both.
+			switch value := v.(type) {
+			case string:
+				out[k] = value
+			case int64:
+				out[k] = strconv.FormatInt(value, 10)
+			case uint64:
+				out[k] = strconv.FormatUint(value, 10)
 			}
 		}
 		return out, nil

@@ -1,0 +1,79 @@
+name: Build and Push MDM Assets Image
+
+# Builds and pushes the data-only MDM assets image (build/Dockerfile).
+# The image content is the mdm-assets artifact assembled earlier in the
+# calling run — it carries installers built on a Windows runner, so this
+# can never be a self-contained docker build. build.yaml calls this on
+# main pushes, dispatches, and releases; PRs and forks stop at the
+# workflow artifact (build an image locally with
+# `docker build -f build/Dockerfile .` and load it into your cluster).
+#
+# Depot is set up the same way as obot's docker-build-and-push.yml: a
+# Depot-hosted runner with ambient auth to project bbqjs4tj1g, one
+# multi-arch build, and a keyless cosign signature over the digest.
+
+permissions:
+  id-token: write
+  contents: read
+  packages: write
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: "Image tag (numeric x.y.z)"
+        type: string
+        required: true
+
+jobs:
+  build:
+    runs-on: depot-ubuntu-24.04
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download MDM assets
+        uses: actions/download-artifact@v4
+        with:
+          name: mdm-assets
+          path: dist/mdm-assets
+
+      - name: Setup Depot
+        uses: depot/setup-action@v1
+
+      # Depot's builders push with the registry credentials this leaves
+      # on the runner; GITHUB_TOKEN is minted per run, no stored secrets.
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # github.ref is the caller's ref, so :main lands only on pushes to
+      # main; release tags get :<version> here and :vX.Y.Z/:latest from
+      # release.yml's promote step.
+      - name: Build and push MDM assets image
+        uses: depot/build-push-action@v1
+        id: build-and-push
+        with:
+          project: bbqjs4tj1g
+          context: .
+          file: build/Dockerfile
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: |
+            ghcr.io/${{ github.repository }}/mdm-assets:${{ inputs.version }}
+            ${{ github.ref == 'refs/heads/main' && format('ghcr.io/{0}/mdm-assets:main', github.repository) || '' }}
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3.8.1
+        with:
+          cosign-release: "v2.4.3"
+
+      # Keyless signature with the workflow's OIDC identity, attached to
+      # the digest — one signature covers every tag.
+      - name: Sign image
+        env:
+          DIGEST: ${{ steps.build-and-push.outputs.digest }}
+        run: cosign sign --yes "ghcr.io/${{ github.repository }}/mdm-assets@${DIGEST}"

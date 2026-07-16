@@ -1,0 +1,51 @@
+# Deploy the Obot device agent with Microsoft Intune
+
+This bundle contains `obocop.intunewin` — the obocop device agent
+(version {{.obocopVersion}}) packaged as an Intune **Windows app
+(Win32)** — and these instructions. The file names are stable across
+versions, so upgrades never require editing the install command.
+
+1. **Create an enrollment key.** On this configuration's page in Obot, go
+   to *Enrollment Keys > New Key* and copy the `ode1-...` credential — it
+   is shown exactly once.
+
+2. **Add the app.** In the Intune admin center, go to *Apps > Windows >
+   Add > Windows app (Win32)* and upload the `.intunewin` file from this
+   bundle.
+
+3. **Install command** — paste the following, replacing
+   `REPLACE_WITH_ENROLLMENT_KEY` with your enrollment key:
+
+   ```
+   msiexec /i "obocop.msi" /qn OBOT_SERVER_URL="{{.serverURL}}" OBOT_ENROLLMENT_KEY="REPLACE_WITH_ENROLLMENT_KEY" OBOT_SCAN_INTERVAL_MINUTES="{{.scanIntervalMinutes}}"
+   ```
+
+4. **Uninstall command:**
+
+   ```
+   msiexec /x "obocop.msi" /qn
+   ```
+
+5. **Install behavior:** System. **Detection rule:** keep the MSI product
+   code rule Intune fills in automatically from the package.
+
+6. **Assign** the app to the device groups that should report to this
+   configuration. Devices install the agent on their next check-in and
+   appear in Obot as scans arrive.
+
+## What the installer does
+
+- Installs `obocop.exe` under `C:\Program Files\Obot\Obocop`.
+- Writes the deployment configuration from the install command's
+  properties to `HKLM\SOFTWARE\Obot\Obocop`.
+- Registers a machine-wide scheduled task that runs in each signed-in
+  user's session, as that user, at logon and every 5 minutes. Each run
+  submits a scan at most every {{.scanIntervalMinutes}} minutes
+  (`ScanIntervalMinutes` in the registry — change it there to retune
+  without reinstalling).
+
+Upgrades re-run the same install command, so assignments configured with
+supersedence carry the configuration forward automatically. To rotate the
+enrollment key later: create a new key in Obot, update the install
+command in Intune, then revoke the old key (already-enrolled devices are
+unaffected).

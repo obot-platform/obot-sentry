@@ -1,0 +1,48 @@
+{
+  "schemaVersion": "v1",
+  "obocopVersion": "${VERSION}",
+  "fields": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "serverURL"
+    ],
+    "properties": {
+      "serverURL": {
+        "type": "string",
+        "format": "uri",
+        "readOnly": true,
+        "hidden": true,
+        "description": "Obot server base URL (supplied by obot, not the admin)"
+      },
+      "scanIntervalMinutes": {
+        "type": "integer",
+        "minimum": 15,
+        "maximum": 1440,
+        "default": 60,
+        "title": "Scan interval (minutes)",
+        "description": "How often each signed-in user's device submits a scan."
+      }
+    }
+  },
+  "platforms": [
+    {
+      "id": "intune",
+      "label": "Microsoft Intune"
+    }
+  ],
+  "configurations": [
+    {
+      "platform": "intune",
+      "os": "windows",
+      "osLabel": "Windows",
+      "description": "Enroll your Windows fleet with a bundle you deploy through Intune: it installs the agent, applies this configuration, and schedules recurring per-user scans.",
+      "suggestedName": "Windows Fleet",
+      "instructions": "windows/intune/INSTRUCTIONS.md.tmpl",
+      "assets": [
+        "windows/intune/obocop.intunewin",
+        "windows/intune/INSTRUCTIONS.md.tmpl"
+      ]
+    }
+  ]
+}

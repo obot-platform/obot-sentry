@@ -36,12 +36,9 @@ func NormalizeBaseURL(serverURL string) string {
 // Enroll registers the identity's public key with the server
 // (trust-on-first-use), authenticating with the ode1 enrollment
 // credential. Re-enrolling the same device ID with the same key is an
-// idempotent update server-side. hostname may be an MDM-configured
-// override; empty falls back to os.Hostname.
-func (c *Client) Enroll(ctx context.Context, credential string, id *identity.Identity, hostname string) (*types.Device, error) {
-	if hostname == "" {
-		hostname, _ = os.Hostname()
-	}
+// idempotent update server-side.
+func (c *Client) Enroll(ctx context.Context, credential string, id *identity.Identity) (*types.Device, error) {
+	hostname, _ := os.Hostname()
 	resp, err := c.api.EnrollDevice(ctx, credential, types.DeviceEnrollRequest{
 		DeviceID:  id.DeviceID,
 		PublicKey: id.PublicKeyDER,

@@ -1,7 +1,7 @@
 // Package agent orchestrates the device lifecycle the commands share:
 // make sure the machine's shared identity is enrolled with the
 // configured server, submit scan manifests, and persist the per-user
-// state and last-scan marker MDM detection scripts rely on.
+// enrollment state.
 package agent
 
 import (
@@ -21,8 +21,7 @@ import (
 // Agent binds a resolved config to the machine-scoped identity dir and
 // the per-user data dir.
 type Agent struct {
-	// DataDir is the per-user dir holding enrollment state and the
-	// last-scan marker.
+	// DataDir is the per-user dir holding enrollment state.
 	DataDir string
 	// IdentityDir is the (normally machine-scoped) dir holding the
 	// shared device identity key.
@@ -65,7 +64,7 @@ func (a *Agent) EnsureEnrolled(ctx context.Context) (*identity.Identity, state.S
 		return nil, st, fmt.Errorf("device %s is not enrolled with %s and no enrollment key is configured", id.DeviceID, serverURL)
 	}
 
-	device, err := a.Client.Enroll(ctx, a.Config.EnrollmentKey, id, a.Config.DeviceName)
+	device, err := a.Client.Enroll(ctx, a.Config.EnrollmentKey, id)
 	if err != nil {
 		return nil, st, fmt.Errorf("enrolling device: %w", err)
 	}
@@ -107,9 +106,6 @@ func (a *Agent) SubmitScan(ctx context.Context, id *identity.Identity, st state.
 	now := time.Now().UTC()
 	st.LastSubmitAt = &now
 	if err := st.Save(a.DataDir); err != nil {
-		return nil, err
-	}
-	if err := state.WriteLastScanMarker(a.DataDir, now); err != nil {
 		return nil, err
 	}
 	return scan, nil

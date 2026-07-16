@@ -1,60 +1,103 @@
 name: release
 
+# On a release tag: run the full build.yaml pipeline with the tag
+# version (which builds, pushes, and signs the
+# ghcr.io/<repo>/mdm-assets:<version> image), then publish — promote the
+# image to :vX.Y.Z and :latest, and create a GitHub release carrying the
+# installers, the assets tarball, and a cosign-signed checksums file.
+# Prerelease tags (v1.2.3-rc1) are skipped entirely: MSI ProductVersion
+# must be numeric x.y.z and obocop only ships via the MDM installers.
+
 on:
   push:
     tags:
       - "v*"
 
 permissions:
+  id-token: write
   contents: write
+  packages: write
 
 jobs:
-  # Cross-platform binaries + GitHub release. macOS binaries are
-  # Developer ID signed and notarized via Quill (same org secrets obot's
-  # release uses).
-  release-tag:
-    runs-on: depot-ubuntu-24.04
-
+  version:
+    if: ${{ !contains(github.ref_name, '-') }}
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+      - name: Strip the v prefix
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: "1.26"
+  build:
+    needs: version
+    uses: ./.github/workflows/build.yaml
+    permissions:
+      id-token: write
+      contents: read
+      packages: write
+    with:
+      version: ${{ needs.version.outputs.version }}
 
-      - name: Install Quill
-        env:
-          QUILL_TARBALL: quill_0.7.1_linux_amd64.tar.gz
-          QUILL_TARBALL_URL: https://github.com/anchore/quill/releases/download/v0.7.1/quill_0.7.1_linux_amd64.tar.gz
-          QUILL_CHECKSUMS_URL: https://github.com/anchore/quill/releases/download/v0.7.1/quill_0.7.1_checksums.txt
+  publish:
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      IMAGE: ghcr.io/${{ github.repository }}/mdm-assets
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Download installers
+        uses: actions/download-artifact@v4
+        with:
+          name: installers-windows
+          path: dist
+      - name: Download MDM assets
+        uses: actions/download-artifact@v4
+        with:
+          name: mdm-assets
+          path: dist/mdm-assets
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3.8.1
+        with:
+          cosign-release: "v2.4.3"
+
+      # Checksums over every release asset, signed keyless with the
+      # workflow's OIDC identity; verify with
+      #   cosign verify-blob --bundle checksums.txt.sigstore.json checksums.txt
+      - name: Checksum and sign release assets
         run: |
-          quill_dir="$(mktemp -d)"
-          trap 'rm -rf "${quill_dir}"' EXIT
+          tar -czf dist/mdm-assets.tar.gz -C dist/mdm-assets .
+          (cd dist && sha256sum obocop.msi obocop.intunewin mdm-assets.tar.gz > checksums.txt)
+          cosign sign-blob --yes --bundle dist/checksums.txt.sigstore.json dist/checksums.txt
 
-          curl -sSfL -o "${quill_dir}/${QUILL_TARBALL}" "${QUILL_TARBALL_URL}"
-          curl -sSfL -o "${quill_dir}/quill_checksums.txt" "${QUILL_CHECKSUMS_URL}"
-          (
-            cd "${quill_dir}"
-            grep "${QUILL_TARBALL}$" quill_checksums.txt | sha256sum --check -
-            tar -xzf "${QUILL_TARBALL}" quill
-          )
-          sudo install -m 0755 "${quill_dir}/quill" /usr/local/bin/quill
-          quill version
+      - name: Create release and upload assets
+        run: |
+          gh release create "${GITHUB_REF_NAME}" -R "${GITHUB_REPOSITORY}" \
+            --title "${GITHUB_REF_NAME}" --generate-notes \
+            dist/obocop.msi \
+            dist/obocop.intunewin \
+            dist/mdm-assets.tar.gz \
+            dist/checksums.txt \
+            dist/checksums.txt.sigstore.json
 
-      - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@v6
+      # build.yaml's image job already pushed and signed :<version>
+      # (org-only — fork releases carry the tarball but no image);
+      # promote that manifest to the release tags. The signature is
+      # attached to the digest, so it covers the new tags as-is.
+      - name: Log in to GitHub Container Registry
+        if: ${{ github.repository_owner == 'obot-platform' }}
+        uses: docker/login-action@v3
         with:
-          version: "~> v2"
-          args: release --clean
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GORELEASER_CURRENT_TAG: ${{ github.ref_name }}
-          QUILL_SIGN_P12: ${{ secrets.QUILL_SIGN_P12 }}
-          QUILL_SIGN_PASSWORD: ${{ secrets.QUILL_SIGN_PASSWORD }}
-          QUILL_NOTARY_KEY: ${{ secrets.QUILL_NOTARY_KEY }}
-          QUILL_NOTARY_KEY_ID: ${{ secrets.QUILL_NOTARY_KEY_ID }}
-          QUILL_NOTARY_ISSUER: ${{ secrets.QUILL_NOTARY_ISSUER }}
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Setup crane
+        if: ${{ github.repository_owner == 'obot-platform' }}
+        uses: imjasonh/setup-crane@v0.5
+      - name: Promote image tags
+        if: ${{ github.repository_owner == 'obot-platform' }}
+        run: |
+          crane tag "${IMAGE}:${VERSION}" "${GITHUB_REF_NAME}"
+          crane tag "${IMAGE}:${VERSION}" latest

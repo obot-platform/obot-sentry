@@ -1,12 +1,13 @@
 package mdmconfig
 
 import (
+	"strconv"
+
 	"golang.org/x/sys/windows/registry"
 )
 
 // registryKeyPath is where the MSI's registry component writes the
-// deployment values (see packaging/windows/obocop.wxs and
-// packaging/CONTRACT.md).
+// deployment values (see build/windows/obocop.wxs).
 const registryKeyPath = `SOFTWARE\Obot\Obocop`
 
 func platformSource() Source { return registrySource{} }
@@ -23,9 +24,13 @@ func (registrySource) Read() (map[string]string, error) {
 	defer k.Close()
 
 	out := map[string]string{}
-	for _, name := range []string{KeyServerURL, KeyEnrollmentKey, KeyUsername, KeyDeviceName} {
+	for _, name := range []string{KeyServerURL, KeyEnrollmentKey, KeyScanIntervalMinutes} {
+		// The MSI writes REG_SZ, but MDM custom registry policies often
+		// push numbers as REG_DWORD — accept both.
 		if v, _, err := k.GetStringValue(name); err == nil {
 			out[name] = v
+		} else if n, _, err := k.GetIntegerValue(name); err == nil {
+			out[name] = strconv.FormatUint(n, 10)
 		}
 	}
 	return out, nil

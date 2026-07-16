@@ -8,3 +8,6 @@ bin/
 
 # Local env
 .envrc
+
+# macOS
+.DS_Store

@@ -16,6 +16,7 @@ import (
 	"github.com/obot-platform/obocop/pkg/agent"
 	"github.com/obot-platform/obocop/pkg/datadir"
 	"github.com/obot-platform/obocop/pkg/mdmconfig"
+	"github.com/obot-platform/obocop/pkg/state"
 	"github.com/obot-platform/obocop/pkg/version"
 )
 
@@ -45,11 +46,35 @@ func (s *Scan) Run(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return NewConfigError(err)
 	}
+
 	if s.Submit && cfg.ServerURL == "" {
 		return NewConfigError(fmt.Errorf("--submit requires a server URL (flag, env, or MDM configuration)"))
 	}
 
-	manifest, err := collectScanManifest(ctx, cfg)
+	startedAt := time.Now().UTC()
+
+	// The OS scheduler polls every few minutes; throttle real submissions
+	// to the configured interval against the per-user scan state. Cache
+	// problems must never block a scan, so they only degrade to warnings.
+	cacheDir, cacheErr := datadir.CacheDir()
+	if cacheErr != nil {
+		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "warning: resolving cache directory: %v\n", cacheErr)
+	}
+	if s.Submit && cacheErr == nil {
+		scanState, err := state.LoadScanState(cacheDir)
+		if err != nil {
+			_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "warning: reading scan state: %v\n", err)
+		} else if interval := cfg.ScanInterval(); scanState.SubmittedWithin(interval, startedAt) {
+			if !s.Quiet {
+				_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Last scan was submitted at %s, within the %s interval; skipping\n",
+					scanState.LastSubmitAt.Format(time.RFC3339), interval)
+			}
+			s.recordScanOutcome(cmd, cacheDir, scanState, startedAt, "skipped", nil)
+			return nil
+		}
+	}
+
+	manifest, err := collectScanManifest(ctx)
 	if err != nil {
 		return err
 	}
@@ -68,6 +93,31 @@ func (s *Scan) Run(cmd *cobra.Command, _ []string) error {
 		return nil
 	}
 
+	submitErr := s.submit(ctx, cmd, cfg, &manifest)
+	if cacheErr == nil {
+		scanState, _ := state.LoadScanState(cacheDir)
+		now := time.Now().UTC()
+		scanState.LastScanAt = &now
+		scanState.DeviceID = manifest.DeviceID
+		scanState.ScannerVersion = manifest.ScannerVersion
+		outcome := "submitted"
+		if submitErr != nil {
+			outcome = "error"
+			scanState.LastStatus = "error"
+			scanState.LastError = submitErr.Error()
+		} else {
+			scanState.LastSubmitAt = &now
+			scanState.LastStatus = "ok"
+			scanState.LastError = ""
+		}
+		s.recordScanOutcome(cmd, cacheDir, scanState, startedAt, outcome, submitErr)
+	}
+	return submitErr
+}
+
+// submit enrolls (if needed) and uploads the manifest, filling in the
+// device ID it enrolled as.
+func (s *Scan) submit(ctx context.Context, cmd *cobra.Command, cfg mdmconfig.Config, manifest *types.DeviceScanManifest) error {
 	dir, err := datadir.Dir()
 	if err != nil {
 		return err
@@ -83,12 +133,35 @@ func (s *Scan) Run(cmd *cobra.Command, _ []string) error {
 	}
 	manifest.DeviceID = id.DeviceID
 
-	scan, err := a.SubmitScan(ctx, id, st, manifest)
+	scan, err := a.SubmitScan(ctx, id, st, *manifest)
 	if err != nil {
 		return fmt.Errorf("submit scan: %w", err)
 	}
 	_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Submitted scan (received_at=%s)\n", scan.ReceivedAt.GetTime().Format(time.RFC3339))
 	return nil
+}
+
+// recordScanOutcome persists the scan state and appends a scan log
+// record. Recording must never fail a scan, so problems only warn.
+func (s *Scan) recordScanOutcome(cmd *cobra.Command, cacheDir string, scanState state.ScanState, startedAt time.Time, outcome string, runErr error) {
+	if outcome != "skipped" {
+		if err := scanState.Save(cacheDir); err != nil {
+			_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "warning: writing scan state: %v\n", err)
+		}
+	}
+	record := state.ScanLogRecord{
+		StartedAt:      startedAt,
+		FinishedAt:     time.Now().UTC(),
+		Outcome:        outcome,
+		DeviceID:       scanState.DeviceID,
+		ScannerVersion: version.Get().String(),
+	}
+	if runErr != nil {
+		record.Error = runErr.Error()
+	}
+	if err := state.AppendScanLog(cacheDir, record); err != nil {
+		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "warning: writing scan log: %v\n", err)
+	}
 }
 
 // collectScanManifest fills the manifest envelope (device metadata) for
@@ -98,16 +171,11 @@ func (s *Scan) Run(cmd *cobra.Command, _ []string) error {
 // is stubbed out for now: the manifest ships with empty observation
 // lists so the enrollment and submission flow is exercised end to end.
 // The scan engine lands in a follow-up.
-func collectScanManifest(_ context.Context, cfg mdmconfig.Config) (types.DeviceScanManifest, error) {
-	hostname := cfg.DeviceName
-	if hostname == "" {
-		hostname, _ = os.Hostname()
-	}
-	username := cfg.Username
-	if username == "" {
-		if u, err := user.Current(); err == nil {
-			username = u.Username
-		}
+func collectScanManifest(_ context.Context) (types.DeviceScanManifest, error) {
+	hostname, _ := os.Hostname()
+	var username string
+	if u, err := user.Current(); err == nil {
+		username = u.Username
 	}
 
 	return types.DeviceScanManifest{
