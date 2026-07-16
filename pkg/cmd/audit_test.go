@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -222,9 +223,9 @@ func TestAuditSubmitHiddenFromRootHelp(t *testing.T) {
 	if err := root.Execute(); err != nil {
 		t.Fatal(err)
 	}
-	help := stdout.String()
-	if strings.Contains(help, "audit") || strings.Contains(help, "submit") {
-		t.Fatalf("audit submit should be hidden from root help, got:\n%s", help)
+	cmds := listedCommands(stdout.String())
+	if slices.Contains(cmds, "audit") || slices.Contains(cmds, "submit") {
+		t.Fatalf("audit submit should be hidden from root help, got commands %v", cmds)
 	}
 }
 

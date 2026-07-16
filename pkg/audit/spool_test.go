@@ -251,7 +251,12 @@ func TestSpoolEnqueueEmptyBatchIsNoOp(t *testing.T) {
 
 func validSpoolLog(id string) types.LocalAgentToolCallAuditLogInput {
 	return types.LocalAgentToolCallAuditLogInput{
-		OccurredAt: *types.NewTime(time.Now().UTC()),
+		// A fixed, whole-second timestamp keeps every seeded log the same
+		// serialized size. time.Now() would marshal as RFC3339 with trailing
+		// zeros trimmed from the fractional seconds, so logs enqueued nanoseconds
+		// apart would differ in length by a few bytes and make the byte-exact
+		// size-eviction assertion flaky.
+		OccurredAt: *types.NewTime(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)),
 		Action:     types.LocalAgentToolCallAuditLogAction{Name: "Bash", Kind: "shell"},
 		Target: types.LocalAgentToolCallAuditLogTarget{
 			TargetType: types.AuditLogTargetTypeLocalTool,

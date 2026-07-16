@@ -31,6 +31,7 @@ func newRoot(loadMDM func() (mdmconfig.Config, error)) *cobra.Command {
 		scan,
 		enroll,
 		&Version{},
+		&HookInstall{},
 		auditCmd,
 	)
 }

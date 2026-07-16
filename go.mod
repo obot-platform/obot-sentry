@@ -10,6 +10,7 @@ require (
 	github.com/obot-platform/cmd v0.0.0-20260615195405-fab7a186f46c
 	github.com/obot-platform/obot/apiclient v0.0.0-20260716212309-520c3a04a943
 	github.com/spf13/cobra v1.10.2
+	github.com/tailscale/hujson v0.0.0-20260302212456-ecc657c15afd
 	golang.org/x/sys v0.46.0
 	gopkg.in/yaml.v3 v3.0.1
 	howett.net/plist v1.0.1
