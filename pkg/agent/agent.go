@@ -83,8 +83,9 @@ func (a *Agent) EnsureEnrolled(ctx context.Context) (*identity.Identity, state.S
 
 // SubmitScan submits the manifest as id. If the server rejects the
 // device's credentials (e.g. its record was removed), it re-enrolls
-// once and retries once. On success it updates the state and writes the
-// last-scan marker for MDM freshness checks.
+// once and retries once. On success it records the submission time in
+// the enrollment state (LastSubmitAt); the scan command tracks scan
+// freshness for MDM checks via the per-user scan state and scan logs.
 func (a *Agent) SubmitScan(ctx context.Context, id *identity.Identity, st state.State, manifest types.DeviceScanManifest) (*types.DeviceScan, error) {
 	scan, err := a.Client.SubmitScan(ctx, id, manifest)
 	if client.IsUnauthorized(err) {

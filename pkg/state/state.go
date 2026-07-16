@@ -187,16 +187,22 @@ func pruneScanLogs(logDir string, now time.Time) error {
 	}
 	sort.Strings(names) // timestamp prefix: oldest first
 
+	// Overlapping per-user scans can prune the same directory
+	// concurrently, so a file may vanish between ReadDir and Stat/Remove.
+	// That's the directory being cleaned as intended — treat a missing
+	// file as already-pruned rather than a failure.
 	var kept []string
 	var total int64
 	for _, name := range names {
 		path := filepath.Join(logDir, name)
 		info, err := os.Stat(path)
-		if err != nil {
+		if os.IsNotExist(err) {
+			continue
+		} else if err != nil {
 			return err
 		}
 		if now.Sub(info.ModTime()) > scanLogMaxAge {
-			if err := os.Remove(path); err != nil {
+			if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 				return err
 			}
 			continue
@@ -209,10 +215,12 @@ func pruneScanLogs(logDir string, now time.Time) error {
 			return nil
 		}
 		info, err := os.Stat(path)
-		if err != nil {
+		if os.IsNotExist(err) {
+			continue
+		} else if err != nil {
 			return err
 		}
-		if err := os.Remove(path); err != nil {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 			return err
 		}
 		total -= info.Size()
