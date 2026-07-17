@@ -12,6 +12,14 @@ import (
 // entry. It is the same for all four agents.
 const hookTimeout = 30
 
+// These are the final executable locations owned by the MDM packages. Hook
+// configuration must refer to these paths, rather than to a build artifact or
+// an MDM download/staging path that happened to launch hook-install.
+const (
+	packagedDarwinExecutable  = "/usr/local/bin/obot-sentry"
+	packagedWindowsExecutable = `C:\Program Files\Obot\obot-sentry\obot-sentry.exe`
+)
+
 // phase names the hook lifecycle point. These are the exact `--phase` argument
 // values accepted by `obot-sentry audit submit`.
 type phase string
@@ -105,21 +113,26 @@ func quoteWindows(s string) string {
 	return `"` + s + `"`
 }
 
-// DefaultExecutable resolves the running obot-sentry binary to a durable, absolute,
-// cleaned path suitable for embedding in hook configuration. It intentionally
-// does not resolve symlinks: when obot-sentry is invoked through a stable packaged
-// symlink (for example /usr/local/bin/obot-sentry), that link is the durable path an
-// MDM-managed hook should point at, not the versioned target behind it.
+// packagedExecutable returns the executable location owned by the MDM package
+// for goos. Keeping this mapping in the hook generator prevents an invocation
+// from an MDM cache or other staging directory from leaving hooks pointed at a
+// transient copy of the binary.
+func packagedExecutable(goos string) (string, error) {
+	switch goos {
+	case "darwin":
+		return packagedDarwinExecutable, nil
+	case "windows":
+		return packagedWindowsExecutable, nil
+	default:
+		return "", errUnsupportedPlatform
+	}
+}
+
+// DefaultExecutable returns the current platform's MDM-owned executable path
+// for embedding in hook configuration. The installer validates that the package
+// has placed a usable executable there before changing any hook files.
 func DefaultExecutable() (string, error) {
-	exe, err := os.Executable()
-	if err != nil {
-		return "", fmt.Errorf("resolving obot-sentry executable: %w", err)
-	}
-	abs, err := filepath.Abs(exe)
-	if err != nil {
-		return "", fmt.Errorf("resolving obot-sentry executable path: %w", err)
-	}
-	return filepath.Clean(abs), nil
+	return packagedExecutable(runtime.GOOS)
 }
 
 // validateExecutable rejects an executable path that must not be embedded in a

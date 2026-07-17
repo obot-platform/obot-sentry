@@ -36,7 +36,8 @@ type Installer struct {
 	// machine policy and per-user files; defaults to the platform check.
 	Privilege func() error
 	// ResolveExe returns the validated, durable obot-sentry path embedded in hook
-	// commands; defaults to DefaultExecutable + validateExecutable.
+	// commands; defaults to the platform's MDM package path +
+	// validateExecutable.
 	ResolveExe func() (string, error)
 	// ResolveUser resolves the active console user whose per-user files are
 	// converged; defaults to the platform resolver.

@@ -7,8 +7,8 @@ import (
 )
 
 const (
-	macExe = "/usr/local/bin/obot-sentry"
-	winExe = `C:\Program Files\Obot\obot-sentry\obot-sentry.exe`
+	macExe = packagedDarwinExecutable
+	winExe = packagedWindowsExecutable
 )
 
 // The golden documents below are the production desired state.

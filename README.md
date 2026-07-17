@@ -18,6 +18,7 @@ It enrolls each machine with an [Obot](https://github.com/obot-platform/obot) se
 ```
 obot-sentry scan              # build + print the manifest (add --submit to enroll + upload)
 obot-sentry enroll            # explicit enrollment, for verifying a configuration
+obot-sentry hook-install      # install managed local-agent audit hooks (root/Administrator)
 obot-sentry version
 ```
 
@@ -34,6 +35,12 @@ Resolution order per key: flags > env > MDM store.
 | Scan interval (minutes) | `--scan-interval-minutes` | `OBOT_SENTRY_SCAN_INTERVAL_MINUTES` | `ScanIntervalMinutes` |
 
 MDM stores: `HKLM\SOFTWARE\Obot\obot-sentry` on Windows; `/Library/Managed Preferences/com.obot.obot-sentry.plist` (fallback `/Library/Preferences/...`) on macOS.
+
+`hook-install` writes the final MDM-owned executable path into every hook:
+`/usr/local/bin/obot-sentry` on macOS and
+`C:\Program Files\Obot\obot-sentry\obot-sentry.exe` on Windows. It fails before
+changing hook files if the package has not installed a usable executable at
+that location.
 
 ## MDM packaging
 

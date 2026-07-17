@@ -1,6 +1,7 @@
 package hookinstall
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -41,8 +42,8 @@ func TestQuoteWindows(t *testing.T) {
 // both operating systems, using the durable packaged executable paths.
 func TestHookCommandGolden(t *testing.T) {
 	const (
-		macExe = "/usr/local/bin/obot-sentry"
-		winExe = `C:\Program Files\Obot\obot-sentry\obot-sentry.exe`
+		macExe = packagedDarwinExecutable
+		winExe = packagedWindowsExecutable
 	)
 	tests := []struct {
 		name  string
@@ -118,16 +119,39 @@ func TestProductionCommandsHaveNoDebugOrSecrets(t *testing.T) {
 	}
 }
 
-func TestDefaultExecutableReturnsAbsoluteCleanPath(t *testing.T) {
+func TestPackagedExecutablePaths(t *testing.T) {
+	tests := []struct {
+		goos string
+		want string
+	}{
+		{"darwin", "/usr/local/bin/obot-sentry"},
+		{"windows", `C:\Program Files\Obot\obot-sentry\obot-sentry.exe`},
+	}
+	for _, tc := range tests {
+		t.Run(tc.goos, func(t *testing.T) {
+			got, err := packagedExecutable(tc.goos)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != tc.want {
+				t.Fatalf("packagedExecutable(%q) = %q, want %q", tc.goos, got, tc.want)
+			}
+		})
+	}
+
+	if _, err := packagedExecutable("linux"); !errors.Is(err, errUnsupportedPlatform) {
+		t.Fatalf("packagedExecutable(linux) error = %v, want %v", err, errUnsupportedPlatform)
+	}
+}
+
+func TestDefaultExecutableUsesCurrentPlatformPackagePath(t *testing.T) {
+	want, wantErr := packagedExecutable(runtime.GOOS)
 	got, err := DefaultExecutable()
-	if err != nil {
-		t.Fatal(err)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("DefaultExecutable error = %v, want %v", err, wantErr)
 	}
-	if !filepath.IsAbs(got) {
-		t.Fatalf("DefaultExecutable = %q, want absolute path", got)
-	}
-	if got != filepath.Clean(got) {
-		t.Fatalf("DefaultExecutable = %q, want cleaned path", got)
+	if got != want {
+		t.Fatalf("DefaultExecutable = %q, want %q", got, want)
 	}
 }
 
