@@ -160,7 +160,7 @@ func TestProcessCursorAcceptsUTF8BOMFractionalDurationAndWindowsWorkspaceRoot(t 
 		"hook_event_name": "postToolUse",
 		"cursor_version": "3.11.13",
 		"workspace_roots": [
-			"/C:/Users/grant/devel/workspace/obocop"
+			"/C:/Users/grant/devel/workspace/obot-sentry"
 		],
 		"user_email": "user@example.com",
 		"transcript_path": null
@@ -181,7 +181,7 @@ func TestProcessCursorAcceptsUTF8BOMFractionalDurationAndWindowsWorkspaceRoot(t 
 	if entry.DurationMs != 173 {
 		t.Fatalf("expected fractional duration to round to 173ms, got %d", entry.DurationMs)
 	}
-	if entry.CWD != "/C:/Users/grant/devel/workspace/obocop" {
+	if entry.CWD != "/C:/Users/grant/devel/workspace/obot-sentry" {
 		t.Fatalf("expected workspace root as cwd, got %q", entry.CWD)
 	}
 	if entry.SessionID != "6f98c956-cdf7-4bca-a2ec-a1386d384664" {

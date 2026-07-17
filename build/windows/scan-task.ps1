@@ -1,19 +1,9 @@
-# Register / remove the per-user Obocop scan scheduled task.
-#
-# Run by the MSI's custom actions (SYSTEM). Building the task here with the
-# ScheduledTasks module — instead of a static schtasks /XML file — avoids the
-# UTF-16-BOM fragility and, by taking the concrete obocop.exe path, sidesteps
-# the Task Scheduler unquoted-env-var-path bug (CVE-2023-21541) that hits
-# %ProgramW6432%\...\obocop.exe (the space in "C:\Program Files" would be left
-# unquoted).
-#
-# The task runs in EACH signed-in user's own session, as that user: a
-# BUILTIN\Users group principal (interactive token, no stored password) with
-# no UserId, fired by a logon trigger plus a repeating clock trigger. See
-# Microsoft's "run for any member of a group" guidance for LogonTrigger.
+# Register / remove the machine-wide 'Obot Sentry Scan' scheduled task.
+# Run by the MSI's custom actions (SYSTEM). The task runs a submitting
+# device scan in each signed-in user's session, as that user.
 #
 # Usage:
-#   powershell -ExecutionPolicy Bypass -NoProfile -File scan-task.ps1 -Mode install -ExePath "C:\Program Files\Obot\Obocop\obocop.exe"
+#   powershell -ExecutionPolicy Bypass -NoProfile -File scan-task.ps1 -Mode install -ExePath "C:\Program Files\Obot\obot-sentry\obot-sentry.exe"
 #   powershell -ExecutionPolicy Bypass -NoProfile -File scan-task.ps1 -Mode uninstall
 
 [CmdletBinding()]
@@ -23,7 +13,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$TaskName = 'Obot Obocop Scan'
+$TaskName = 'Obot Sentry Scan'
 
 try {
     if ($Mode -eq 'uninstall') {
@@ -32,24 +22,22 @@ try {
     }
 
     if (-not $ExePath) { throw '-ExePath is required for install' }
-    if (-not (Test-Path -LiteralPath $ExePath)) { throw "obocop.exe not found at $ExePath" }
+    if (-not (Test-Path -LiteralPath $ExePath)) { throw "obot-sentry.exe not found at $ExePath" }
 
     $action = New-ScheduledTaskAction -Execute $ExePath -Argument 'scan --submit --quiet'
 
-    # Two triggers. The clock trigger owns the cadence: anchored once at
-    # registration, repeating every 5 minutes indefinitely (no Duration),
-    # it fires in EVERY logged-on user's session — including sessions that
-    # existed before this registration and users who lock but never log
-    # out (a locked session is still a logged-on session). The logon
-    # trigger just gets fresh sessions their first scan quickly instead of
-    # waiting out the next clock tick. The 5-minute cadence is deliberate:
-    # each run is a cheap poll — obocop throttles real submissions to the
-    # ScanIntervalMinutes registry value, so admins tune the effective
-    # cadence from the MDM without touching this task.
+    # Logon trigger: gives fresh sessions their first scan shortly after
+    # sign-in instead of waiting for the next clock tick.
     $logonTrigger = New-ScheduledTaskTrigger -AtLogOn
     $logonTrigger.Delay = 'PT1M'
+
+    # Clock trigger: anchored once at registration, then repeats every 10
+    # minutes, indefinitely, in every logged-on user's session. Each run is
+    # a cheap poll — obot-sentry throttles real submissions to the
+    # ScanIntervalMinutes registry value, so admins tune the cadence from
+    # the MDM alone.
     $clockTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date) `
-        -RepetitionInterval (New-TimeSpan -Minutes 5)
+        -RepetitionInterval (New-TimeSpan -Minutes 10)
 
     # Resolve the well-known Users SID to its (possibly localized) account name
     # so -GroupId is both locale-independent and definitely accepted.
@@ -57,12 +45,14 @@ try {
     Translate([System.Security.Principal.NTAccount]).Value
     $principal = New-ScheduledTaskPrincipal -GroupId $usersGroup -RunLevel Limited
 
-    $settings = New-ScheduledTaskSettingsSet -MultipleInstances Parallel -StartWhenAvailable `
+    # IgnoreNew: a trigger firing while a previous run (in any session) is
+    # still going is skipped rather than stacking instances.
+    $settings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -StartWhenAvailable `
         -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -RunOnlyIfNetworkAvailable `
         -ExecutionTimeLimit (New-TimeSpan -Minutes 30)
 
     Register-ScheduledTask -TaskName $TaskName -Force `
-        -Description 'Obot Obocop device scan (runs as each signed-in user)' `
+        -Description 'Obot Sentry device scan' `
         -Action $action -Trigger $logonTrigger, $clockTrigger -Principal $principal -Settings $settings | Out-Null
 
     # Best-effort first run so a freshly-installed device doesn't wait for the

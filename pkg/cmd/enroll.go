@@ -2,11 +2,12 @@ package cmd
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/spf13/cobra"
 
-	"github.com/obot-platform/obocop/pkg/agent"
-	"github.com/obot-platform/obocop/pkg/datadir"
+	"github.com/obot-platform/obot-sentry/pkg/agent"
+	"github.com/obot-platform/obot-sentry/pkg/datadir"
 )
 
 type Enroll struct {
@@ -48,6 +49,6 @@ func (e *Enroll) Run(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Enrolled as device %s (deployment %d, enrolled at %s)\n",
-		id.DeviceID, st.MDMDeploymentID, st.EnrolledAt.Format("2006-01-02T15:04:05Z07:00"))
+		id.DeviceID, st.MDMDeploymentID, st.EnrolledAt.Format(time.RFC3339))
 	return nil
 }

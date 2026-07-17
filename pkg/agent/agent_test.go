@@ -10,10 +10,10 @@ import (
 
 	"github.com/obot-platform/obot/apiclient/types"
 
-	"github.com/obot-platform/obocop/pkg/client"
-	"github.com/obot-platform/obocop/pkg/identity"
-	"github.com/obot-platform/obocop/pkg/mdmconfig"
-	"github.com/obot-platform/obocop/pkg/state"
+	"github.com/obot-platform/obot-sentry/pkg/client"
+	"github.com/obot-platform/obot-sentry/pkg/identity"
+	"github.com/obot-platform/obot-sentry/pkg/mdmconfig"
+	"github.com/obot-platform/obot-sentry/pkg/state"
 )
 
 // enrolledAgent builds an Agent whose local state already records an

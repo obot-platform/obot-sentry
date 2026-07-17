@@ -1,6 +1,6 @@
 name: build
 
-# Builds the MDM assets end to end: cross-compiled obocop.exe → platform
+# Builds the MDM assets end to end: cross-compiled obot-sentry.exe → platform
 # installers → assembled dist/mdm-assets (manifest + files), published
 # as the mdm-assets workflow artifact. In the obot-platform org (and
 # except on PRs) docker.yml then packages that artifact as the
@@ -44,8 +44,8 @@ env:
   VERSION: ${{ inputs.version || format('0.0.{0}', github.run_number) }}
 
 jobs:
-  # Cross-compiled obocop.exe, stamped with VERSION so the exe, the MSI
-  # ProductVersion, and the manifest's obocopVersion always agree.
+  # Cross-compiled obot-sentry.exe, stamped with VERSION so the exe, the MSI
+  # ProductVersion, and the manifest's obotSentryVersion always agree.
   binaries:
     runs-on: ubuntu-latest
     steps:
@@ -60,7 +60,7 @@ jobs:
           GOOS: windows
           GOARCH: amd64
           CGO_ENABLED: "0"
-        run: go build -ldflags "-s -w -X 'github.com/obot-platform/obocop/pkg/version.Tag=v${VERSION}'" -o bin/obocop.exe .
+        run: go build -ldflags "-s -w -X 'github.com/obot-platform/obot-sentry/pkg/version.Tag=v${VERSION}'" -o bin/obot-sentry.exe .
       - name: Upload binaries
         uses: actions/upload-artifact@v4
         with:
@@ -95,7 +95,7 @@ jobs:
       - name: Build MSI + .intunewin
         shell: pwsh
         run: |
-          ./build/windows/msi.ps1 -Version $env:VERSION -Exe bin/obocop.exe
+          ./build/windows/msi.ps1 -Version $env:VERSION -Exe bin/obot-sentry.exe
           ./build/windows/intune/intunewin.ps1
       - name: Upload installers
         uses: actions/upload-artifact@v4

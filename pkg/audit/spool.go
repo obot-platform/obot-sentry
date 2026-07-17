@@ -12,8 +12,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/obot-platform/obocop/pkg/datadir"
-	"github.com/obot-platform/obocop/pkg/fileutil"
+	"github.com/obot-platform/obot-sentry/pkg/datadir"
+	"github.com/obot-platform/obot-sentry/pkg/fileutil"
 	"github.com/obot-platform/obot/apiclient/types"
 )
 

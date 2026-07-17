@@ -1,15 +1,15 @@
-// Package cmd wires the obocop CLI. Each subcommand is a struct with a Run
+// Package cmd wires the obot-sentry CLI. Each subcommand is a struct with a Run
 // method (and usage-tagged fields for flags), mirroring obot's pkg/cli.
 package cmd
 
 import (
 	obotcmd "github.com/obot-platform/cmd"
-	"github.com/obot-platform/obocop/pkg/mdmconfig"
+	"github.com/obot-platform/obot-sentry/pkg/mdmconfig"
 	"github.com/spf13/cobra"
 )
 
-// Obocop is the root command.
-type Obocop struct{}
+// ObotSentry is the root command.
+type ObotSentry struct{}
 
 // New builds the root command with its subcommands, reading deployment
 // configuration from the real platform MDM store.
@@ -27,7 +27,7 @@ func newRoot(loadMDM func() (mdmconfig.Config, error)) *cobra.Command {
 	for _, cf := range []*ConfigFlags{&scan.ConfigFlags, &enroll.ConfigFlags, &auditSubmit.ConfigFlags} {
 		cf.loadMDMConfig = loadMDM
 	}
-	return obotcmd.Command(&Obocop{},
+	return obotcmd.Command(&ObotSentry{},
 		scan,
 		enroll,
 		&Version{},
@@ -35,6 +35,6 @@ func newRoot(loadMDM func() (mdmconfig.Config, error)) *cobra.Command {
 	)
 }
 
-func (a *Obocop) Run(c *cobra.Command, _ []string) error {
+func (a *ObotSentry) Run(c *cobra.Command, _ []string) error {
 	return c.Help()
 }

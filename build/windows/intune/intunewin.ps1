@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-Packages dist\obocop.msi as dist\obocop.intunewin for Intune.
+Packages dist\obot-sentry.msi as dist\obot-sentry.intunewin for Intune.
 
 .DESCRIPTION
 Drives Microsoft's Win32 Content Prep Tool, which must be on PATH as
@@ -19,21 +19,21 @@ $ErrorActionPreference = 'Stop'
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).ProviderPath
 $outDir = Join-Path $repoRoot 'dist'
-$installer = Join-Path $outDir 'obocop.msi'
+$installer = Join-Path $outDir 'obot-sentry.msi'
 
 if (-not (Test-Path -LiteralPath $installer -PathType Leaf)) {
     throw "Expected $installer to exist — run msi.ps1 before this script."
 }
 
-Write-Host "content-prep: $installer -> obocop.intunewin"
+Write-Host "content-prep: $installer -> obot-sentry.intunewin"
 
-& IntuneWinAppUtil.exe -c $outDir -s 'obocop.msi' -o $outDir -q
+& IntuneWinAppUtil.exe -c $outDir -s 'obot-sentry.msi' -o $outDir -q
 if ($LASTEXITCODE -ne 0) {
     throw "IntuneWinAppUtil.exe exited with code $LASTEXITCODE."
 }
 
 # The tool derives its output name from the setup file, so this is where
-# obocop.intunewin must have appeared.
+# obot-sentry.intunewin must have appeared.
 $package = [System.IO.Path]::ChangeExtension($installer, '.intunewin')
 if (-not (Test-Path -LiteralPath $package -PathType Leaf)) {
     throw "Content prep finished without writing $package."

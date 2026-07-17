@@ -13,19 +13,19 @@ import (
 	"github.com/obot-platform/obot/apiclient/types"
 	"github.com/spf13/cobra"
 
-	"github.com/obot-platform/obocop/pkg/agent"
-	"github.com/obot-platform/obocop/pkg/datadir"
-	"github.com/obot-platform/obocop/pkg/mdmconfig"
-	"github.com/obot-platform/obocop/pkg/state"
-	"github.com/obot-platform/obocop/pkg/version"
+	"github.com/obot-platform/obot-sentry/pkg/agent"
+	"github.com/obot-platform/obot-sentry/pkg/datadir"
+	"github.com/obot-platform/obot-sentry/pkg/mdmconfig"
+	"github.com/obot-platform/obot-sentry/pkg/state"
+	"github.com/obot-platform/obot-sentry/pkg/version"
 )
 
 type Scan struct {
 	ConfigFlags
 	JSON    bool `usage:"Print the scan result as JSON"`
 	Quiet   bool `usage:"Suppress the result output" short:"q"`
-	Submit  bool `usage:"Submit the scan to the configured Obot server, enrolling first if needed" env:"OBOCOP_SCAN_SUBMIT"`
-	Timeout int  `usage:"Number of seconds to wait for the scan to complete" default:"300" env:"OBOCOP_SCAN_TIMEOUT"`
+	Submit  bool `usage:"Submit the scan to the configured Obot server, enrolling first if needed" env:"OBOT_SENTRY_SCAN_SUBMIT"`
+	Timeout int  `usage:"Number of seconds to wait for the scan to complete" default:"300" env:"OBOT_SENTRY_SCAN_TIMEOUT"`
 }
 
 func (s *Scan) Customize(cmd *cobra.Command) {

@@ -4,10 +4,10 @@ default: build
 
 # Build the project
 
-GIT_TAG := $(shell git describe --tags --exact-match 2>/dev/null | xargs -I {} echo -X 'github.com/obot-platform/obocop/pkg/version.Tag={}')
+GIT_TAG := $(shell git describe --tags --exact-match 2>/dev/null | xargs -I {} echo -X 'github.com/obot-platform/obot-sentry/pkg/version.Tag={}')
 GO_LD_FLAGS := "-s -w $(GIT_TAG)"
 build:
-	go build -ldflags=$(GO_LD_FLAGS) -o bin/obocop .
+	go build -ldflags=$(GO_LD_FLAGS) -o bin/obot-sentry .
 
 clean:
 	rm -rf bin dist

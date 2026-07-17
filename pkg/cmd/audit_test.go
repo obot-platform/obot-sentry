@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/obot-platform/obocop/pkg/audit"
-	"github.com/obot-platform/obocop/pkg/mdmconfig"
+	"github.com/obot-platform/obot-sentry/pkg/audit"
+	"github.com/obot-platform/obot-sentry/pkg/mdmconfig"
 	"github.com/obot-platform/obot/apiclient/types"
 	"github.com/spf13/cobra"
 )
@@ -104,7 +104,7 @@ func TestAuditSubmitDryRunWritesAuditLogToUserCache(t *testing.T) {
 		t.Fatalf("expected dry-run to keep stdout empty, got %q", stdout.String())
 	}
 
-	logDir := filepath.Join(cacheDir, "obot", "obocop", "audit-logs")
+	logDir := filepath.Join(cacheDir, "obot", "obot-sentry", "audit-logs")
 	files, err := os.ReadDir(logDir)
 	if err != nil {
 		t.Fatalf("read dry-run audit log directory: %v", err)
@@ -159,7 +159,7 @@ func TestAuditSubmitDryRunDoesNotOverwriteExistingLog(t *testing.T) {
 		}
 	}
 
-	logDir := filepath.Join(cacheDir, "obot", "obocop", "audit-logs")
+	logDir := filepath.Join(cacheDir, "obot", "obot-sentry", "audit-logs")
 	files, err := os.ReadDir(logDir)
 	if err != nil {
 		t.Fatal(err)
@@ -254,7 +254,7 @@ func TestAuditSubmitMissingServerURLDoesNotSpool(t *testing.T) {
 	}
 	// Without an authenticated device identity there is nothing to submit, so
 	// the completed event must fail open rather than being spooled.
-	spoolDir := filepath.Join(cacheDir, "obot", "obocop", "audit-spool")
+	spoolDir := filepath.Join(cacheDir, "obot", "obot-sentry", "audit-spool")
 	if _, err := os.Stat(spoolDir); !os.IsNotExist(err) {
 		t.Fatalf("missing ServerURL must not spool; audit-spool exists (err=%v)", err)
 	}
@@ -279,7 +279,7 @@ func TestAuditSubmitRejectsPreToolPhase(t *testing.T) {
 	if err := root.Execute(); err == nil || !strings.Contains(err.Error(), "unsupported audit phase") {
 		t.Fatalf("expected pre-tool phase to be rejected, got %v", err)
 	}
-	spoolDir := filepath.Join(cacheDir, "obot", "obocop", "audit-spool")
+	spoolDir := filepath.Join(cacheDir, "obot", "obot-sentry", "audit-spool")
 	if _, err := os.Stat(spoolDir); !os.IsNotExist(err) {
 		t.Fatalf("rejected pre-tool invocation must not create the encrypted submit spool (err=%v)", err)
 	}
@@ -310,10 +310,8 @@ func auditCacheDir(t *testing.T) string {
 func withoutAuditDeploymentConfig(t *testing.T) *cobra.Command {
 	t.Helper()
 	for _, key := range []string{
-		"OBOCOP_SERVER_URL",
-		"OBOCOP_ENROLLMENT_KEY",
-		"OBOCOP_USERNAME",
-		"OBOCOP_DEVICE_NAME",
+		"OBOT_SENTRY_SERVER_URL",
+		"OBOT_SENTRY_ENROLLMENT_KEY",
 	} {
 		t.Setenv(key, "")
 	}

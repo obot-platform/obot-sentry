@@ -10,10 +10,10 @@ import (
 	"time"
 
 	obotcmd "github.com/obot-platform/cmd"
-	"github.com/obot-platform/obocop/pkg/agent"
-	"github.com/obot-platform/obocop/pkg/audit"
-	"github.com/obot-platform/obocop/pkg/client"
-	"github.com/obot-platform/obocop/pkg/datadir"
+	"github.com/obot-platform/obot-sentry/pkg/agent"
+	"github.com/obot-platform/obot-sentry/pkg/audit"
+	"github.com/obot-platform/obot-sentry/pkg/client"
+	"github.com/obot-platform/obot-sentry/pkg/datadir"
 	"github.com/obot-platform/obot/apiclient/types"
 	"github.com/spf13/cobra"
 )
@@ -63,10 +63,10 @@ func (s *AuditSubmit) Customize(cmd *cobra.Command) {
 
 func (s *AuditSubmit) Run(cmd *cobra.Command, _ []string) error {
 	// --managed-by is a flag that we ignore.
-	// It's accepted so that obocop can recognize its own managed hook
+	// It's accepted so that obot-sentry can recognize its own managed hook
 	// configurations when editing config files.
-	if s.ManagedBy != "" && s.ManagedBy != "obocop" {
-		return fmt.Errorf("--managed-by must be empty or obocop")
+	if s.ManagedBy != "" && s.ManagedBy != "obot-sentry" {
+		return fmt.Errorf("--managed-by must be empty or obot-sentry")
 	}
 
 	payload, err := readAuditInput(s.Input)
@@ -102,7 +102,7 @@ func (s *AuditSubmit) Run(cmd *cobra.Command, _ []string) error {
 			return fmt.Errorf("write dry-run audit logs: %w", err)
 		}
 		for _, path := range paths {
-			auditWarn(cmd, "obocop audit: dry-run wrote audit log to %s", path)
+			auditWarn(cmd, "obot-sentry audit: dry-run wrote audit log to %s", path)
 		}
 		return nil
 	}
@@ -122,21 +122,21 @@ func (s *AuditSubmit) submitTerminalEvents(cmd *cobra.Command, events []types.Lo
 
 	cfg, err := s.resolve()
 	if err != nil {
-		auditWarn(cmd, "obocop audit: reading deployment configuration: %v", err)
+		auditWarn(cmd, "obot-sentry audit: reading deployment configuration: %v", err)
 		return
 	}
 	if cfg.ServerURL == "" {
-		auditWarn(cmd, "obocop audit: no ServerURL configured; audit log not submitted")
+		auditWarn(cmd, "obot-sentry audit: no ServerURL configured; audit log not submitted")
 		return
 	}
 	dir, err := datadir.Dir()
 	if err != nil {
-		auditWarn(cmd, "obocop audit: resolving data directory: %v", err)
+		auditWarn(cmd, "obot-sentry audit: resolving data directory: %v", err)
 		return
 	}
 	idDir, err := datadir.IdentityDir()
 	if err != nil {
-		auditWarn(cmd, "obocop audit: resolving identity directory: %v", err)
+		auditWarn(cmd, "obot-sentry audit: resolving identity directory: %v", err)
 		return
 	}
 
@@ -146,7 +146,7 @@ func (s *AuditSubmit) submitTerminalEvents(cmd *cobra.Command, events []types.Lo
 	a := agent.New(dir, idDir, cfg)
 	id, st, err := a.EnsureEnrolled(ctx)
 	if err != nil {
-		auditWarn(cmd, "obocop audit: device is not enrolled; audit log not submitted: %v", err)
+		auditWarn(cmd, "obot-sentry audit: device is not enrolled; audit log not submitted: %v", err)
 		return
 	}
 	if err := a.SubmitLocalAgentAuditLogs(ctx, id, st, events); err != nil {
@@ -158,47 +158,47 @@ func (s *AuditSubmit) submitTerminalEvents(cmd *cobra.Command, events []types.Lo
 
 func (s *AuditSubmit) handleProductionSubmitError(cmd *cobra.Command, logs []types.LocalAgentToolCallAuditLogInput, err error) {
 	if client.IsUnauthorized(err) {
-		auditWarn(cmd, "obocop audit: device authorization failed after retry; audit log discarded: %v", err)
+		auditWarn(cmd, "obot-sentry audit: device authorization failed after retry; audit log discarded: %v", err)
 		return
 	}
 	if client.IsClientError(err) {
-		auditWarn(cmd, "obocop audit: server rejected audit log; audit log discarded: %v", err)
+		auditWarn(cmd, "obot-sentry audit: server rejected audit log; audit log discarded: %v", err)
 		return
 	}
 	if !client.IsTransient(err) {
-		auditWarn(cmd, "obocop audit: audit log submit failed; audit log discarded: %v", err)
+		auditWarn(cmd, "obot-sentry audit: audit log submit failed; audit log discarded: %v", err)
 		return
 	}
 	spool, spoolErr := audit.DefaultSpool()
 	if spoolErr != nil {
-		auditWarn(cmd, "obocop audit: audit log submit failed and spool is unavailable: %v; original error: %v", spoolErr, err)
+		auditWarn(cmd, "obot-sentry audit: audit log submit failed and spool is unavailable: %v; original error: %v", spoolErr, err)
 		return
 	}
 	if spoolErr := spool.Enqueue(logs); spoolErr != nil {
-		auditWarn(cmd, "obocop audit: audit log submit failed and spooling failed: %v; original error: %v", spoolErr, err)
+		auditWarn(cmd, "obot-sentry audit: audit log submit failed and spooling failed: %v; original error: %v", spoolErr, err)
 		return
 	}
-	auditWarn(cmd, "obocop audit: audit log submit failed transiently; spooled for retry: %v", err)
+	auditWarn(cmd, "obot-sentry audit: audit log submit failed transiently; spooled for retry: %v", err)
 }
 
 func (s *AuditSubmit) drainSpool(cmd *cobra.Command, a *agent.Agent) {
 	spool, err := audit.DefaultSpool()
 	if err != nil {
-		auditWarn(cmd, "obocop audit: spool unavailable after successful submit: %v", err)
+		auditWarn(cmd, "obot-sentry audit: spool unavailable after successful submit: %v", err)
 		return
 	}
 	ctx, cancel := context.WithTimeout(cmd.Context(), auditDrainTimeout)
 	defer cancel()
 	id, st, err := a.EnsureEnrolled(ctx)
 	if err != nil {
-		auditWarn(cmd, "obocop audit: cannot drain spool without enrolled device state: %v", err)
+		auditWarn(cmd, "obot-sentry audit: cannot drain spool without enrolled device state: %v", err)
 		return
 	}
 	_, err = spool.Drain(10, func(logs []types.LocalAgentToolCallAuditLogInput) error {
 		return a.SubmitLocalAgentAuditLogs(ctx, id, st, logs)
 	}, client.IsClientError)
 	if err != nil {
-		auditWarn(cmd, "obocop audit: spool drain did not complete: %v", err)
+		auditWarn(cmd, "obot-sentry audit: spool drain did not complete: %v", err)
 	}
 }
 

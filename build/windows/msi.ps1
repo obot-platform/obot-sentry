@@ -1,10 +1,10 @@
 <#
 .SYNOPSIS
-Compiles dist\obocop.msi from a prebuilt obocop.exe.
+Compiles dist\obot-sentry.msi from a prebuilt obot-sentry.exe.
 
 .DESCRIPTION
-Runs WiX v4 (`dotnet tool install --global wix`) against obocop.wxs. The
-installer keeps the fixed name obocop.msi on purpose: Windows Installer
+Runs WiX v4 (`dotnet tool install --global wix`) against obot-sentry.wxs. The
+installer keeps the fixed name obot-sentry.msi on purpose: Windows Installer
 decides upgrades from the metadata inside the package, never the file
 name, and a fixed name lets the MDM's stored install command survive
 every release untouched.
@@ -13,8 +13,8 @@ every release untouched.
 Release version, stamped into the MSI as its ProductVersion.
 
 .PARAMETER Exe
-The obocop.exe to package. CI cross-compiles it; for a local build:
-$env:GOOS='windows'; $env:GOARCH='amd64'; go build -o bin\obocop.exe .
+The obot-sentry.exe to package. CI cross-compiles it; for a local build:
+$env:GOOS='windows'; $env:GOARCH='amd64'; go build -o bin\obot-sentry.exe .
 #>
 [CmdletBinding()]
 param(
@@ -69,7 +69,7 @@ function Assert-Amd64Image([string] $Path) {
     }
     $machine = [System.BitConverter]::ToUInt16($fields, 4)
     if ($machine -ne 0x8664) {
-        throw ("'{0}' targets machine type 0x{1:X4}; obocop.msi only ships x64." -f $Path, $machine)
+        throw ("'{0}' targets machine type 0x{1:X4}; obot-sentry.msi only ships x64." -f $Path, $machine)
     }
 }
 
@@ -84,16 +84,16 @@ Assert-Amd64Image $binary
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).ProviderPath
 $outDir = Join-Path $repoRoot 'dist'
 $null = New-Item -ItemType Directory -Force -Path $outDir
-$installer = Join-Path $outDir 'obocop.msi'
+$installer = Join-Path $outDir 'obot-sentry.msi'
 
-Write-Host "wix: obocop.wxs + $binary -> $installer (ProductVersion $Version)"
+Write-Host "wix: obot-sentry.wxs + $binary -> $installer (ProductVersion $Version)"
 
-# obocop.wxs pulls obocop.ico and scan-task.ps1 from the bind path (this
+# obot-sentry.wxs pulls obot-sentry.ico and scan-task.ps1 from the bind path (this
 # directory); the exe arrives through the ExePath preprocessor variable.
 # -arch x64 makes ProgramFiles64Folder and component bitness 64-bit.
 & wix build `
     -arch x64 `
-    -src (Join-Path $PSScriptRoot 'obocop.wxs') `
+    -src (Join-Path $PSScriptRoot 'obot-sentry.wxs') `
     -bindpath $PSScriptRoot `
     -d "Version=$Version" `
     -d "ExePath=$binary" `

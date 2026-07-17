@@ -8,13 +8,13 @@ import (
 	"howett.net/plist"
 )
 
-// Managed-preference locations for the com.obot.obocop payload domain,
+// Managed-preference locations for the com.obot.obot-sentry payload domain,
 // most-authoritative first. MDM-delivered profiles land under
 // /Library/Managed Preferences as binary plists; howett.net/plist
 // parses binary and XML natively so no `defaults` subprocess is needed.
 var plistPaths = []string{
-	"/Library/Managed Preferences/com.obot.obocop.plist",
-	"/Library/Preferences/com.obot.obocop.plist",
+	"/Library/Managed Preferences/com.obot.obot-sentry.plist",
+	"/Library/Preferences/com.obot.obot-sentry.plist",
 }
 
 func platformSource() Source { return plistSource{paths: plistPaths} }

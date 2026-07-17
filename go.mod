@@ -1,4 +1,4 @@
-module github.com/obot-platform/obocop
+module github.com/obot-platform/obot-sentry
 
 go 1.26.4
 

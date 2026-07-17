@@ -1,4 +1,4 @@
-// Package state persists obocop's per-user enrollment state (data
+// Package state persists obot-sentry's per-user enrollment state (data
 // dir), plus the scan state and scan log records (cache dir) that the
 // scheduled per-user scans throttle against and report through.
 package state
@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/obot-platform/obocop/pkg/fileutil"
+	"github.com/obot-platform/obot-sentry/pkg/fileutil"
 )
 
 const stateFile = "state.json"

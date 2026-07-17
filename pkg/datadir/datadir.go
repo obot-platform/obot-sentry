@@ -1,4 +1,4 @@
-// Package datadir resolves the directories obocop persists its state
+// Package datadir resolves the directories obot-sentry persists its state
 // under: a machine-scoped one for the shared device identity, a
 // per-user data one for enrollment state, and a per-user cache one for
 // scan state and scan log records.
@@ -10,27 +10,27 @@ import (
 	"runtime"
 
 	"github.com/adrg/xdg"
-	"github.com/obot-platform/obocop/pkg/fileutil"
+	"github.com/obot-platform/obot-sentry/pkg/fileutil"
 )
 
-// CacheDir returns the per-user obocop cache directory (scan state and
+// CacheDir returns the per-user obot-sentry cache directory (scan state and
 // scan log records). The directory is not created by this function.
 func CacheDir() (string, error) {
 	cacheDir, err := os.UserCacheDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(cacheDir, "obot", "obocop"), nil
+	return filepath.Join(cacheDir, "obot", "obot-sentry"), nil
 }
 
-// Dir returns the per-user obocop data directory, creating it with
+// Dir returns the per-user obot-sentry data directory, creating it with
 // owner-only permissions or an equivalent platform-private ACL if needed:
 //
-//	windows: %LOCALAPPDATA%\obot\obocop
-//	darwin:  ~/Library/Application Support/obot/obocop
-//	linux:   ${XDG_DATA_HOME:-~/.local/share}/obot/obocop
+//	windows: %LOCALAPPDATA%\obot\obot-sentry
+//	darwin:  ~/Library/Application Support/obot/obot-sentry
+//	linux:   ${XDG_DATA_HOME:-~/.local/share}/obot/obot-sentry
 func Dir() (string, error) {
-	dir := filepath.Join(xdg.DataHome, "obot", "obocop")
+	dir := filepath.Join(xdg.DataHome, "obot", "obot-sentry")
 	if err := fileutil.MkdirAllPrivate(dir); err != nil {
 		return "", err
 	}
@@ -40,9 +40,9 @@ func Dir() (string, error) {
 // MachineDir returns the machine-scoped data directory shared by every
 // user, so all users present one device identity:
 //
-//	windows: %PROGRAMDATA%\obot\obocop
-//	darwin:  /Library/Application Support/obot/obocop
-//	linux:   /var/lib/obot/obocop
+//	windows: %PROGRAMDATA%\obot\obot-sentry
+//	darwin:  /Library/Application Support/obot/obot-sentry
+//	linux:   /var/lib/obot/obot-sentry
 //
 // The identity key stored here must be readable by all users (scans
 // run per user), so the directory is created 0755. Creation can fail
@@ -62,7 +62,7 @@ func MachineDir() (string, error) {
 	if base == "" {
 		return "", os.ErrNotExist
 	}
-	dir := filepath.Join(base, "obot", "obocop")
+	dir := filepath.Join(base, "obot", "obot-sentry")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
 	}

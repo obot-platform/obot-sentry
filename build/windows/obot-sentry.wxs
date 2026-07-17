@@ -1,0 +1,126 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Obot Sentry MSI (WiX Toolset v4, built by msi.ps1). Installs
+  obot-sentry.exe and scan-task.ps1 under %ProgramFiles%\Obot\obot-sentry,
+  registers the per-user scan scheduled task, and writes the tenant
+  configuration from the msiexec command line to
+  HKLM\SOFTWARE\Obot\obot-sentry, where pkg/mdmconfig reads it.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package Name="Obot Sentry" Manufacturer="Obot AI"
+           Version="$(var.Version)" Scope="perMachine"
+           UpgradeCode="2AFEEC0F-F577-482E-B7A5-3EE19FE3F36E">
+    <SummaryInformation Description="Obot Sentry device agent" />
+
+    <!-- AllowSameVersionUpgrades: the 0.0.<run> dev channel re-pushes the
+         same version, and admins re-run installs; both must supersede in
+         place rather than silently no-op or collide with the existing
+         product. Downgrades are refused. -->
+    <MajorUpgrade AllowSameVersionUpgrades="yes"
+                  DowngradeErrorMessage="Setup cannot continue: this machine already runs a newer Obot Sentry." />
+
+    <!--
+      Tenant configuration arrives as public properties on every install
+      and upgrade command; the launch conditions below hard-fail installs
+      missing it (no registry read-back, so stale values never win).
+      Secure="yes" carries the values into the elevated execute sequence.
+    -->
+    <Property Id="SERVER_URL" Secure="yes" />
+    <Property Id="ENROLLMENT_KEY" Secure="yes" />
+    <Property Id="SCAN_INTERVAL_MINUTES" Secure="yes" />
+
+    <Launch Condition="SERVER_URL OR REMOVE~=&quot;ALL&quot;"
+            Message="The SERVER_URL property is required (obot server base URL). Install with the completed command from INSTRUCTIONS.md." />
+    <Launch Condition="ENROLLMENT_KEY OR REMOVE~=&quot;ALL&quot;"
+            Message="The ENROLLMENT_KEY property is required (ode1-... enrollment credential). Install with the completed command from INSTRUCTIONS.md." />
+
+    <!-- No ARP Change/Repair: a repair can't carry the properties and
+         would rewrite the registry config with empty values. -->
+    <Property Id="ARPNOMODIFY" Value="1" />
+    <Property Id="ARPNOREPAIR" Value="1" />
+    <!-- What Settings > Apps shows next to the entry: icon plus the
+         support/about links admins expect from managed software. -->
+    <Property Id="ARPPRODUCTICON" Value="ObotSentryIcon" />
+    <Property Id="ARPURLINFOABOUT" Value="https://obot.ai" />
+    <Property Id="ARPHELPLINK" Value="https://docs.obot.ai" />
+    <Property Id="ARPCONTACT" Value="support@obot.ai" />
+    <Icon Id="ObotSentryIcon" SourceFile="obot-sentry.ico" />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="ObotDir" Name="Obot">
+        <Directory Id="INSTALLDIR" Name="obot-sentry">
+          <Component Id="MainExecutable" Guid="6BA5BA35-12D6-4AA1-B1F8-9EC20B042359">
+            <File Id="ObotSentryExe" Name="obot-sentry.exe" Source="$(var.ExePath)" KeyPath="yes" />
+          </Component>
+          <!-- Registers/removes the per-user scan scheduled task at
+               install/uninstall (see the custom actions below). -->
+          <Component Id="TaskScript" Guid="924DCA37-C6CD-4882-BAC3-15F6BA98381D">
+            <File Id="ScanTaskScript" Name="scan-task.ps1" Source="scan-task.ps1" KeyPath="yes" />
+          </Component>
+          <Component Id="DeploymentRegistry" Guid="65842A7E-C5E0-4329-BD81-B106EB197F6F">
+            <RegistryKey Root="HKLM" Key="SOFTWARE\Obot\obot-sentry">
+              <RegistryValue Name="ServerURL" Type="string" Value="[SERVER_URL]" KeyPath="yes" />
+              <RegistryValue Name="EnrollmentKey" Type="string" Value="[ENROLLMENT_KEY]" />
+              <RegistryValue Name="ScanIntervalMinutes" Type="string" Value="[SCAN_INTERVAL_MINUTES]" />
+            </RegistryKey>
+          </Component>
+        </Directory>
+      </Directory>
+    </StandardDirectory>
+
+    <!--
+      %ProgramData%\obot\obot-sentry holds the machine-scoped device identity
+      shared by every user (pkg/datadir.MachineDir). Default ProgramData
+      ACLs let any user create files in it, so whichever user scans first
+      creates the shared key and the rest read it (the key file is
+      world-readable by design).
+    -->
+    <StandardDirectory Id="CommonAppDataFolder">
+      <Directory Id="ObotDataDir" Name="obot">
+        <Directory Id="ObotSentryDataDir" Name="obot-sentry">
+          <Component Id="MachineDataDir" Guid="983ED6F7-7E40-4832-BB7B-52B0B3250FC9">
+            <CreateFolder />
+          </Component>
+        </Directory>
+      </Directory>
+    </StandardDirectory>
+
+    <Feature Id="Main" Level="1">
+      <ComponentRef Id="MainExecutable" />
+      <ComponentRef Id="TaskScript" />
+      <ComponentRef Id="DeploymentRegistry" />
+      <ComponentRef Id="MachineDataDir" />
+    </Feature>
+
+    <!--
+      Register/remove the per-user scan task via scan-task.ps1
+      (registration needs elevation even though the task runs per user).
+      Deferred, no-impersonate custom actions run in the elevated (SYSTEM)
+      execute phase; SetPowerShellPath (immediate) resolves powershell.exe
+      into the POWERSHELL property. The ExeCommand fields are formatted when
+      the deferred actions are scheduled into the execution script (after
+      CostFinalize), so [INSTALLDIR] resolves. We pass the full obot-sentry.exe
+      path (not the directory) so there is no trailing "\" immediately before
+      a closing quote to break CommandLineToArgvW parsing.
+
+      InstallScanTask runs on install/upgrade; -Force re-creates the task
+      idempotently. UninstallScanTask runs only on a true uninstall — the
+      NOT UPGRADINGPRODUCTCODE guard keeps the outgoing product's removal
+      during a major upgrade from deleting the task the new one just wrote.
+    -->
+    <CustomAction Id="SetPowerShellPath" Property="POWERSHELL"
+                  Value="[System64Folder]WindowsPowerShell\v1.0\powershell.exe" />
+    <CustomAction Id="InstallScanTask" Property="POWERSHELL"
+                  ExeCommand="-ExecutionPolicy Bypass -NonInteractive -NoProfile -File &quot;[INSTALLDIR]scan-task.ps1&quot; -Mode install -ExePath &quot;[INSTALLDIR]obot-sentry.exe&quot;"
+                  Execute="deferred" Impersonate="no" Return="check" />
+    <CustomAction Id="UninstallScanTask" Property="POWERSHELL"
+                  ExeCommand="-ExecutionPolicy Bypass -NonInteractive -NoProfile -File &quot;[INSTALLDIR]scan-task.ps1&quot; -Mode uninstall"
+                  Execute="deferred" Impersonate="no" Return="ignore" />
+
+    <InstallExecuteSequence>
+      <Custom Action="SetPowerShellPath" After="CostFinalize" />
+      <Custom Action="InstallScanTask" After="InstallFiles" Condition="NOT (REMOVE~=&quot;ALL&quot;)" />
+      <Custom Action="UninstallScanTask" After="InstallInitialize" Condition="REMOVE~=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
+    </InstallExecuteSequence>
+  </Package>
+</Wix>

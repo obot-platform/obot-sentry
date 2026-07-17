@@ -1,7 +1,7 @@
-# Deploy the Obot device agent with Microsoft Intune
+# Deploy Obot Sentry with Microsoft Intune
 
-This bundle contains `obocop.intunewin` — the obocop device agent
-(version {{.obocopVersion}}) packaged as an Intune **Windows app
+This bundle contains `obot-sentry.intunewin` — the obot-sentry device agent
+(version {{.obotSentryVersion}}) packaged as an Intune **Windows app
 (Win32)** — and these instructions. The file names are stable across
 versions, so upgrades never require editing the install command.
 
@@ -17,13 +17,13 @@ versions, so upgrades never require editing the install command.
    `REPLACE_WITH_ENROLLMENT_KEY` with your enrollment key:
 
    ```
-   msiexec /i "obocop.msi" /qn OBOT_SERVER_URL="{{.serverURL}}" OBOT_ENROLLMENT_KEY="REPLACE_WITH_ENROLLMENT_KEY" OBOT_SCAN_INTERVAL_MINUTES="{{.scanIntervalMinutes}}"
+   msiexec /i "obot-sentry.msi" /qn SERVER_URL="{{.serverURL}}" ENROLLMENT_KEY="REPLACE_WITH_ENROLLMENT_KEY" SCAN_INTERVAL_MINUTES="{{.scanIntervalMinutes}}"
    ```
 
 4. **Uninstall command:**
 
    ```
-   msiexec /x "obocop.msi" /qn
+   msiexec /x "obot-sentry.msi" /qn
    ```
 
 5. **Install behavior:** System. **Detection rule:** keep the MSI product
@@ -35,11 +35,11 @@ versions, so upgrades never require editing the install command.
 
 ## What the installer does
 
-- Installs `obocop.exe` under `C:\Program Files\Obot\Obocop`.
+- Installs `obot-sentry.exe` under `C:\Program Files\Obot\obot-sentry`.
 - Writes the deployment configuration from the install command's
-  properties to `HKLM\SOFTWARE\Obot\Obocop`.
+  properties to `HKLM\SOFTWARE\Obot\obot-sentry`.
 - Registers a machine-wide scheduled task that runs in each signed-in
-  user's session, as that user, at logon and every 5 minutes. Each run
+  user's session, as that user, at logon and every 10 minutes. Each run
   submits a scan at most every {{.scanIntervalMinutes}} minutes
   (`ScanIntervalMinutes` in the registry — change it there to retune
   without reinstalling).

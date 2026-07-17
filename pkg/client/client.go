@@ -13,7 +13,7 @@ import (
 	"github.com/obot-platform/obot/apiclient"
 	"github.com/obot-platform/obot/apiclient/types"
 
-	"github.com/obot-platform/obocop/pkg/identity"
+	"github.com/obot-platform/obot-sentry/pkg/identity"
 )
 
 type Client struct {

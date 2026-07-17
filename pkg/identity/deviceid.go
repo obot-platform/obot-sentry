@@ -13,7 +13,7 @@ import (
 // derived under. Deriving (rather than transmitting the raw machine
 // GUID) keeps hardware identifiers off the wire while staying stable
 // across re-installs.
-var deviceIDNamespace = uuid.NewSHA1(uuid.NameSpaceDNS, []byte("device-id.obocop.obot.ai"))
+var deviceIDNamespace = uuid.NewSHA1(uuid.NameSpaceDNS, []byte("device-id.obot-sentry.obot.ai"))
 
 // DeriveDeviceID computes the machine's logical device ID from its
 // hardware ID and the identity key's fingerprint. Binding the key into

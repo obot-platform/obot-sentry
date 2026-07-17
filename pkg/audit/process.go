@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/obot-platform/obocop/pkg/version"
+	"github.com/obot-platform/obot-sentry/pkg/version"
 )
 
 var (
@@ -41,13 +41,13 @@ func Process(payload []byte, opts ProcessOptions) (Result, error) {
 
 	if phase == PhaseFailure && (agent == AgentVSCode || agent == AgentCodex) {
 		return Result{Warnings: []string{
-			fmt.Sprintf("obocop audit: %s failure hooks are not supported; no audit entry submitted", agent),
+			fmt.Sprintf("obot-sentry audit: %s failure hooks are not supported; no audit entry submitted", agent),
 		}}, nil
 	}
 
 	event, err := parseTerminalEvent(agent, payload)
 	if err != nil {
-		return Result{Warnings: []string{fmt.Sprintf("obocop audit: %v; no audit entry submitted", err)}}, nil
+		return Result{Warnings: []string{fmt.Sprintf("obot-sentry audit: %v; no audit entry submitted", err)}}, nil
 	}
 
 	enrichment := Enrichment{}
@@ -59,7 +59,7 @@ func Process(payload []byte, opts ProcessOptions) (Result, error) {
 
 	entry, err := normalizeEvent(agent, phase, event, payload, now, enrichment)
 	if err != nil {
-		return Result{Warnings: []string{fmt.Sprintf("obocop audit: %v", err)}}, nil
+		return Result{Warnings: []string{fmt.Sprintf("obot-sentry audit: %v", err)}}, nil
 	}
 	return Result{Entries: []Entry{entry}}, nil
 }
@@ -134,7 +134,7 @@ func normalizeEvent(agent Agent, phase Phase, event nativeEvent, payload []byte,
 	entry := Entry{
 		AgentProvider: providerValue(agent),
 		AgentVersion:  event.agentVersion(),
-		CLIName:       "obocop",
+		CLIName:       "obot-sentry",
 		CLIVersion:    version.Get().String(),
 		Status:        status,
 		FailureType:   failureType,

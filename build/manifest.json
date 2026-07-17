@@ -1,6 +1,6 @@
 {
   "schemaVersion": "v1",
-  "obocopVersion": "${VERSION}",
+  "obotSentryVersion": "${VERSION}",
   "fields": {
     "type": "object",
     "additionalProperties": false,
@@ -36,11 +36,11 @@
       "platform": "intune",
       "os": "windows",
       "osLabel": "Windows",
-      "description": "Enroll your Windows fleet with a bundle you deploy through Intune: it installs the agent, applies this configuration, and schedules recurring per-user scans.",
+      "description": "Deploy Obot Sentry to a Windows fleet with Microsft Intune",
       "suggestedName": "Windows Fleet",
       "instructions": "windows/intune/INSTRUCTIONS.md.tmpl",
       "assets": [
-        "windows/intune/obocop.intunewin",
+        "windows/intune/obot-sentry.intunewin",
         "windows/intune/INSTRUCTIONS.md.tmpl"
       ]
     }

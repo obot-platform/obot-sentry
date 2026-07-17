@@ -36,7 +36,7 @@ type Config struct {
 	EnrollmentKey string
 	// ScanIntervalMinutes is the minimum number of minutes between
 	// submitted scans; 0 means unset. The OS scheduler polls faster and
-	// obocop throttles to this at runtime, so admins change the cadence
+	// obot-sentry throttles to this at runtime, so admins change the cadence
 	// by updating the MDM configuration alone.
 	ScanIntervalMinutes int
 }

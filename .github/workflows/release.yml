@@ -6,7 +6,7 @@ name: release
 # image to :vX.Y.Z and :latest, and create a GitHub release carrying the
 # installers, the assets tarball, and a cosign-signed checksums file.
 # Prerelease tags (v1.2.3-rc1) are skipped entirely: MSI ProductVersion
-# must be numeric x.y.z and obocop only ships via the MDM installers.
+# must be numeric x.y.z and obot-sentry only ships via the MDM installers.
 
 on:
   push:
@@ -69,15 +69,15 @@ jobs:
       - name: Checksum and sign release assets
         run: |
           tar -czf dist/mdm-assets.tar.gz -C dist/mdm-assets .
-          (cd dist && sha256sum obocop.msi obocop.intunewin mdm-assets.tar.gz > checksums.txt)
+          (cd dist && sha256sum obot-sentry.msi obot-sentry.intunewin mdm-assets.tar.gz > checksums.txt)
           cosign sign-blob --yes --bundle dist/checksums.txt.sigstore.json dist/checksums.txt
 
       - name: Create release and upload assets
         run: |
           gh release create "${GITHUB_REF_NAME}" -R "${GITHUB_REPOSITORY}" \
             --title "${GITHUB_REF_NAME}" --generate-notes \
-            dist/obocop.msi \
-            dist/obocop.intunewin \
+            dist/obot-sentry.msi \
+            dist/obot-sentry.intunewin \
             dist/mdm-assets.tar.gz \
             dist/checksums.txt \
             dist/checksums.txt.sigstore.json

@@ -8,15 +8,15 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/obot-platform/obocop/pkg/datadir"
-	"github.com/obot-platform/obocop/pkg/fileutil"
+	"github.com/obot-platform/obot-sentry/pkg/datadir"
+	"github.com/obot-platform/obot-sentry/pkg/fileutil"
 	"github.com/obot-platform/obot/apiclient/types"
 )
 
 const dryRunLogDirName = "audit-logs"
 
 // DryRunLogDir returns the directory used for audit logs produced by
-// obocop audit submit --dry-run. The directory is rooted in the current
+// obot-sentry audit submit --dry-run. The directory is rooted in the current
 // user's platform-specific cache directory, but is not created by this
 // function.
 func DryRunLogDir() (string, error) {

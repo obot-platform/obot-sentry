@@ -20,14 +20,14 @@ func TestCollectEnrichmentCollectsURLsFromAllGitRemotes(t *testing.T) {
 
 	dir := t.TempDir()
 	runGit(t, dir, "init", "--initial-branch=main")
-	runGit(t, dir, "remote", "add", "origin", "https://github.com/obot-platform/obocop.git")
-	runGit(t, dir, "remote", "set-url", "--add", "origin", "git@github.com:obot-platform/obocop.git")
+	runGit(t, dir, "remote", "add", "origin", "https://github.com/obot-platform/obot-sentry.git")
+	runGit(t, dir, "remote", "set-url", "--add", "origin", "git@github.com:obot-platform/obot-sentry.git")
 	runGit(t, dir, "remote", "add", "upstream", "https://github.com/obot-platform/obot.git")
 
 	got := CollectEnrichment(dir).GitRemoteURLs
 	want := []string{
-		"https://github.com/obot-platform/obocop.git",
-		"git@github.com:obot-platform/obocop.git",
+		"https://github.com/obot-platform/obot-sentry.git",
+		"git@github.com:obot-platform/obot-sentry.git",
 		"https://github.com/obot-platform/obot.git",
 	}
 	if !reflect.DeepEqual(got, want) {

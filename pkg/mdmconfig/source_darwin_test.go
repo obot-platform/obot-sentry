@@ -30,7 +30,7 @@ func TestPlistSource_XMLAndBinary(t *testing.T) {
 			if err := plist.NewEncoderForFormat(&buf, enc.format).Encode(payload); err != nil {
 				t.Fatal(err)
 			}
-			p := filepath.Join(t.TempDir(), "com.obot.obocop.plist")
+			p := filepath.Join(t.TempDir(), "com.obot.obot-sentry.plist")
 			if err := os.WriteFile(p, buf.Bytes(), 0o644); err != nil {
 				t.Fatal(err)
 			}

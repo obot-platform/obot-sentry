@@ -7,8 +7,8 @@ import (
 )
 
 // registryKeyPath is where the MSI's registry component writes the
-// deployment values (see build/windows/obocop.wxs).
-const registryKeyPath = `SOFTWARE\Obot\Obocop`
+// deployment values (see build/windows/obot-sentry.wxs).
+const registryKeyPath = `SOFTWARE\Obot\obot-sentry`
 
 func platformSource() Source { return registrySource{} }
 

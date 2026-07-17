@@ -3,16 +3,16 @@ package cmd
 import (
 	"fmt"
 
-	"github.com/obot-platform/obocop/pkg/mdmconfig"
+	"github.com/obot-platform/obot-sentry/pkg/mdmconfig"
 )
 
 // ConfigFlags are the deployment-config overrides shared by commands
 // that talk to the server. Values resolve flags/env first (handled by
 // the command framework), then the platform MDM store.
 type ConfigFlags struct {
-	ServerURL           string `usage:"Obot server base URL (overrides the MDM-configured value)" env:"OBOCOP_SERVER_URL"`
-	EnrollmentKey       string `usage:"Device enrollment credential (ode1-...), used when the device is not yet enrolled" env:"OBOCOP_ENROLLMENT_KEY"`
-	ScanIntervalMinutes int    `usage:"Minutes between submitted scans (overrides the MDM-configured value)" env:"OBOCOP_SCAN_INTERVAL_MINUTES"`
+	ServerURL           string `usage:"Obot server base URL (overrides the MDM-configured value)" env:"OBOT_SENTRY_SERVER_URL"`
+	EnrollmentKey       string `usage:"Device enrollment credential (ode1-...), used when the device is not yet enrolled" env:"OBOT_SENTRY_ENROLLMENT_KEY"`
+	ScanIntervalMinutes int    `usage:"Minutes between submitted scans (overrides the MDM-configured value)" env:"OBOT_SENTRY_SCAN_INTERVAL_MINUTES"`
 
 	// loadMDMConfig reads the platform MDM store. It is wired by New so
 	// tests can substitute a stub, keeping them independent of any real

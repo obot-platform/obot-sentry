@@ -1,4 +1,4 @@
-// Package fileutil contains small filesystem helpers shared by obocop packages.
+// Package fileutil contains small filesystem helpers shared by obot-sentry packages.
 package fileutil
 
 import (

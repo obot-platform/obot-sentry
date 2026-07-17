@@ -1,27 +1,27 @@
-# Obocop
+# Obot Sentry 
 
-Obocop is a command-line tool designed to be used by MDMs for device scanning and agent hook configuration.
+`obot-sentry` is a command-line tool designed to be used by MDMs for device scanning and agent hook configuration.
 
 It enrolls each machine with an [Obot](https://github.com/obot-platform/obot) server as a single device shared by all of the machine's users, submits device scan manifests attributed per user, and provides managed local-agent audit hooks. Inventory collection (MCP servers, skills, plugins) is currently stubbed out — scans ship an empty manifest so the enrollment and submission flow works end to end while the scan engine lands separately.
 
 ## How it works
 
-- **One machine-wide scheduler entry, per-user scans.** The MDM installer registers a single machine-wide scheduler entry that the OS itself runs *as each signed-in user*: on Windows a scheduled task with a `BUILTIN\Users` group principal (logon + a 5-minute poll). Each run is a plain `obocop scan --submit --quiet` in the user's own session, so attribution, paths, and permissions are native — no privileged fan-out, no daemon of our own, and no MDM per-user scheduling. The poll is cheap: obocop throttles real submissions to the MDM-configured `ScanIntervalMinutes` (default 60, clamped to 15–1440) against its per-user scan state, so admins retune the cadence from the MDM alone. Users who aren't signed in aren't scanned; their inventory can't change while they're signed out, so nothing is missed beyond first-report latency for accounts that haven't signed in since install.
-- **Enrollment.** Configuration (server URL + an `ode1-...` enrollment credential) is pushed by the MDM — via registry values on Windows, a managed-preferences profile on macOS. On the machine's first scan — by whichever user runs first — obocop generates a shared Ed25519 identity key in the machine-scoped data dir (`%PROGRAMDATA%\obot\obocop` on Windows, `/Library/Application Support/obot/obocop` on macOS; both are prepared user-writable by the installer, with a per-user fallback when unavailable) and enrolls the public key via `POST /api/mdm/enroll` (trust-on-first-use). The device ID derives from the machine ID + key fingerprint, so all users present one device — and a lost key simply mints a fresh device ID instead of a TOFU conflict. Each user's first scan re-enrolls the same identity, which is an idempotent update server-side.
+- **One machine-wide scheduler entry, per-user scans.** The MDM installer registers a single machine-wide scheduler entry that the OS itself runs *as each signed-in user*: on Windows a scheduled task with a `BUILTIN\Users` group principal (logon + a 10-minute poll). Each run is a plain `obot-sentry scan --submit --quiet` in the user's own session, so attribution, paths, and permissions are native — no privileged fan-out, no daemon of our own, and no MDM per-user scheduling. The poll is cheap: obot-sentry throttles real submissions to the MDM-configured `ScanIntervalMinutes` (default 60, clamped to 15–1440) against its per-user scan state, so admins retune the cadence from the MDM alone. Users who aren't signed in aren't scanned; their inventory can't change while they're signed out, so nothing is missed beyond first-report latency for accounts that haven't signed in since install.
+- **Enrollment.** Configuration (server URL + an `ode1-...` enrollment credential) is pushed by the MDM — via registry values on Windows, a managed-preferences profile on macOS. On the machine's first scan — by whichever user runs first — obot-sentry generates a shared Ed25519 identity key in the machine-scoped data dir (`%PROGRAMDATA%\obot\obot-sentry` on Windows, `/Library/Application Support/obot/obot-sentry` on macOS; both are prepared user-writable by the installer, with a per-user fallback when unavailable) and enrolls the public key via `POST /api/mdm/enroll` (trust-on-first-use). The device ID derives from the machine ID + key fingerprint, so all users present one device — and a lost key simply mints a fresh device ID instead of a TOFU conflict. Each user's first scan re-enrolls the same identity, which is an idempotent update server-side.
 - **Submission.** Every submission is authenticated with a short-lived self-signed JWT (`aud=obot/device`) verified server-side against the enrolled key; scans land via `POST /api/devices/scans`, attributed to the submitting user by the manifest's `username`. Local-agent audit logs land via `POST /api/local-agent-audit-logs`, with the server stamping authoritative device attribution from the JWT.
-- **Local-agent audit hooks.** Managed hook configuration invokes the hidden `obocop audit submit` command for supported local agents. The hook parser normalizes terminal tool-call events, submits them fail-open, and writes only warnings to stderr when enrollment or submission is unavailable so agent execution is not blocked.
-- **Audit spool.** Transient audit-log submission failures are stored in an encrypted per-user spool under the obocop cache directory and replayed after a later successful live submit. Server-side client errors are discarded instead of retried.
-- **Scan state + logs.** Every scan run updates `scan.json` (last scan/submit times, status, last error) and appends a JSON record to `scan-logs/` — timestamp-sortable filenames, pruned by age and size — in obocop's per-user cache dir (`%LOCALAPPDATA%\obot\obocop` on Windows, `~/Library/Caches/obot/obocop` on macOS). Support and MDM freshness checks read these; recording problems never fail a scan.
+- **Local-agent audit hooks.** Managed hook configuration invokes the hidden `obot-sentry audit submit` command for supported local agents. The hook parser normalizes terminal tool-call events, submits them fail-open, and writes only warnings to stderr when enrollment or submission is unavailable so agent execution is not blocked.
+- **Audit spool.** Transient audit-log submission failures are stored in an encrypted per-user spool under the obot-sentry cache directory and replayed after a later successful live submit. Server-side client errors are discarded instead of retried.
+- **Scan state + logs.** Every scan run updates `scan.json` (last scan/submit times, status, last error) and appends a JSON record to `scan-logs/` — timestamp-sortable filenames, pruned by age and size — in obot-sentry's per-user cache dir (`%LOCALAPPDATA%\obot\obot-sentry` on Windows, `~/Library/Caches/obot/obot-sentry` on macOS). Support and MDM freshness checks read these; recording problems never fail a scan.
 
 ## Commands
 
 ```
-obocop scan              # build + print the manifest (add --submit to enroll + upload)
-obocop enroll            # explicit enrollment, for verifying a configuration
-obocop version
+obot-sentry scan              # build + print the manifest (add --submit to enroll + upload)
+obot-sentry enroll            # explicit enrollment, for verifying a configuration
+obot-sentry version
 ```
 
-`obocop audit submit` is hidden because it is intended for managed local-agent hook configurations, not direct operator use. It submits with enrolled-device JWT authentication.
+`obot-sentry audit submit` is hidden because it is intended for managed local-agent hook configurations, not direct operator use. It submits with enrolled-device JWT authentication.
 
 ## Configuration
 
@@ -29,11 +29,11 @@ Resolution order per key: flags > env > MDM store.
 
 | Key | Flag | Env | Windows registry / macOS managed prefs |
 |-----|------|-----|----------------------------------------|
-| Server URL | `--server-url` | `OBOCOP_SERVER_URL` | `ServerURL` |
-| Enrollment key | `--enrollment-key` | `OBOCOP_ENROLLMENT_KEY` | `EnrollmentKey` |
-| Scan interval (minutes) | `--scan-interval-minutes` | `OBOCOP_SCAN_INTERVAL_MINUTES` | `ScanIntervalMinutes` |
+| Server URL | `--server-url` | `OBOT_SENTRY_SERVER_URL` | `ServerURL` |
+| Enrollment key | `--enrollment-key` | `OBOT_SENTRY_ENROLLMENT_KEY` | `EnrollmentKey` |
+| Scan interval (minutes) | `--scan-interval-minutes` | `OBOT_SENTRY_SCAN_INTERVAL_MINUTES` | `ScanIntervalMinutes` |
 
-MDM stores: `HKLM\SOFTWARE\Obot\Obocop` on Windows; `/Library/Managed Preferences/com.obot.obocop.plist` (fallback `/Library/Preferences/...`) on macOS.
+MDM stores: `HKLM\SOFTWARE\Obot\obot-sentry` on Windows; `/Library/Managed Preferences/com.obot.obot-sentry.plist` (fallback `/Library/Preferences/...`) on macOS.
 
 ## MDM packaging
 
@@ -45,7 +45,7 @@ build/
   manifest.json          # authored: schemaVersion, fields, configurations (${VERSION} tokens)
   mdm-assets.sh          # completes + sanity-checks the manifest, stages dist/mdm-assets/
   windows/               # the Windows installer (MSI, WiX v4)
-    msi.ps1  obocop.wxs  scan-task.ps1  obocop.ico
+    msi.ps1  obot-sentry.wxs  scan-task.ps1  obot-sentry.ico
     intune/              # Intune channel: .intunewin wrap + instructions
       intunewin.ps1  INSTRUCTIONS.md.tmpl
   Dockerfile             # the scratch image obot mounts the assets from
@@ -54,14 +54,14 @@ build/
 The installers are tenant-agnostic; per-tenant configuration (server URL
 + an enrollment key created in obot) is applied at install time as MSI
 properties, so one installer serves every tenant. The Windows chain runs
-**on Windows**: [obocop.wxs](build/windows/obocop.wxs) via
+**on Windows**: [obot-sentry.wxs](build/windows/obot-sentry.wxs) via
 [WiX Toolset v4](https://docs.firegiant.com/wix/) (`dotnet tool install
 --global wix`), wrapped by Microsoft's
 [Win32 Content Prep Tool](https://github.com/microsoft/Microsoft-Win32-Content-Prep-Tool):
 
 ```
-build\windows\msi.ps1 -Version 1.2.3 -Exe bin\obocop.exe  # dist\obocop.msi (version inside, name stable)
-build\windows\intune\intunewin.ps1                         # dist\obocop.intunewin
+build\windows\msi.ps1 -Version 1.2.3 -Exe bin\obot-sentry.exe  # dist\obot-sentry.msi (version inside, name stable)
+build\windows\intune\intunewin.ps1                         # dist\obot-sentry.intunewin
 build/mdm-assets.sh 1.2.3                                  # dist/mdm-assets/ (any OS)
 ```
 
@@ -80,7 +80,7 @@ unit as a zip. The enrollment key is never rendered — templates carry a
 `REPLACE_WITH_ENROLLMENT_KEY` placeholder the admin fills in the MDM.
 
 CI assembles the assets on every PR/push and publishes them as the
-data-only `ghcr.io/obot-platform/obocop/mdm-assets` image (`:main` for
+data-only `ghcr.io/obot-platform/obot-sentry/mdm-assets` image (`:main` for
 tip-of-tree, tagged + `:latest` on releases, cosign-signed) plus a
 tarball with a signed checksums file on releases. The Windows installers
 ship unsigned: Intune installs them silently in SYSTEM context, so
@@ -92,12 +92,12 @@ K8s 1.35+) and reads it via `OBOT_SERVER_MDM_ASSETS_PATH`.
 
 | Platform | installer | scheduling | tenant config |
 |---|---|---|---|
-| Intune (Windows) | `.msi` wrapped as `.intunewin` | per-user scheduled task (logon + 5-min poll, submissions throttled to `ScanIntervalMinutes`) | MSI properties → `HKLM\SOFTWARE\Obot\Obocop` |
+| Intune (Windows) | `.msi` wrapped as `.intunewin` | per-user scheduled task (logon + 10-min poll, submissions throttled to `ScanIntervalMinutes`) | MSI properties → `HKLM\SOFTWARE\Obot\obot-sentry` |
 
 ## Development
 
 ```
-make build          # bin/obocop
+make build          # bin/obot-sentry
 make test
 make validate-go-code
 ```
@@ -105,5 +105,5 @@ make validate-go-code
 Local end-to-end against a dev server:
 
 ```
-OBOCOP_SERVER_URL=http://localhost:8080 OBOCOP_ENROLLMENT_KEY=ode1-... bin/obocop scan --submit
+OBOT_SENTRY_SERVER_URL=http://localhost:8080 OBOT_SENTRY_ENROLLMENT_KEY=ode1-... bin/obot-sentry scan --submit
 ```

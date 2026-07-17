@@ -1,4 +1,4 @@
-// Package version reports the obocop build version. Tag is stamped at build
+// Package version reports the obot-sentry build version. Tag is stamped at build
 // time via ldflags (see the Makefile); the commit and dirty state come from the
 // Go toolchain's VCS build info.
 package version
@@ -10,7 +10,7 @@ import (
 
 // Tag is the release tag, overridden at build time with:
 //
-//	-X 'github.com/obot-platform/obocop/pkg/version.Tag=<tag>'
+//	-X 'github.com/obot-platform/obot-sentry/pkg/version.Tag=<tag>'
 var Tag = "v0.0.0-dev"
 
 // Version is a build version: the release tag plus VCS commit information.
