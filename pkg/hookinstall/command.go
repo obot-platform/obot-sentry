@@ -89,7 +89,7 @@ func posixSafe(r rune) bool {
 // quotePOSIX renders s as a single POSIX-shell token. Paths made up entirely of
 // shell-safe characters are returned verbatim; anything else (spaces,
 // apostrophes, Unicode, shell metacharacters) is wrapped in single quotes with
-// embedded single quotes escaped via the '\” idiom.
+// embedded single quotes escaped via the "'\\''" idiom.
 func quotePOSIX(s string) string {
 	if s != "" {
 		safe := true
