@@ -85,10 +85,10 @@ func TestMergeIdempotentAcrossAgents(t *testing.T) {
 
 // TestMergePreservesThirdPartyAndReplacesStale exercises the core convergence
 // contract on Cursor's direct layout: a third-party hook is preserved, a stale
-// owned entry (pointing at a previous obocop path) is replaced by the current
+// owned entry (pointing at a previous obot-sentry path) is replaced by the current
 // one, duplicate owned entries collapse, and the status is "updated".
 func TestMergePreservesThirdPartyAndReplacesStale(t *testing.T) {
-	stale := ownedCmd("/previous/obocop")
+	stale := ownedCmd("/previous/obot-sentry")
 	src := `{
   "version": 0,
   "hooks": {
@@ -110,7 +110,7 @@ func TestMergePreservesThirdPartyAndReplacesStale(t *testing.T) {
 	if !strings.Contains(got, "/third/party watch") {
 		t.Fatalf("third-party hook lost:\n%s", got)
 	}
-	if strings.Contains(got, "/previous/obocop") {
+	if strings.Contains(got, "/previous/obot-sentry") {
 		t.Fatalf("stale owned entry not replaced:\n%s", got)
 	}
 	if !strings.Contains(got, "--agent cursor --phase post-tool "+managedMarker) {
@@ -122,7 +122,7 @@ func TestMergePreservesThirdPartyAndReplacesStale(t *testing.T) {
 }
 
 // TestMergeExistingFileWithoutOwnedIsInstalled proves adding a hook to a file
-// that has unrelated settings but no obocop hook reports "installed", not
+// that has unrelated settings but no obot-sentry hook reports "installed", not
 // "updated", while preserving the unrelated settings.
 func TestMergeExistingFileWithoutOwnedIsInstalled(t *testing.T) {
 	src := `{
@@ -234,7 +234,7 @@ func TestMergeWindowsCommandsSurvive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(vs.data), `& \"C:\\Program Files\\Obot\\Obocop\\obocop.exe\"`) {
+	if !strings.Contains(string(vs.data), `& \"C:\\Program Files\\Obot\\obot-sentry\\obot-sentry.exe\"`) {
 		t.Fatalf("vscode windows call operator not preserved:\n%s", vs.data)
 	}
 	// Cursor uses a directly quoted executable, no call operator.
@@ -245,7 +245,7 @@ func TestMergeWindowsCommandsSurvive(t *testing.T) {
 	if strings.Contains(string(cur.data), "& \\\"") {
 		t.Fatalf("cursor windows must not use the call operator:\n%s", cur.data)
 	}
-	if !strings.Contains(string(cur.data), `\"C:\\Program Files\\Obot\\Obocop\\obocop.exe\"`) {
+	if !strings.Contains(string(cur.data), `\"C:\\Program Files\\Obot\\obot-sentry\\obot-sentry.exe\"`) {
 		t.Fatalf("cursor windows quoted executable not preserved:\n%s", cur.data)
 	}
 }

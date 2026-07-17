@@ -3,12 +3,12 @@ package hookinstall
 import (
 	"testing"
 
-	"github.com/obot-platform/obocop/pkg/audit"
+	"github.com/obot-platform/obot-sentry/pkg/audit"
 )
 
 const (
-	macExe = "/usr/local/bin/obocop"
-	winExe = `C:\Program Files\Obot\Obocop\obocop.exe`
+	macExe = "/usr/local/bin/obot-sentry"
+	winExe = `C:\Program Files\Obot\obot-sentry\obot-sentry.exe`
 )
 
 // The golden documents below are the production desired state.
@@ -24,7 +24,7 @@ const claudeDarwinGolden = `{
         "hooks": [
           {
             "type": "command",
-            "command": "/usr/local/bin/obocop audit submit --agent claude-code --phase post-tool --managed-by obocop",
+            "command": "/usr/local/bin/obot-sentry audit submit --agent claude-code --phase post-tool --managed-by obot-sentry",
             "timeout": 30,
             "statusMessage": "Submitting Obot audit log"
           }
@@ -37,7 +37,7 @@ const claudeDarwinGolden = `{
         "hooks": [
           {
             "type": "command",
-            "command": "/usr/local/bin/obocop audit submit --agent claude-code --phase failure --managed-by obocop",
+            "command": "/usr/local/bin/obot-sentry audit submit --agent claude-code --phase failure --managed-by obot-sentry",
             "timeout": 30,
             "statusMessage": "Submitting Obot audit failure"
           }
@@ -56,7 +56,7 @@ const claudeWindowsGolden = `{
         "hooks": [
           {
             "type": "command",
-            "command": "\"C:\\Program Files\\Obot\\Obocop\\obocop.exe\" audit submit --agent claude-code --phase post-tool --managed-by obocop",
+            "command": "\"C:\\Program Files\\Obot\\obot-sentry\\obot-sentry.exe\" audit submit --agent claude-code --phase post-tool --managed-by obot-sentry",
             "timeout": 30,
             "statusMessage": "Submitting Obot audit log"
           }
@@ -69,7 +69,7 @@ const claudeWindowsGolden = `{
         "hooks": [
           {
             "type": "command",
-            "command": "\"C:\\Program Files\\Obot\\Obocop\\obocop.exe\" audit submit --agent claude-code --phase failure --managed-by obocop",
+            "command": "\"C:\\Program Files\\Obot\\obot-sentry\\obot-sentry.exe\" audit submit --agent claude-code --phase failure --managed-by obot-sentry",
             "timeout": 30,
             "statusMessage": "Submitting Obot audit failure"
           }
@@ -86,7 +86,7 @@ const cursorDarwinGolden = `{
     "postToolUse": [
       {
         "type": "command",
-        "command": "/usr/local/bin/obocop audit submit --agent cursor --phase post-tool --managed-by obocop",
+        "command": "/usr/local/bin/obot-sentry audit submit --agent cursor --phase post-tool --managed-by obot-sentry",
         "timeout": 30,
         "failClosed": false
       }
@@ -94,7 +94,7 @@ const cursorDarwinGolden = `{
     "postToolUseFailure": [
       {
         "type": "command",
-        "command": "/usr/local/bin/obocop audit submit --agent cursor --phase failure --managed-by obocop",
+        "command": "/usr/local/bin/obot-sentry audit submit --agent cursor --phase failure --managed-by obot-sentry",
         "timeout": 30,
         "failClosed": false
       }
@@ -109,7 +109,7 @@ const cursorWindowsGolden = `{
     "postToolUse": [
       {
         "type": "command",
-        "command": "\"C:\\Program Files\\Obot\\Obocop\\obocop.exe\" audit submit --agent cursor --phase post-tool --managed-by obocop",
+        "command": "\"C:\\Program Files\\Obot\\obot-sentry\\obot-sentry.exe\" audit submit --agent cursor --phase post-tool --managed-by obot-sentry",
         "timeout": 30,
         "failClosed": false
       }
@@ -117,7 +117,7 @@ const cursorWindowsGolden = `{
     "postToolUseFailure": [
       {
         "type": "command",
-        "command": "\"C:\\Program Files\\Obot\\Obocop\\obocop.exe\" audit submit --agent cursor --phase failure --managed-by obocop",
+        "command": "\"C:\\Program Files\\Obot\\obot-sentry\\obot-sentry.exe\" audit submit --agent cursor --phase failure --managed-by obot-sentry",
         "timeout": 30,
         "failClosed": false
       }
@@ -131,7 +131,7 @@ const vscodeDarwinGolden = `{
     "PostToolUse": [
       {
         "type": "command",
-        "command": "/usr/local/bin/obocop audit submit --agent vscode --phase post-tool --managed-by obocop",
+        "command": "/usr/local/bin/obot-sentry audit submit --agent vscode --phase post-tool --managed-by obot-sentry",
         "timeout": 30
       }
     ]
@@ -146,7 +146,7 @@ const vscodeWindowsGolden = `{
     "PostToolUse": [
       {
         "type": "command",
-        "command": "& \"C:\\Program Files\\Obot\\Obocop\\obocop.exe\" audit submit --agent vscode --phase post-tool --managed-by obocop",
+        "command": "& \"C:\\Program Files\\Obot\\obot-sentry\\obot-sentry.exe\" audit submit --agent vscode --phase post-tool --managed-by obot-sentry",
         "timeout": 30
       }
     ]
@@ -197,7 +197,7 @@ func TestDesiredCodexValues(t *testing.T) {
 			t.Fatalf("expected one inner hook, got %#v", inner)
 		}
 		h := inner[0]
-		wantCmd := "/usr/local/bin/obocop audit submit --agent codex --phase post-tool --managed-by obocop"
+		wantCmd := "/usr/local/bin/obot-sentry audit submit --agent codex --phase post-tool --managed-by obot-sentry"
 		if h.Type != "command" || h.Command != wantCmd || h.Timeout != 30 || h.StatusMessage != statusMessagePostTool {
 			t.Fatalf("unexpected codex hook: %#v", h)
 		}
@@ -208,7 +208,7 @@ func TestDesiredCodexValues(t *testing.T) {
 	t.Run("windows mirrors command_windows", func(t *testing.T) {
 		got := desiredCodex(winExe, "windows")
 		h := got.PostToolUse[0].Hooks[0]
-		wantCmd := `& "C:\Program Files\Obot\Obocop\obocop.exe" audit submit --agent codex --phase post-tool --managed-by obocop`
+		wantCmd := `& "C:\Program Files\Obot\obot-sentry\obot-sentry.exe" audit submit --agent codex --phase post-tool --managed-by obot-sentry`
 		if h.Command != wantCmd {
 			t.Fatalf("codex windows command = %q, want %q", h.Command, wantCmd)
 		}
@@ -252,7 +252,7 @@ func TestDestinationsModel(t *testing.T) {
 		want := []Destination{
 			{Agent: AgentClaudeCode, Label: "Claude Code", Scope: ScopeUser, Format: FormatJSON, Rel: ".claude/settings.json"},
 			{Agent: AgentCodex, Label: "Codex", Scope: ScopeMachine, Format: FormatTOML, Abs: "/etc/codex/requirements.toml"},
-			{Agent: AgentVSCode, Label: "Visual Studio Code", Scope: ScopeUser, Format: FormatJSON, Rel: ".copilot/hooks/obocop.json"},
+			{Agent: AgentVSCode, Label: "Visual Studio Code", Scope: ScopeUser, Format: FormatJSON, Rel: ".copilot/hooks/obot-sentry.json"},
 			{Agent: AgentCursor, Label: "Cursor", Scope: ScopeMachine, Format: FormatJSON, Abs: "/Library/Application Support/Cursor/hooks.json"},
 			{Agent: AgentVSCode, Label: "VS Code settings", Scope: ScopeUser, Format: FormatJSONC, Rel: "Library/Application Support/Code/User/settings.json"},
 		}
@@ -264,7 +264,7 @@ func TestDestinationsModel(t *testing.T) {
 		want := []Destination{
 			{Agent: AgentClaudeCode, Label: "Claude Code", Scope: ScopeUser, Format: FormatJSON, Rel: ".claude/settings.json"},
 			{Agent: AgentCodex, Label: "Codex", Scope: ScopeMachine, Format: FormatTOML, Abs: `C:\ProgramData\OpenAI\Codex\requirements.toml`},
-			{Agent: AgentVSCode, Label: "Visual Studio Code", Scope: ScopeUser, Format: FormatJSON, Rel: ".copilot/hooks/obocop.json"},
+			{Agent: AgentVSCode, Label: "Visual Studio Code", Scope: ScopeUser, Format: FormatJSON, Rel: ".copilot/hooks/obot-sentry.json"},
 			{Agent: AgentCursor, Label: "Cursor", Scope: ScopeMachine, Format: FormatJSON, Abs: `C:\ProgramData\Cursor\hooks.json`},
 			{Agent: AgentVSCode, Label: "VS Code settings", Scope: ScopeUser, Format: FormatJSONC, Rel: "AppData/Roaming/Code/User/settings.json"},
 		}
@@ -290,7 +290,7 @@ func assertDestinations(t *testing.T, got, want []Destination) {
 }
 
 // TestAgentStringsMatchAudit keeps the installer's agent identifiers in lockstep
-// with the providers `obocop audit submit` accepts; a drift would generate hook
+// with the providers `obot-sentry audit submit` accepts; a drift would generate hook
 // commands the runtime rejects.
 func TestAgentStringsMatchAudit(t *testing.T) {
 	pairs := []struct {

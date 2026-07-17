@@ -8,10 +8,10 @@ import (
 )
 
 // This file is the Codex requirements.toml editor. Codex is the highest-risk
-// merge because obocop hooks and unrelated managed requirements share one file,
+// merge because obot-sentry hooks and unrelated managed requirements share one file,
 // so BurntSushi/toml is used as a decode/mutate/re-encode cycle rather than a
 // span editor: decode the whole document into a generic map, mutate only the
-// obocop-owned parts, and re-encode.
+// obot-sentry-owned parts, and re-encode.
 //
 // Accepted tradeoff: the re-encode preserves all unrelated *data* (keys, tables,
 // array-of-tables entries, and values) but normalizes the whole file — it drops
@@ -94,7 +94,7 @@ func tableSlice(v any) ([]map[string]any, error) {
 	}
 }
 
-// filterOwnedInnerHooks removes obocop-managed inner hooks (matched by their
+// filterOwnedInnerHooks removes obot-sentry-managed inner hooks (matched by their
 // "command" string) from a decoded inner-hook slice, preserving third-party
 // entries. Returns the count removed and the retained slice.
 func filterOwnedInnerHooks(inner []map[string]any) (removed int, kept []map[string]any) {
@@ -135,7 +135,7 @@ func codexDesiredGroups(d codexDesired) []map[string]any {
 	return groups
 }
 
-// filterCodexOwned removes obocop-managed inner hooks from each group of the
+// filterCodexOwned removes obot-sentry-managed inner hooks from each group of the
 // hooks.<event> array-of-tables (Codex's nested layout mirrors Claude's:
 // [[hooks.PostToolUse]] groups each holding [[hooks.PostToolUse.hooks]] command
 // entries). A group is dropped only when our removal emptied its inner list; the

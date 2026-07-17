@@ -11,7 +11,7 @@ import (
 // This file is the JSON/JSONC config editor. Claude, Cursor, and Copilot hook
 // files are strict JSON; VS Code user settings are JSONC (comments, trailing
 // commas). All are edited through the same comment- and whitespace-preserving
-// HuJSON syntax tree: parse -> walk and mutate only the obocop-owned nodes ->
+// HuJSON syntax tree: parse -> walk and mutate only the obot-sentry-owned nodes ->
 // Pack. Pack reproduces every untouched byte of the input, which is what makes
 // third-party settings, formatting, and a second byte-identical run all hold.
 //
@@ -287,7 +287,7 @@ func entryCommand(entry *hujson.Value) (string, bool) {
 	return lit.String(), true
 }
 
-// filterDirectOwned removes array elements whose "command" is an obocop-managed
+// filterDirectOwned removes array elements whose "command" is an obot-sentry-managed
 // hook command, returning the count removed. This is the "direct" layout used by
 // Cursor and VS Code, whose event arrays hold command entries directly.
 // Third-party entries — and any element without an owned command — are preserved
@@ -306,7 +306,7 @@ func filterDirectOwned(arr *hujson.Array) int {
 	return removed
 }
 
-// filterNestedOwned removes obocop-managed inner hooks from each matcher group in
+// filterNestedOwned removes obot-sentry-managed inner hooks from each matcher group in
 // arr — Claude Code's layout, where each element is {matcher, hooks:[...]}. It
 // filters each group's inner "hooks" list with filterDirectOwned and drops a
 // group only when our removal emptied its inner list, preserving groups that

@@ -1,13 +1,13 @@
 package cmd
 
 import (
-	"github.com/obot-platform/obocop/pkg/hookinstall"
+	"github.com/obot-platform/obot-sentry/pkg/hookinstall"
 	"github.com/spf13/cobra"
 )
 
-// HookInstall is the operator-facing `obocop hook-install` command. It converges
+// HookInstall is the operator-facing `obot-sentry hook-install` command. It converges
 // the native audit-hook configuration for the four supported local agents onto
-// the hidden `obocop audit submit` command. All platform, privilege, path, and
+// the hidden `obot-sentry audit submit` command. All platform, privilege, path, and
 // executable resolution lives in pkg/hookinstall behind injectable seams so this
 // command stays a thin orchestration layer.
 type HookInstall struct{}

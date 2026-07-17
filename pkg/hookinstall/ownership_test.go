@@ -10,52 +10,52 @@ func TestIsOwnedCommand(t *testing.T) {
 	}{
 		{
 			name:    "space-separated marker",
-			command: "/usr/local/bin/obocop audit submit --agent codex --phase post-tool --managed-by obocop",
+			command: "/usr/local/bin/obot-sentry audit submit --agent codex --phase post-tool --managed-by obot-sentry",
 			want:    true,
 		},
 		{
 			name:    "quoted windows path with marker",
-			command: `"C:\Program Files\Obot\Obocop\obocop.exe" audit submit --agent claude-code --phase post-tool --managed-by obocop`,
+			command: `"C:\Program Files\Obot\obot-sentry\obot-sentry.exe" audit submit --agent claude-code --phase post-tool --managed-by obot-sentry`,
 			want:    true,
 		},
 		{
 			name:    "windows call-operator form",
-			command: `& "C:\Program Files\Obot\Obocop\obocop.exe" audit submit --agent codex --phase post-tool --managed-by obocop`,
+			command: `& "C:\Program Files\Obot\obot-sentry\obot-sentry.exe" audit submit --agent codex --phase post-tool --managed-by obot-sentry`,
 			want:    true,
 		},
 		{
 			name:    "quoted posix path with spaces and marker",
-			command: `'/opt/Obot Tools/obocop' audit submit --agent cursor --phase failure --managed-by obocop`,
+			command: `'/opt/Obot Tools/obot-sentry' audit submit --agent cursor --phase failure --managed-by obot-sentry`,
 			want:    true,
 		},
 		{
-			name:    "marker points at a different obocop path",
-			command: "/old/versioned/path/obocop audit submit --agent vscode --phase post-tool --managed-by obocop",
+			name:    "marker points at a different obot-sentry path",
+			command: "/old/versioned/path/obot-sentry audit submit --agent vscode --phase post-tool --managed-by obot-sentry",
 			want:    true,
 		},
 		{
 			name:    "no marker",
-			command: "/usr/local/bin/obocop audit submit --agent codex --phase post-tool",
+			command: "/usr/local/bin/obot-sentry audit submit --agent codex --phase post-tool",
 			want:    false,
 		},
 		{
 			name:    "different marker value",
-			command: "/usr/local/bin/obocop audit submit --agent codex --managed-by someone-else",
+			command: "/usr/local/bin/obot-sentry audit submit --agent codex --managed-by someone-else",
 			want:    false,
 		},
 		{
-			name:    "obocop appears only in the path, no marker",
-			command: "/usr/local/bin/obocop-wrapper run --managed-by other",
+			name:    "obot-sentry appears only in the path, no marker",
+			command: "/usr/local/bin/obot-sentry-wrapper run --managed-by other",
 			want:    false,
 		},
 		{
 			name:    "dangling marker with no value",
-			command: "/usr/local/bin/obocop audit submit --managed-by",
+			command: "/usr/local/bin/obot-sentry audit submit --managed-by",
 			want:    false,
 		},
 		{
-			name:    "third-party command mentioning obocop text without the flag",
-			command: "/usr/bin/echo installing obocop managed-by obocop",
+			name:    "third-party command mentioning obot-sentry text without the flag",
+			command: "/usr/bin/echo installing obot-sentry managed-by obot-sentry",
 			want:    false,
 		},
 		{

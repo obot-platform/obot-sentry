@@ -12,7 +12,7 @@ import (
 // is rejected before the first config write.
 func checkPrivilege() error {
 	if os.Geteuid() != 0 {
-		return fmt.Errorf("obocop hook-install must run as root on macOS; rerun with sudo")
+		return fmt.Errorf("obot-sentry hook-install must run as root on macOS; rerun with sudo")
 	}
 	return nil
 }

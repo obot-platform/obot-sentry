@@ -17,7 +17,7 @@ func testUser(home string) *TargetUser {
 func TestCommitAndReadUserConfigRoundTrip(t *testing.T) {
 	home := t.TempDir()
 	u := testUser(home)
-	abs := filepath.Join(home, ".copilot", "hooks", "obocop.json")
+	abs := filepath.Join(home, ".copilot", "hooks", "obot-sentry.json")
 
 	if _, ok, err := readConfigFile(ScopeUser, home, abs); err != nil || ok {
 		t.Fatalf("missing file should read as absent: ok=%v err=%v", ok, err)
@@ -144,13 +144,13 @@ func TestReadRefusesIntermediateSymlink(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(evil, "hooks"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(evil, "hooks", "obocop.json"), []byte("planted"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(evil, "hooks", "obot-sentry.json"), []byte("planted"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Symlink(evil, filepath.Join(home, ".copilot")); err != nil {
 		t.Fatal(err)
 	}
-	abs := filepath.Join(home, ".copilot", "hooks", "obocop.json")
+	abs := filepath.Join(home, ".copilot", "hooks", "obot-sentry.json")
 	if _, _, err := readConfigFile(ScopeUser, home, abs); err == nil {
 		t.Fatal("expected a read through a symlinked intermediate directory to be refused")
 	}

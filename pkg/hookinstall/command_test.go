@@ -14,10 +14,10 @@ func TestQuotePOSIX(t *testing.T) {
 		in   string
 		want string
 	}{
-		{"clean path unquoted", "/usr/local/bin/obocop", "/usr/local/bin/obocop"},
-		{"space single-quoted", "/opt/Obot Tools/obocop", "'/opt/Obot Tools/obocop'"},
-		{"apostrophe escaped", "/home/o'brien/obocop", `'/home/o'\''brien/obocop'`},
-		{"unicode quoted", "/opt/obôcop/obocop", "'/opt/obôcop/obocop'"},
+		{"clean path unquoted", "/usr/local/bin/obot-sentry", "/usr/local/bin/obot-sentry"},
+		{"space single-quoted", "/opt/Obot Tools/obot-sentry", "'/opt/Obot Tools/obot-sentry'"},
+		{"apostrophe escaped", "/home/o'brien/obot-sentry", `'/home/o'\''brien/obot-sentry'`},
+		{"unicode quoted", "/opt/obôt-sentry/obot-sentry", "'/opt/obôt-sentry/obot-sentry'"},
 		{"empty quoted", "", "''"},
 	}
 	for _, tc := range tests {
@@ -30,8 +30,8 @@ func TestQuotePOSIX(t *testing.T) {
 }
 
 func TestQuoteWindows(t *testing.T) {
-	got := quoteWindows(`C:\Program Files\Obot\Obocop\obocop.exe`)
-	want := `"C:\Program Files\Obot\Obocop\obocop.exe"`
+	got := quoteWindows(`C:\Program Files\Obot\obot-sentry\obot-sentry.exe`)
+	want := `"C:\Program Files\Obot\obot-sentry\obot-sentry.exe"`
 	if got != want {
 		t.Fatalf("quoteWindows = %q, want %q", got, want)
 	}
@@ -41,8 +41,8 @@ func TestQuoteWindows(t *testing.T) {
 // both operating systems, using the durable packaged executable paths.
 func TestHookCommandGolden(t *testing.T) {
 	const (
-		macExe = "/usr/local/bin/obocop"
-		winExe = `C:\Program Files\Obot\Obocop\obocop.exe`
+		macExe = "/usr/local/bin/obot-sentry"
+		winExe = `C:\Program Files\Obot\obot-sentry\obot-sentry.exe`
 	)
 	tests := []struct {
 		name  string
@@ -53,26 +53,26 @@ func TestHookCommandGolden(t *testing.T) {
 		want  string
 	}{
 		{"darwin claude post", macExe, "darwin", AgentClaudeCode, phasePostTool,
-			"/usr/local/bin/obocop audit submit --agent claude-code --phase post-tool --managed-by obocop"},
+			"/usr/local/bin/obot-sentry audit submit --agent claude-code --phase post-tool --managed-by obot-sentry"},
 		{"darwin claude failure", macExe, "darwin", AgentClaudeCode, phaseFailure,
-			"/usr/local/bin/obocop audit submit --agent claude-code --phase failure --managed-by obocop"},
+			"/usr/local/bin/obot-sentry audit submit --agent claude-code --phase failure --managed-by obot-sentry"},
 		{"darwin codex post", macExe, "darwin", AgentCodex, phasePostTool,
-			"/usr/local/bin/obocop audit submit --agent codex --phase post-tool --managed-by obocop"},
+			"/usr/local/bin/obot-sentry audit submit --agent codex --phase post-tool --managed-by obot-sentry"},
 		{"darwin vscode post", macExe, "darwin", AgentVSCode, phasePostTool,
-			"/usr/local/bin/obocop audit submit --agent vscode --phase post-tool --managed-by obocop"},
+			"/usr/local/bin/obot-sentry audit submit --agent vscode --phase post-tool --managed-by obot-sentry"},
 		{"darwin cursor post", macExe, "darwin", AgentCursor, phasePostTool,
-			"/usr/local/bin/obocop audit submit --agent cursor --phase post-tool --managed-by obocop"},
+			"/usr/local/bin/obot-sentry audit submit --agent cursor --phase post-tool --managed-by obot-sentry"},
 
 		// Windows Claude Code and Cursor: directly quoted executable, no operator.
 		{"windows claude post", winExe, "windows", AgentClaudeCode, phasePostTool,
-			`"C:\Program Files\Obot\Obocop\obocop.exe" audit submit --agent claude-code --phase post-tool --managed-by obocop`},
+			`"C:\Program Files\Obot\obot-sentry\obot-sentry.exe" audit submit --agent claude-code --phase post-tool --managed-by obot-sentry`},
 		{"windows cursor failure", winExe, "windows", AgentCursor, phaseFailure,
-			`"C:\Program Files\Obot\Obocop\obocop.exe" audit submit --agent cursor --phase failure --managed-by obocop`},
+			`"C:\Program Files\Obot\obot-sentry\obot-sentry.exe" audit submit --agent cursor --phase failure --managed-by obot-sentry`},
 		// Windows Codex and VS Code: PowerShell call operator prefix.
 		{"windows codex post", winExe, "windows", AgentCodex, phasePostTool,
-			`& "C:\Program Files\Obot\Obocop\obocop.exe" audit submit --agent codex --phase post-tool --managed-by obocop`},
+			`& "C:\Program Files\Obot\obot-sentry\obot-sentry.exe" audit submit --agent codex --phase post-tool --managed-by obot-sentry`},
 		{"windows vscode post", winExe, "windows", AgentVSCode, phasePostTool,
-			`& "C:\Program Files\Obot\Obocop\obocop.exe" audit submit --agent vscode --phase post-tool --managed-by obocop`},
+			`& "C:\Program Files\Obot\obot-sentry\obot-sentry.exe" audit submit --agent vscode --phase post-tool --managed-by obot-sentry`},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -98,9 +98,9 @@ func TestProductionCommandsHaveNoDebugOrSecrets(t *testing.T) {
 		"pre-tool",
 	}
 	for _, goos := range []string{"darwin", "windows"} {
-		exe := "/usr/local/bin/obocop"
+		exe := "/usr/local/bin/obot-sentry"
 		if goos == "windows" {
-			exe = `C:\Program Files\Obot\Obocop\obocop.exe`
+			exe = `C:\Program Files\Obot\obot-sentry\obot-sentry.exe`
 		}
 		for _, agent := range Agents() {
 			for _, p := range []phase{phasePostTool, phaseFailure} {
@@ -110,7 +110,7 @@ func TestProductionCommandsHaveNoDebugOrSecrets(t *testing.T) {
 						t.Fatalf("command for %s/%s contains forbidden token %q: %q", goos, agent, bad, cmd)
 					}
 				}
-				if !strings.Contains(cmd, "--managed-by obocop") {
+				if !strings.Contains(cmd, "--managed-by obot-sentry") {
 					t.Fatalf("command for %s/%s missing ownership marker: %q", goos, agent, cmd)
 				}
 			}
@@ -196,7 +196,7 @@ func TestValidateExecutable(t *testing.T) {
 		}
 	})
 	t.Run("inside temp dir", func(t *testing.T) {
-		p := filepath.Join(os.TempDir(), "obocop-temp-binary")
+		p := filepath.Join(os.TempDir(), "obot-sentry-temp-binary")
 		if err := os.WriteFile(p, []byte("x"), 0o755); err != nil {
 			t.Fatal(err)
 		}

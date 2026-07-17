@@ -16,16 +16,16 @@ import (
 //
 //   - a missing or empty file is written fresh from the typed desired document,
 //     using the canonical two-space serializer so a new file is human-readable;
-//   - an existing file is edited in place — obocop-owned entries are filtered
+//   - an existing file is edited in place — obot-sentry-owned entries are filtered
 //     out and exactly one current desired entry is added back per event, so a
-//     stale entry (a previous obocop path) is replaced and duplicate owned
+//     stale entry (a previous obot-sentry path) is replaced and duplicate owned
 //     entries collapse to one, while third-party entries and formatting survive;
 //   - the result is compared to the original to report installed, updated, or
 //     unchanged, and an already-current file is not rewritten (so a second run
 //     is byte-identical).
 //
 // Ownership of an existing entry is the only signal for updated-vs-installed:
-// a file that already carried an obocop hook is "updated", one that did not is
+// a file that already carried an obot-sentry hook is "updated", one that did not is
 // "installed".
 
 // ---
@@ -110,7 +110,7 @@ func mergeJSONHook(existing []byte, newDoc any, mutate func(*hujson.Object) (dup
 	return mergeOutcome{data: packed, status: status, dupes: dupes, write: true}, nil
 }
 
-// mergeEventArray filters the obocop-owned entries out of one event's array and
+// mergeEventArray filters the obot-sentry-owned entries out of one event's array and
 // appends the single desired entry, returning the duplicates collapsed (owned
 // entries removed beyond the one we re-add) and whether any owned entry existed.
 // filter is the layout-specific remover: filterDirectOwned for Cursor/VS Code,
@@ -130,7 +130,7 @@ func mergeEventArray(hooks *hujson.Object, event string, desired any, filter fun
 }
 
 // mergeClaude converges Claude Code's nested settings.json: one matcher-group
-// entry per event, each carrying the obocop command as an inner hook.
+// entry per event, each carrying the obot-sentry command as an inner hook.
 func mergeClaude(existing []byte, exe, goos string) (mergeOutcome, error) {
 	desired := desiredClaude(exe, goos)
 	return mergeJSONHook(existing, desired, func(obj *hujson.Object) (int, bool, error) {
@@ -188,7 +188,7 @@ func mergeCursor(existing []byte, exe, goos string) (mergeOutcome, error) {
 	})
 }
 
-// mergeVSCodeHook converges the dedicated Copilot obocop.json: a single direct
+// mergeVSCodeHook converges the dedicated Copilot obot-sentry.json: a single direct
 // PostToolUse command entry.
 func mergeVSCodeHook(existing []byte, exe, goos string) (mergeOutcome, error) {
 	desired := desiredVSCode(exe, goos)
@@ -202,7 +202,7 @@ func mergeVSCodeHook(existing []byte, exe, goos string) (mergeOutcome, error) {
 }
 
 // mergeVSCodeSettings converges the JSONC VS Code user settings: it merges the
-// obocop-owned values under chat.hookFilesLocations (enable the Copilot hook
+// obot-sentry-owned values under chat.hookFilesLocations (enable the Copilot hook
 // directory, disable the three default Claude locations) without disturbing any
 // custom location the operator configured. Unlike the hook files, these values
 // carry no ownership marker, so an existing managed key is the updated-vs-
@@ -252,7 +252,7 @@ func mergeVSCodeSettings(existing []byte) (mergeOutcome, error) {
 }
 
 // mergeCodex converges Codex's requirements.toml through the decode/re-encode
-// cycle: force [features].hooks = true, filter the obocop-owned inner hooks out
+// cycle: force [features].hooks = true, filter the obot-sentry-owned inner hooks out
 // of the PostToolUse array-of-tables, append the one desired group, and
 // re-encode. The comparison is against the re-encoded original — the encoder
 // normalizes formatting on first touch, so an already-normalized file with the

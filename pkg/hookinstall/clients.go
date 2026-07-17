@@ -98,7 +98,7 @@ func desiredCursor(exe, goos string) cursorDocument {
 	}
 }
 
-// --- Visual Studio Code: dedicated obocop.json, direct PostToolUse entry ---
+// --- Visual Studio Code: dedicated obot-sentry.json, direct PostToolUse entry ---
 
 type vscodeHook struct {
 	Type    string `json:"type"`
@@ -183,7 +183,7 @@ type settingValue struct {
 	Value bool
 }
 
-// desiredVSCodeHookLocations returns the values obocop merges under
+// desiredVSCodeHookLocations returns the values obot-sentry merges under
 // chat.hookFilesLocations: enable the dedicated Copilot hook directory and
 // disable all three default Claude hook locations so VS Code does not also fire
 // the Claude Code hook and produce duplicate, mislabeled audit events.
@@ -198,7 +198,7 @@ func desiredVSCodeHookLocations() []settingValue {
 
 // vscodeSettingsDocument is the whole-document shape used only when writing a
 // brand-new VS Code settings file: a single chat.hookFilesLocations object
-// holding the obocop-owned values. An existing file is edited through the JSONC
+// holding the obot-sentry-owned values. An existing file is edited through the JSONC
 // syntax tree instead so unrelated settings, comments, and formatting survive.
 type vscodeSettingsDocument struct {
 	HookFilesLocations map[string]bool `json:"chat.hookFilesLocations"`
@@ -262,7 +262,7 @@ func Destinations(goos string) []Destination {
 		return []Destination{
 			{Agent: AgentClaudeCode, Label: AgentClaudeCode.DisplayName(), Scope: ScopeUser, Format: FormatJSON, Rel: ".claude/settings.json"},
 			{Agent: AgentCodex, Label: AgentCodex.DisplayName(), Scope: ScopeMachine, Format: FormatTOML, Abs: "/etc/codex/requirements.toml"},
-			{Agent: AgentVSCode, Label: AgentVSCode.DisplayName(), Scope: ScopeUser, Format: FormatJSON, Rel: ".copilot/hooks/obocop.json"},
+			{Agent: AgentVSCode, Label: AgentVSCode.DisplayName(), Scope: ScopeUser, Format: FormatJSON, Rel: ".copilot/hooks/obot-sentry.json"},
 			{Agent: AgentCursor, Label: AgentCursor.DisplayName(), Scope: ScopeMachine, Format: FormatJSON, Abs: "/Library/Application Support/Cursor/hooks.json"},
 			{Agent: AgentVSCode, Label: "VS Code settings", Scope: ScopeUser, Format: FormatJSONC, Rel: "Library/Application Support/Code/User/settings.json"},
 		}
@@ -271,7 +271,7 @@ func Destinations(goos string) []Destination {
 		return []Destination{
 			{Agent: AgentClaudeCode, Label: AgentClaudeCode.DisplayName(), Scope: ScopeUser, Format: FormatJSON, Rel: ".claude/settings.json"},
 			{Agent: AgentCodex, Label: AgentCodex.DisplayName(), Scope: ScopeMachine, Format: FormatTOML, Abs: winJoin(pd, "OpenAI", "Codex", "requirements.toml")},
-			{Agent: AgentVSCode, Label: AgentVSCode.DisplayName(), Scope: ScopeUser, Format: FormatJSON, Rel: ".copilot/hooks/obocop.json"},
+			{Agent: AgentVSCode, Label: AgentVSCode.DisplayName(), Scope: ScopeUser, Format: FormatJSON, Rel: ".copilot/hooks/obot-sentry.json"},
 			{Agent: AgentCursor, Label: AgentCursor.DisplayName(), Scope: ScopeMachine, Format: FormatJSON, Abs: winJoin(pd, "Cursor", "hooks.json")},
 			{Agent: AgentVSCode, Label: "VS Code settings", Scope: ScopeUser, Format: FormatJSONC, Rel: "AppData/Roaming/Code/User/settings.json"},
 		}

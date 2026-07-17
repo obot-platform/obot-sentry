@@ -178,7 +178,7 @@ func tempDestinations(machineRoot string) func(string) []Destination {
 		return []Destination{
 			{Agent: AgentClaudeCode, Label: "Claude Code", Scope: ScopeUser, Format: FormatJSON, Rel: ".claude/settings.json"},
 			{Agent: AgentCodex, Label: "Codex", Scope: ScopeMachine, Format: FormatTOML, Abs: filepath.Join(machineRoot, "etc/codex/requirements.toml")},
-			{Agent: AgentVSCode, Label: "Visual Studio Code", Scope: ScopeUser, Format: FormatJSON, Rel: ".copilot/hooks/obocop.json"},
+			{Agent: AgentVSCode, Label: "Visual Studio Code", Scope: ScopeUser, Format: FormatJSON, Rel: ".copilot/hooks/obot-sentry.json"},
 			{Agent: AgentCursor, Label: "Cursor", Scope: ScopeMachine, Format: FormatJSON, Abs: filepath.Join(machineRoot, "Cursor/hooks.json")},
 			{Agent: AgentVSCode, Label: "VS Code settings", Scope: ScopeUser, Format: FormatJSONC, Rel: "Library/Application Support/Code/User/settings.json"},
 		}
@@ -196,7 +196,7 @@ func TestRunConvergesAndIsIdempotent(t *testing.T) {
 			Privilege:           func() error { return nil },
 			ResolveExe:          func() (string, error) { return macExe, nil },
 			ResolveUser:         func() (*TargetUser, error) { return user, nil },
-			ProvisionIdentity:   func() (string, error) { return "/Library/Application Support/obot/obocop", nil },
+			ProvisionIdentity:   func() (string, error) { return "/Library/Application Support/obot/obot-sentry", nil },
 			ResolveDestinations: tempDestinations(machineRoot),
 			Out:                 out,
 		}
@@ -211,7 +211,7 @@ func TestRunConvergesAndIsIdempotent(t *testing.T) {
 	mustContain := []string{
 		macExe,
 		"alice",
-		"/Library/Application Support/obot/obocop",
+		"/Library/Application Support/obot/obot-sentry",
 		"Claude Code", "Codex", "Visual Studio Code", "Cursor", "VS Code settings",
 		"installed",
 		restartReminder,
@@ -229,7 +229,7 @@ func TestRunConvergesAndIsIdempotent(t *testing.T) {
 	files := []string{
 		filepath.Join(home, ".claude/settings.json"),
 		filepath.Join(machineRoot, "etc/codex/requirements.toml"),
-		filepath.Join(home, ".copilot/hooks/obocop.json"),
+		filepath.Join(home, ".copilot/hooks/obot-sentry.json"),
 		filepath.Join(machineRoot, "Cursor/hooks.json"),
 		filepath.Join(home, "Library/Application Support/Code/User/settings.json"),
 	}
@@ -341,7 +341,7 @@ func TestFormatSummaryIsDeterministicAndSafe(t *testing.T) {
 	results := []Result{
 		{Agent: AgentClaudeCode, Label: "Claude Code", Scope: ScopeUser, Path: "/Users/x/.claude/settings.json", Status: StatusInstalled},
 		{Agent: AgentCodex, Label: "Codex", Scope: ScopeMachine, Path: "/etc/codex/requirements.toml", Status: StatusUpdated, DuplicatesRemoved: 2},
-		{Agent: AgentVSCode, Label: "Visual Studio Code", Scope: ScopeUser, Path: "/Users/x/.copilot/hooks/obocop.json", Status: StatusUnchanged},
+		{Agent: AgentVSCode, Label: "Visual Studio Code", Scope: ScopeUser, Path: "/Users/x/.copilot/hooks/obot-sentry.json", Status: StatusUnchanged},
 		{Agent: AgentCursor, Label: "Cursor", Scope: ScopeMachine, Path: "/Library/Application Support/Cursor/hooks.json", Status: StatusFailed, Err: errors.New("permission denied")},
 	}
 

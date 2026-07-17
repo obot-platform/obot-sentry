@@ -80,7 +80,7 @@ command = "/another/third/party watch"
 
 [[hooks.PostToolUse.hooks]]
 type = "command"
-command = "/old/obocop audit submit --agent codex --phase post-tool --managed-by obocop"
+command = "/old/obot-sentry audit submit --agent codex --phase post-tool --managed-by obot-sentry"
 `
 
 // codexFixtureNormalized is the exact output of decoding codexFixture and
@@ -117,7 +117,7 @@ when = 2026-07-16T10:30:00Z
       type = "command"
 
     [[hooks.PostToolUse.hooks]]
-      command = "/old/obocop audit submit --agent codex --phase post-tool --managed-by obocop"
+      command = "/old/obot-sentry audit submit --agent codex --phase post-tool --managed-by obot-sentry"
       type = "command"
 
 [inline]
@@ -236,7 +236,7 @@ func TestFilterCodexOwned(t *testing.T) {
 	}
 }
 
-// TestFilterCodexDropsEmptiedGroup proves a group holding only obocop hooks is
+// TestFilterCodexDropsEmptiedGroup proves a group holding only obot-sentry hooks is
 // dropped, and the event key removed when no groups remain.
 func TestFilterCodexDropsEmptiedGroup(t *testing.T) {
 	src := `[[hooks.PostToolUse]]
@@ -244,7 +244,7 @@ matcher = ".*"
 
 [[hooks.PostToolUse.hooks]]
 type = "command"
-command = "/old/obocop audit submit --agent codex --phase post-tool --managed-by obocop"
+command = "/old/obot-sentry audit submit --agent codex --phase post-tool --managed-by obot-sentry"
 `
 	m := decodeTOML(t, []byte(src))
 	removed, err := filterCodexOwned(m, "PostToolUse")
@@ -269,11 +269,11 @@ func TestFilterCodexIncompatibleType(t *testing.T) {
 	}
 }
 
-// codexMergedGolden is the exact output of merging the desired obocop hook into
+// codexMergedGolden is the exact output of merging the desired obot-sentry hook into
 // codexFixture. It shows, precisely: [features].hooks flipped false->true; the
 // stale owned entry removed from the shared ".*" group (leaving its two
 // third-party inner hooks); a new group appended holding exactly the desired
-// obocop hook (keys sorted, so command/statusMessage/timeout/type); and every
+// obot-sentry hook (keys sorted, so command/statusMessage/timeout/type); and every
 // unrelated table ([inline], ["quoted.name"], [server.limits]) preserved.
 const codexMergedGolden = `localdate = 2026-07-16
 mixed = [1, 2, 3]
@@ -305,7 +305,7 @@ when = 2026-07-16T10:30:00Z
     matcher = ".*"
 
     [[hooks.PostToolUse.hooks]]
-      command = "/usr/local/bin/obocop audit submit --agent codex --phase post-tool --managed-by obocop"
+      command = "/usr/local/bin/obot-sentry audit submit --agent codex --phase post-tool --managed-by obot-sentry"
       statusMessage = "Submitting Obot audit log"
       timeout = 30
       type = "command"

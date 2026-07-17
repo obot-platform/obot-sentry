@@ -8,7 +8,7 @@ import (
 	"github.com/tailscale/hujson"
 )
 
-// ownedCmd builds a command string carrying the obocop ownership marker for an
+// ownedCmd builds a command string carrying the obot-sentry ownership marker for an
 // arbitrary executable path, so tests can seed owned entries that point at a
 // different binary than the current desired one.
 func ownedCmd(exe string) string {
@@ -167,8 +167,8 @@ func TestFilterDirectOwned(t *testing.T) {
 	src := `{
   "postToolUse": [
     {"type": "command", "command": "/third/party/tool run"},
-    {"type": "command", "command": "` + ownedCmd("/old/obocop") + `"},
-    {"type": "command", "command": "` + ownedCmd("/new/obocop") + `"},
+    {"type": "command", "command": "` + ownedCmd("/old/obot-sentry") + `"},
+    {"type": "command", "command": "` + ownedCmd("/new/obot-sentry") + `"},
     {"note": "not a command entry"}
   ]
 }`
@@ -207,13 +207,13 @@ func TestFilterNestedOwned(t *testing.T) {
       "matcher": "*",
       "hooks": [
         {"type": "command", "command": "/third/party keep"},
-        {"type": "command", "command": "` + ownedCmd("/old/obocop") + `"}
+        {"type": "command", "command": "` + ownedCmd("/old/obot-sentry") + `"}
       ]
     },
     {
       "matcher": "Bash",
       "hooks": [
-        {"type": "command", "command": "` + ownedCmd("/old/obocop") + `"}
+        {"type": "command", "command": "` + ownedCmd("/old/obot-sentry") + `"}
       ]
     },
     {
@@ -279,13 +279,13 @@ func TestJSONMergeAppendIdempotent(t *testing.T) {
 	desired := desiredCursor(macExe, "darwin").Hooks.PostToolUse[0]
 
 	// Start from a file with a third-party hook and a stale owned entry pointing
-	// at a previous obocop path.
+	// at a previous obot-sentry path.
 	src := `{
   "version": 0,
   "hooks": {
     "postToolUse": [
       {"type": "command", "command": "/third/party watch"},
-      {"type": "command", "command": "` + ownedCmd("/previous/obocop") + `"}
+      {"type": "command", "command": "` + ownedCmd("/previous/obot-sentry") + `"}
     ]
   }
 }`
@@ -323,7 +323,7 @@ func TestJSONMergeAppendIdempotent(t *testing.T) {
 	if !strings.Contains(got, "/third/party watch") {
 		t.Fatalf("third-party hook lost:\n%s", got)
 	}
-	if strings.Contains(got, "/previous/obocop") {
+	if strings.Contains(got, "/previous/obot-sentry") {
 		t.Fatalf("stale owned entry not replaced:\n%s", got)
 	}
 	if !strings.Contains(got, "--agent cursor --phase post-tool "+managedMarker) {
@@ -351,7 +351,7 @@ func TestArrayAppendDropsSiblingComment(t *testing.T) {
 	if !ok {
 		t.Fatal("postToolUse is not an array")
 	}
-	entry, err := jsonValueFromGo(map[string]string{"type": "command", "command": "/new/obocop run"})
+	entry, err := jsonValueFromGo(map[string]string{"type": "command", "command": "/new/obot-sentry run"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -361,12 +361,12 @@ func TestArrayAppendDropsSiblingComment(t *testing.T) {
 	if got := strings.Count(out, "keep this note on the sibling"); got != 1 {
 		t.Fatalf("sibling comment count = %d, want 1 (must not be copied onto the appended entry):\n%s", got, out)
 	}
-	if !strings.Contains(out, "/new/obocop run") {
+	if !strings.Contains(out, "/new/obot-sentry run") {
 		t.Fatalf("appended entry missing:\n%s", out)
 	}
 	// The appended entry lines up with its siblings at four-space indentation
 	// (jsonValueFromGo emits compact JSON with map keys sorted).
-	if !strings.Contains(out, "\n    {\"command\":\"/new/obocop run\",\"type\":\"command\"}") {
+	if !strings.Contains(out, "\n    {\"command\":\"/new/obot-sentry run\",\"type\":\"command\"}") {
 		t.Fatalf("appended entry not indented like its siblings:\n%s", out)
 	}
 }

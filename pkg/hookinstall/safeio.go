@@ -221,7 +221,7 @@ func writeAnchoredFile(root *os.Root, rel string, data []byte, perm os.FileMode)
 	// the same destination use distinct temp files and cannot clobber each
 	// other's in-flight write (the final rename is still atomic, so whichever
 	// commits last wins with identical content).
-	tmpName := fmt.Sprintf(".%s.%d.obocop-tmp", filepath.Base(rel), os.Getpid())
+	tmpName := fmt.Sprintf(".%s.%d.obot-sentry-tmp", filepath.Base(rel), os.Getpid())
 	tmp := tmpName
 	if dir != "." && dir != "" {
 		tmp = filepath.Join(dir, tmpName)

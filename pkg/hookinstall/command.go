@@ -13,7 +13,7 @@ import (
 const hookTimeout = 30
 
 // phase names the hook lifecycle point. These are the exact `--phase` argument
-// values accepted by `obocop audit submit`.
+// values accepted by `obot-sentry audit submit`.
 type phase string
 
 const (
@@ -22,7 +22,7 @@ const (
 )
 
 // commandArgs returns the audit-submit arguments for an agent/phase, excluding
-// the executable. The `--managed-by obocop` marker is always present and is the
+// the executable. The `--managed-by obot-sentry` marker is always present and is the
 // sole ownership signal used during convergence. No server URL, enrollment
 // credential, input-mutation, or debug flag is ever included; hook execution
 // owns per-user enrollment and fail-open submission.
@@ -105,19 +105,19 @@ func quoteWindows(s string) string {
 	return `"` + s + `"`
 }
 
-// DefaultExecutable resolves the running obocop binary to a durable, absolute,
+// DefaultExecutable resolves the running obot-sentry binary to a durable, absolute,
 // cleaned path suitable for embedding in hook configuration. It intentionally
-// does not resolve symlinks: when obocop is invoked through a stable packaged
-// symlink (for example /usr/local/bin/obocop), that link is the durable path an
+// does not resolve symlinks: when obot-sentry is invoked through a stable packaged
+// symlink (for example /usr/local/bin/obot-sentry), that link is the durable path an
 // MDM-managed hook should point at, not the versioned target behind it.
 func DefaultExecutable() (string, error) {
 	exe, err := os.Executable()
 	if err != nil {
-		return "", fmt.Errorf("resolving obocop executable: %w", err)
+		return "", fmt.Errorf("resolving obot-sentry executable: %w", err)
 	}
 	abs, err := filepath.Abs(exe)
 	if err != nil {
-		return "", fmt.Errorf("resolving obocop executable path: %w", err)
+		return "", fmt.Errorf("resolving obot-sentry executable path: %w", err)
 	}
 	return filepath.Clean(abs), nil
 }
@@ -131,19 +131,19 @@ func DefaultExecutable() (string, error) {
 // these production checks.
 func validateExecutable(path string) error {
 	if path == "" {
-		return fmt.Errorf("obocop executable path is empty")
+		return fmt.Errorf("obot-sentry executable path is empty")
 	}
 	if tmp := os.TempDir(); tmp != "" {
 		if rel, err := filepath.Rel(tmp, path); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel) {
-			return fmt.Errorf("obocop executable %q is inside a temporary directory; install it to a durable location first", path)
+			return fmt.Errorf("obot-sentry executable %q is inside a temporary directory; install it to a durable location first", path)
 		}
 	}
 	info, err := os.Stat(path)
 	if err != nil {
-		return fmt.Errorf("obocop executable %q is not accessible: %w", path, err)
+		return fmt.Errorf("obot-sentry executable %q is not accessible: %w", path, err)
 	}
 	if !info.Mode().IsRegular() {
-		return fmt.Errorf("obocop executable %q is not a regular file", path)
+		return fmt.Errorf("obot-sentry executable %q is not a regular file", path)
 	}
 	if runtime.GOOS != "windows" {
 		perm := info.Mode().Perm()
@@ -152,10 +152,10 @@ func validateExecutable(path string) error {
 		// (e.g. 0700) binary would pass a bare has-any-exec-bit check yet fail to
 		// launch for those users, silently dropping audit events under fail-open.
 		if perm&0o005 != 0o005 {
-			return fmt.Errorf("obocop executable %q is not readable/executable by normal users (mode %o); hooks run as non-privileged agent users", path, perm)
+			return fmt.Errorf("obot-sentry executable %q is not readable/executable by normal users (mode %o); hooks run as non-privileged agent users", path, perm)
 		}
 		if perm&0o022 != 0 {
-			return fmt.Errorf("obocop executable %q is writable by non-administrators (mode %o); an MDM-managed hook must point at an admin-owned binary", path, perm)
+			return fmt.Errorf("obot-sentry executable %q is writable by non-administrators (mode %o); an MDM-managed hook must point at an admin-owned binary", path, perm)
 		}
 	}
 	return nil

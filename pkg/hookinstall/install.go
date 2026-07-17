@@ -9,14 +9,14 @@ import (
 	"runtime"
 	"text/tabwriter"
 
-	"github.com/obot-platform/obocop/pkg/datadir"
-	"github.com/obot-platform/obocop/pkg/identity"
+	"github.com/obot-platform/obot-sentry/pkg/datadir"
+	"github.com/obot-platform/obot-sentry/pkg/identity"
 )
 
 // errUnsupportedPlatform is returned for any GOOS other than darwin or windows.
 // It is a plain error so the CLI maps it to the normal runtime exit code:
 // installing hooks is local configuration, not a deployment-config failure.
-var errUnsupportedPlatform = errors.New("obocop hook-install is only supported on macOS and Windows")
+var errUnsupportedPlatform = errors.New("obot-sentry hook-install is only supported on macOS and Windows")
 
 // supportedPlatform reports whether goos has a defined destination layout and
 // privilege model.
@@ -27,7 +27,7 @@ func supportedPlatform(goos string) bool {
 // Installer converges the managed audit hooks. Every external dependency is an
 // injectable seam so platform discovery, command generation, and (later) the
 // filesystem commit can be exercised independently in tests without root, a
-// specific OS, or a real obocop binary on disk.
+// specific OS, or a real obot-sentry binary on disk.
 type Installer struct {
 	// GOOS selects the destination layout and command quoting; defaults to
 	// runtime.GOOS.
@@ -35,7 +35,7 @@ type Installer struct {
 	// Privilege verifies the process holds the elevation required to write
 	// machine policy and per-user files; defaults to the platform check.
 	Privilege func() error
-	// ResolveExe returns the validated, durable obocop path embedded in hook
+	// ResolveExe returns the validated, durable obot-sentry path embedded in hook
 	// commands; defaults to DefaultExecutable + validateExecutable.
 	ResolveExe func() (string, error)
 	// ResolveUser resolves the active console user whose per-user files are
@@ -53,7 +53,7 @@ type Installer struct {
 	Out io.Writer
 }
 
-// defaultResolveExe resolves and validates the durable obocop executable.
+// defaultResolveExe resolves and validates the durable obot-sentry executable.
 func defaultResolveExe() (string, error) {
 	exe, err := DefaultExecutable()
 	if err != nil {
@@ -292,7 +292,7 @@ func commitChanges(ctx context.Context, plan Plan, changes []plannedChange) []Re
 // followed by the per-destination result table. It emits only paths and
 // statuses — never config contents or credentials.
 func writeSummary(w io.Writer, plan Plan, results []Result) {
-	_, _ = fmt.Fprintf(w, "obocop hook-install (%s)\n", plan.GOOS)
+	_, _ = fmt.Fprintf(w, "obot-sentry hook-install (%s)\n", plan.GOOS)
 	if plan.User != nil {
 		_, _ = fmt.Fprintf(w, "Active user: %s (%s)\n", plan.User.Username, plan.User.HomeDir)
 	}

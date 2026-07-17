@@ -1,6 +1,6 @@
 // Package hookinstall converges the native audit-hook configuration for the
 // supported local coding agents (Claude Code, Codex, Visual Studio Code, and
-// Cursor) onto the hidden `obocop audit submit` command.
+// Cursor) onto the hidden `obot-sentry audit submit` command.
 //
 // The package is split into independently testable seams so the same primitives
 // can back a future hook-status/hook-uninstall command:
@@ -15,7 +15,7 @@
 package hookinstall
 
 // Agent identifies a supported local coding agent. The string values match the
-// providers accepted by `obocop audit submit --agent`; a test asserts they stay
+// providers accepted by `obot-sentry audit submit --agent`; a test asserts they stay
 // in lockstep with pkg/audit's Agent constants.
 type Agent string
 

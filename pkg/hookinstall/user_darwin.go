@@ -20,7 +20,7 @@ var reservedDarwinUsers = map[string]bool{
 }
 
 // resolveTargetUser resolves the active console user on macOS. It prefers a
-// verified non-root sudo invoker (the interactive `sudo obocop hook-install`
+// verified non-root sudo invoker (the interactive `sudo obot-sentry hook-install`
 // case), then falls back to the owner of /dev/console (the MDM/root case where
 // a user is logged in at the GUI).
 func resolveTargetUser() (*TargetUser, error) {
