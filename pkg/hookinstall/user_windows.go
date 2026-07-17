@@ -15,9 +15,10 @@ import (
 // This file implements Windows console-user discovery. Under an MDM/SYSTEM
 // install the active console user is found by enumerating WTS sessions and
 // picking the first Active interactive session's user — a locale-independent
-// numeric-state check, unlike parsing `query session` text. The home is then
-// C:\Users\<username>. Newly created per-user files inherit their DACL from the
-// profile, so no account SID is resolved here.
+// numeric-state check, unlike parsing `query session` text. The home is read
+// from that session's user token so relocated profiles are handled correctly.
+// Newly created per-user files inherit their DACL from the profile, so no
+// account SID is resolved here.
 //
 // x/sys/windows binds WTSEnumerateSessions/WTSFreeMemory but not
 // WTSQuerySessionInformationW, so that one call is declared here against
@@ -62,26 +63,43 @@ func resolveTargetUser() (*TargetUser, error) {
 
 // windowsConsoleUser returns the console user's account name and home directory.
 func windowsConsoleUser() (username, home string, err error) {
-	if name, wtsErr := wtsActiveConsoleUser(); wtsErr == nil {
-		return name, filepath.Join(`C:\Users`, name), nil
-	} else if profile := os.Getenv("USERPROFILE"); profile != "" && !strings.Contains(strings.ToLower(profile), "systemprofile") {
+	return findWindowsConsoleUser(wtsActiveConsoleUser, wtsSessionProfileDir, os.Getenv)
+}
+
+// findWindowsConsoleUser implements console-user resolution against injectable
+// platform seams so the token lookup and interactive fallback can be tested
+// without requiring a particular live WTS session.
+func findWindowsConsoleUser(
+	activeUser func() (sessionID uint32, name string, err error),
+	sessionProfileDir func(sessionID uint32) (string, error),
+	getenv func(string) string,
+) (username, home string, err error) {
+	sessionID, name, resolveErr := activeUser()
+	if resolveErr == nil {
+		home, profileErr := sessionProfileDir(sessionID)
+		if profileErr == nil {
+			return name, home, nil
+		}
+		resolveErr = fmt.Errorf("resolving profile for active console user %q: %w", name, profileErr)
+	}
+
+	if profile := getenv("USERPROFILE"); profile != "" && !strings.Contains(strings.ToLower(profile), "systemprofile") {
 		// The USERPROFILE fallback is only meaningful for a non-SYSTEM
 		// (interactive/dev) caller; under SYSTEM it points at systemprofile,
 		// which is not a real console user.
 		return filepath.Base(profile), profile, nil
-	} else {
-		return "", "", fmt.Errorf("no active console user: %w", wtsErr)
 	}
+	return "", "", fmt.Errorf("no usable console user: %w", resolveErr)
 }
 
-// wtsActiveConsoleUser returns the user name of the first Active interactive WTS
-// session, skipping the services session (0) and service accounts. On a normal
-// workstation there is at most one such session.
-func wtsActiveConsoleUser() (string, error) {
+// wtsActiveConsoleUser returns the session ID and user name of the first Active
+// interactive WTS session, skipping the services session (0) and service
+// accounts. On a normal workstation there is at most one such session.
+func wtsActiveConsoleUser() (uint32, string, error) {
 	var sessions *windows.WTS_SESSION_INFO
 	var count uint32
 	if err := windows.WTSEnumerateSessions(wtsCurrentServerHandle, 0, 1, &sessions, &count); err != nil {
-		return "", fmt.Errorf("enumerating WTS sessions: %w", err)
+		return 0, "", fmt.Errorf("enumerating WTS sessions: %w", err)
 	}
 	defer windows.WTSFreeMemory(uintptr(unsafe.Pointer(sessions)))
 
@@ -97,9 +115,26 @@ func wtsActiveConsoleUser() (string, error) {
 		if wtsServiceAccounts[strings.ToLower(name)] {
 			continue
 		}
-		return name, nil
+		return s.SessionID, name, nil
 	}
-	return "", fmt.Errorf("no active interactive session with a real user")
+	return 0, "", fmt.Errorf("no active interactive session with a real user")
+}
+
+// wtsSessionProfileDir resolves the actual profile directory for the user
+// logged on to sessionID. WTSQueryUserToken returns a primary token owned by the
+// caller; GetUserProfileDirectory uses it instead of assuming C:\Users.
+func wtsSessionProfileDir(sessionID uint32) (string, error) {
+	var token windows.Token
+	if err := windows.WTSQueryUserToken(sessionID, &token); err != nil {
+		return "", fmt.Errorf("querying user token for WTS session %d: %w", sessionID, err)
+	}
+	defer token.Close()
+
+	home, err := token.GetUserProfileDirectory()
+	if err != nil {
+		return "", fmt.Errorf("querying profile directory for WTS session %d: %w", sessionID, err)
+	}
+	return home, nil
 }
 
 // wtsSessionUserName queries the user name of a WTS session. The API allocates
