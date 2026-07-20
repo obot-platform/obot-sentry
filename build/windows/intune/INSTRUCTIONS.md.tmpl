@@ -1,35 +1,30 @@
 # Deploy Obot Sentry with Microsoft Intune
 
-This bundle contains `obot-sentry.intunewin` — the obot-sentry device agent
-(version {{.obotSentryVersion}}) packaged as an Intune **Windows app
-(Win32)** — and these instructions. The file names are stable across
-versions, so upgrades never require editing the install command.
+`obot-sentry.intunewin` is the obot-sentry device agent (version
+{{.obotSentryVersion}}) packaged as an Intune **Windows app (Win32)**.
+The file names are stable across versions, so upgrades never require
+editing the install command.
 
-1. **Create an enrollment key.** On this configuration's page in Obot, go
-   to *Enrollment Keys > New Key* and copy the `ode1-...` credential — it
-   is shown exactly once.
+1. **Add the app.** In the Intune admin center, go to *Apps > Windows >
+   Add > Windows app (Win32)* and upload the `.intunewin` file.
 
-2. **Add the app.** In the Intune admin center, go to *Apps > Windows >
-   Add > Windows app (Win32)* and upload the `.intunewin` file from this
-   bundle.
-
-3. **Install command** — paste the following, replacing
+2. **Install command** — paste the following, replacing
    `REPLACE_WITH_ENROLLMENT_KEY` with your enrollment key:
 
    ```
    msiexec /i "obot-sentry.msi" /qn SERVER_URL="{{.serverURL}}" ENROLLMENT_KEY="REPLACE_WITH_ENROLLMENT_KEY" SCAN_INTERVAL_MINUTES="{{.scanIntervalMinutes}}"
    ```
 
-4. **Uninstall command:**
+3. **Uninstall command:**
 
    ```
    msiexec /x "obot-sentry.msi" /qn
    ```
 
-5. **Install behavior:** System. **Detection rule:** keep the MSI product
+4. **Install behavior:** System. **Detection rule:** keep the MSI product
    code rule Intune fills in automatically from the package.
 
-6. **Assign** the app to the device groups that should report to this
+5. **Assign** the app to the device groups that should report to this
    configuration. Devices install the agent on their next check-in and
    appear in Obot as scans arrive.
 
@@ -49,7 +44,4 @@ versions, so upgrades never require editing the install command.
   shortly after each sign-in and are re-checked hourly for drift.
 
 Upgrades re-run the same install command, so assignments configured with
-supersedence carry the configuration forward automatically. To rotate the
-enrollment key later: create a new key in Obot, update the install
-command in Intune, then revoke the old key (already-enrolled devices are
-unaffected).
+supersedence carry the configuration forward automatically.

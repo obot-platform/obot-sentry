@@ -55,7 +55,11 @@ build/
     msi.ps1  obot-sentry.wxs  scan-task.ps1  hook-task.ps1  obot-sentry.ico
     intune/              # Intune channel: .intunewin wrap + instructions
       intunewin.ps1  INSTRUCTIONS.md.tmpl
-  Dockerfile             # the scratch image obot mounts the assets from
+    manual/              # manual channel: instructions for the MSI + exe
+      INSTRUCTIONS.md.tmpl
+  macos/                 # macOS assets (universal binary, built in CI)
+    manual/              # manual channel: instructions for the standalone binary
+      INSTRUCTIONS.md.tmpl
 ```
 
 The installers are tenant-agnostic; per-tenant configuration (server URL
@@ -72,8 +76,11 @@ build\windows\intune\intunewin.ps1                         # dist\obot-sentry.in
 build/mdm-assets.sh 1.2.3                                  # dist/mdm-assets/ (any OS)
 ```
 
-CI (`build.yaml`) runs the same chain — a Linux job cross-compiles the
-exe, the Windows runner packages it — and `make mdm` dispatches that
+CI (`build.yaml`) runs the same chain — a Linux job builds the binaries
+with GoReleaser (`.goreleaser.yaml`): the Windows exe plus the macOS
+universal (amd64+arm64) binary, signed and notarized with
+[quill](https://github.com/anchore/quill) without a macOS runner; the
+Windows runner packages the MSI — and `make mdm` dispatches that
 workflow on your fork and downloads the assembled `dist/mdm-assets`.
 
 `mdm-assets.sh` produces the tree obot consumes: the platform installers
@@ -87,19 +94,19 @@ unit as a zip. The enrollment key is never rendered — templates carry a
 `REPLACE_WITH_ENROLLMENT_KEY` placeholder the admin fills in the MDM.
 
 CI assembles the assets on every PR/push and publishes them as the
-data-only `ghcr.io/obot-platform/obot-sentry/mdm-assets` image (`:main` for
-tip-of-tree, tagged + `:latest` on releases, cosign-signed) plus a
-tarball with a signed checksums file on releases. The Windows installers
-ship unsigned: Intune installs them silently in SYSTEM context, so
-nothing gates on Authenticode there. Forks stop at the workflow
-artifact — build an image locally with
-`docker build -f build/Dockerfile .` if you need one. Obot mounts the
-image directly as a Kubernetes image volume (chart `mdmAssets` values,
-K8s 1.35+) and reads it via `OBOT_SERVER_MDM_ASSETS_PATH`.
+`mdm-assets` workflow artifact; releases add a tarball with a
+cosign-signed checksums file. The Windows installers ship unsigned:
+Intune installs them silently in SYSTEM context, so nothing gates on
+Authenticode there. The macOS universal binary is Developer ID-signed
+and notarized via quill when the `QUILL_*` secrets are available (the
+same secrets obot's release workflow uses); PRs and forks fall back to
+a dry run with an ad-hoc signature.
+Obot reads the assembled tree via `OBOT_SERVER_MDM_ASSETS_PATH`.
 
 | Platform | installer | scheduling | tenant config |
 |---|---|---|---|
 | Intune (Windows) | `.msi` wrapped as `.intunewin` | per-user scan task (logon + 10-min poll, submissions throttled to `ScanIntervalMinutes`) plus elevated SYSTEM hook-install task (logon + hourly) | MSI properties → `HKLM\SOFTWARE\Obot\obot-sentry` |
+| Manual (macOS) | universal binary installed to `/usr/local/bin` | none — run `obot-sentry scan --submit` manually | `OBOT_SENTRY_*` environment variables |
 
 ## Development
 

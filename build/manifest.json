@@ -27,6 +27,10 @@
   },
   "platforms": [
     {
+      "id": "manual",
+      "label": "Do it Yourself"
+    },
+    {
       "id": "intune",
       "label": "Microsoft Intune"
     }
@@ -36,12 +40,37 @@
       "platform": "intune",
       "os": "windows",
       "osLabel": "Windows",
-      "description": "Deploy Obot Sentry to a Windows fleet with Microsft Intune",
-      "suggestedName": "Windows Fleet",
+      "description": "Deploy Obot Sentry to Windows devices with Microsoft Intune",
+      "suggestedName": "Windows Devices",
       "instructions": "windows/intune/INSTRUCTIONS.md.tmpl",
       "assets": [
         "windows/intune/obot-sentry.intunewin",
         "windows/intune/INSTRUCTIONS.md.tmpl"
+      ]
+    },
+    {
+      "platform": "manual",
+      "os": "windows",
+      "osLabel": "Windows",
+      "description": "Install Obot Sentry directly on Windows without an MDM",
+      "suggestedName": "Windows Devices",
+      "instructions": "windows/manual/INSTRUCTIONS.md.tmpl",
+      "assets": [
+        "windows/manual/obot-sentry.msi",
+        "windows/manual/obot-sentry.exe",
+        "windows/manual/INSTRUCTIONS.md.tmpl"
+      ]
+    },
+    {
+      "platform": "manual",
+      "os": "macos",
+      "osLabel": "macOS",
+      "description": "Install Obot Sentry directly on macOS without an MDM",
+      "suggestedName": "macOS Devices",
+      "instructions": "macos/manual/INSTRUCTIONS.md.tmpl",
+      "assets": [
+        "macos/manual/obot-sentry",
+        "macos/manual/INSTRUCTIONS.md.tmpl"
       ]
     }
   ]

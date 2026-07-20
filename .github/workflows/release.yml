@@ -1,10 +1,8 @@
 name: release
 
 # On a release tag: run the full build.yaml pipeline with the tag
-# version (which builds, pushes, and signs the
-# ghcr.io/<repo>/mdm-assets:<version> image), then publish — promote the
-# image to :vX.Y.Z and :latest, and create a GitHub release carrying the
-# installers, the assets tarball, and a cosign-signed checksums file.
+# version, then create a GitHub release carrying the installers, the
+# assets tarball, and a cosign-signed checksums file.
 # Prerelease tags (v1.2.3-rc1) are skipped entirely: MSI ProductVersion
 # must be numeric x.y.z and obot-sentry only ships via the MDM installers.
 
@@ -16,7 +14,6 @@ on:
 permissions:
   id-token: write
   contents: write
-  packages: write
 
 jobs:
   version:
@@ -33,9 +30,7 @@ jobs:
     needs: version
     uses: ./.github/workflows/build.yaml
     permissions:
-      id-token: write
       contents: read
-      packages: write
     with:
       version: ${{ needs.version.outputs.version }}
 
@@ -43,8 +38,6 @@ jobs:
     needs: [version, build]
     runs-on: ubuntu-latest
     env:
-      VERSION: ${{ needs.version.outputs.version }}
-      IMAGE: ghcr.io/${{ github.repository }}/mdm-assets
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - name: Download installers
@@ -81,23 +74,3 @@ jobs:
             dist/mdm-assets.tar.gz \
             dist/checksums.txt \
             dist/checksums.txt.sigstore.json
-
-      # build.yaml's image job already pushed and signed :<version>
-      # (org-only — fork releases carry the tarball but no image);
-      # promote that manifest to the release tags. The signature is
-      # attached to the digest, so it covers the new tags as-is.
-      - name: Log in to GitHub Container Registry
-        if: ${{ github.repository_owner == 'obot-platform' }}
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Setup crane
-        if: ${{ github.repository_owner == 'obot-platform' }}
-        uses: imjasonh/setup-crane@v0.5
-      - name: Promote image tags
-        if: ${{ github.repository_owner == 'obot-platform' }}
-        run: |
-          crane tag "${IMAGE}:${VERSION}" "${GITHUB_REF_NAME}"
-          crane tag "${IMAGE}:${VERSION}" latest

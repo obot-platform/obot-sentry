@@ -1,0 +1,65 @@
+# Builds the release binaries: the Windows amd64 exe and the macOS
+# universal (amd64+arm64) binary. GoReleaser signs and notarizes the
+# macOS binary itself (it embeds anchore/quill as a library), so this
+# works from any platform — no macOS runner and no quill install.
+#
+# CI (build.yaml) always runs `goreleaser build --snapshot` with VERSION
+# exported. Signing + notarization turn on when QUILL_SIGN_P12 is
+# non-empty (with the rest of the QUILL_SIGN_* / QUILL_NOTARY_*
+# environment obot's release workflow uses); otherwise the step is
+# skipped and the binaries keep the Go linker's ad-hoc signature.
+# Local builds need no credentials:
+#
+#   VERSION=1.2.3 goreleaser build --snapshot --clean
+version: 2
+
+project_name: obot-sentry
+
+snapshot:
+  version_template: "{{ .Env.VERSION }}"
+
+builds:
+  - id: windows
+    binary: obot-sentry
+    goos:
+      - windows
+    goarch:
+      - amd64
+    env:
+      - CGO_ENABLED=0
+    ldflags:
+      - -s -w -X "github.com/obot-platform/obot-sentry/pkg/version.Tag=v{{ .Version }}"
+
+  - id: macos
+    binary: obot-sentry
+    goos:
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    env:
+      - CGO_ENABLED=0
+    ldflags:
+      - -s -w -X "github.com/obot-platform/obot-sentry/pkg/version.Tag=v{{ .Version }}"
+
+# Merge the two darwin slices into one fat binary (goreleaser does this
+# itself; lipo is not involved).
+universal_binaries:
+  - id: macos
+    ids:
+      - macos
+    replace: true
+
+notarize:
+  macos:
+    - enabled: '{{ ne (envOrDefault "QUILL_SIGN_P12" "") "" }}'
+      ids:
+        - macos
+      sign:
+        certificate: "{{ .Env.QUILL_SIGN_P12 }}"
+        password: "{{ .Env.QUILL_SIGN_PASSWORD }}"
+      notarize:
+        issuer_id: "{{ .Env.QUILL_NOTARY_ISSUER }}"
+        key_id: "{{ .Env.QUILL_NOTARY_KEY_ID }}"
+        key: "{{ .Env.QUILL_NOTARY_KEY }}"
+        wait: true

@@ -12,9 +12,9 @@ build:
 clean:
 	rm -rf bin dist
 
-# Build the MDM assets remotely: dispatch the build.yaml workflow on the
-# current branch of your fork via gh, wait, and download the result into
-# dist/mdm-assets. e.g. make mdm [VERSION=1.2.3]
+# Build all deployment assets remotely (Manual and MDM-specific): dispatch
+# build.yaml on the current branch of your fork via gh, wait, and download the
+# complete result into dist/mdm-assets. e.g. make mdm [VERSION=1.2.3]
 mdm:
 	scripts/mdm-remote.sh $(VERSION)
 

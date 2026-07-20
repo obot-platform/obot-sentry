@@ -25,9 +25,9 @@ type Scan struct {
 	ConfigFlags
 	JSON     bool `usage:"Print the scan result as JSON"`
 	Quiet    bool `usage:"Suppress the result output" short:"q"`
-	Submit   bool `usage:"Submit the scan to the configured Obot server, enrolling first if needed" env:"OBOCOP_SCAN_SUBMIT"`
-	Timeout  int  `usage:"Number of seconds to wait for the scan to complete" default:"300" env:"OBOCOP_SCAN_TIMEOUT"`
-	MaxDepth int  `usage:"Maximum path depth (in segments below each scan root) to crawl for project-scope configs and skills" default:"5" env:"OBOCOP_SCAN_MAX_DEPTH"`
+	Submit   bool `usage:"Submit the scan to the configured Obot server, enrolling first if needed" env:"OBOT_SENTRY_SCAN_SUBMIT"`
+	Timeout  int  `usage:"Number of seconds to wait for the scan to complete" default:"300" env:"OBOT_SENTRY_SCAN_TIMEOUT"`
+	MaxDepth int  `usage:"Maximum path depth (in segments below each scan root) to crawl for project-scope configs and skills" default:"5" env:"OBOT_SENTRY_SCAN_MAX_DEPTH"`
 }
 
 func (s *Scan) Customize(cmd *cobra.Command) {
