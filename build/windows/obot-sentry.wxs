@@ -1,8 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
   Obot Sentry MSI (WiX Toolset v4, built by msi.ps1). Installs
-  obot-sentry.exe and scan-task.ps1 under %ProgramFiles%\Obot\obot-sentry,
-  registers the per-user scan scheduled task, and writes the tenant
+  obot-sentry.exe and its scheduler scripts under
+  %ProgramFiles%\Obot\obot-sentry, registers the per-user scan and
+  machine-wide hook-install scheduled tasks, and writes the tenant
   configuration from the msiexec command line to
   HKLM\SOFTWARE\Obot\obot-sentry, where pkg/mdmconfig reads it.
 -->
@@ -57,6 +58,9 @@
           <Component Id="TaskScript" Guid="924DCA37-C6CD-4882-BAC3-15F6BA98381D">
             <File Id="ScanTaskScript" Name="scan-task.ps1" Source="scan-task.ps1" KeyPath="yes" />
           </Component>
+          <Component Id="HookTaskScript" Guid="0B10F9BF-1F85-4611-9B6D-F14ABF4F1F67">
+            <File Id="HookTaskScriptFile" Name="hook-task.ps1" Source="hook-task.ps1" KeyPath="yes" />
+          </Component>
           <Component Id="DeploymentRegistry" Guid="65842A7E-C5E0-4329-BD81-B106EB197F6F">
             <RegistryKey Root="HKLM" Key="SOFTWARE\Obot\obot-sentry">
               <RegistryValue Name="ServerURL" Type="string" Value="[SERVER_URL]" KeyPath="yes" />
@@ -88,13 +92,15 @@
     <Feature Id="Main" Level="1">
       <ComponentRef Id="MainExecutable" />
       <ComponentRef Id="TaskScript" />
+      <ComponentRef Id="HookTaskScript" />
       <ComponentRef Id="DeploymentRegistry" />
       <ComponentRef Id="MachineDataDir" />
     </Feature>
 
     <!--
-      Register/remove the per-user scan task via scan-task.ps1
-      (registration needs elevation even though the task runs per user).
+      Register/remove the per-user scan task and the elevated machine-wide
+      hook-install task via their PowerShell scripts (registration needs
+      elevation even though the scan task runs per user).
       Deferred, no-impersonate custom actions run in the elevated (SYSTEM)
       execute phase; SetPowerShellPath (immediate) resolves powershell.exe
       into the POWERSHELL property. The ExeCommand fields are formatted when
@@ -103,24 +109,33 @@
       path (not the directory) so there is no trailing "\" immediately before
       a closing quote to break CommandLineToArgvW parsing.
 
-      InstallScanTask runs on install/upgrade; -Force re-creates the task
-      idempotently. UninstallScanTask runs only on a true uninstall — the
-      NOT UPGRADINGPRODUCTCODE guard keeps the outgoing product's removal
-      during a major upgrade from deleting the task the new one just wrote.
+      InstallScanTask and InstallHookTask run on install/upgrade; -Force
+      re-creates both tasks idempotently. The uninstall actions run only on a
+      true uninstall — the NOT UPGRADINGPRODUCTCODE guard keeps the outgoing
+      product's removal during a major upgrade from deleting tasks the new one
+      just wrote.
     -->
     <CustomAction Id="SetPowerShellPath" Property="POWERSHELL"
                   Value="[System64Folder]WindowsPowerShell\v1.0\powershell.exe" />
     <CustomAction Id="InstallScanTask" Property="POWERSHELL"
                   ExeCommand="-ExecutionPolicy Bypass -NonInteractive -NoProfile -File &quot;[INSTALLDIR]scan-task.ps1&quot; -Mode install -ExePath &quot;[INSTALLDIR]obot-sentry.exe&quot;"
                   Execute="deferred" Impersonate="no" Return="check" />
+    <CustomAction Id="InstallHookTask" Property="POWERSHELL"
+                  ExeCommand="-ExecutionPolicy Bypass -NonInteractive -NoProfile -File &quot;[INSTALLDIR]hook-task.ps1&quot; -Mode install -ExePath &quot;[INSTALLDIR]obot-sentry.exe&quot;"
+                  Execute="deferred" Impersonate="no" Return="check" />
     <CustomAction Id="UninstallScanTask" Property="POWERSHELL"
                   ExeCommand="-ExecutionPolicy Bypass -NonInteractive -NoProfile -File &quot;[INSTALLDIR]scan-task.ps1&quot; -Mode uninstall"
+                  Execute="deferred" Impersonate="no" Return="ignore" />
+    <CustomAction Id="UninstallHookTask" Property="POWERSHELL"
+                  ExeCommand="-ExecutionPolicy Bypass -NonInteractive -NoProfile -File &quot;[INSTALLDIR]hook-task.ps1&quot; -Mode uninstall"
                   Execute="deferred" Impersonate="no" Return="ignore" />
 
     <InstallExecuteSequence>
       <Custom Action="SetPowerShellPath" After="CostFinalize" />
       <Custom Action="InstallScanTask" After="InstallFiles" Condition="NOT (REMOVE~=&quot;ALL&quot;)" />
+      <Custom Action="InstallHookTask" After="InstallScanTask" Condition="NOT (REMOVE~=&quot;ALL&quot;)" />
       <Custom Action="UninstallScanTask" After="InstallInitialize" Condition="REMOVE~=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
+      <Custom Action="UninstallHookTask" After="UninstallScanTask" Condition="REMOVE~=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
     </InstallExecuteSequence>
   </Package>
 </Wix>

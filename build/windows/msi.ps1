@@ -88,8 +88,9 @@ $installer = Join-Path $outDir 'obot-sentry.msi'
 
 Write-Host "wix: obot-sentry.wxs + $binary -> $installer (ProductVersion $Version)"
 
-# obot-sentry.wxs pulls obot-sentry.ico and scan-task.ps1 from the bind path (this
-# directory); the exe arrives through the ExePath preprocessor variable.
+# obot-sentry.wxs pulls obot-sentry.ico and both scheduler scripts from the
+# bind path (this directory); the exe arrives through the ExePath preprocessor
+# variable.
 # -arch x64 makes ProgramFiles64Folder and component bitness 64-bit.
 & wix build `
     -arch x64 `
