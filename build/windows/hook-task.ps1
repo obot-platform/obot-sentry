@@ -34,15 +34,19 @@ try {
     # principal used by the scan task; hook-install rejects a limited token.
     $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
 
-    # Reconcile at boot and hourly. The command targets the active console
-    # user, so the boot attempt may legitimately find no user; the hourly
-    # trigger (and the best-effort kick below) retries once a user is present.
+    # Reconcile at logon and hourly. The command targets the active console
+    # user, so convergence is only meaningful once someone is signed in: an
+    # at-boot trigger would find no user on every boot. The logon trigger (any
+    # user) covers reboots and sign-ins; the delay lets the session reach the
+    # Active state with a loaded profile before hook-install queries it. The
+    # hourly trigger picks up later drift and console-user switches.
     # StartWhenAvailable also lets Task Scheduler catch up after sleep; IgnoreNew
     # prevents overlapping convergence.
-    $startupTrigger = New-ScheduledTaskTrigger -AtStartup
+    $logonTrigger = New-ScheduledTaskTrigger -AtLogOn
+    $logonTrigger.Delay = 'PT1M'
     $clockTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date) `
         -RepetitionInterval (New-TimeSpan -Hours 1)
-    $triggers = @($startupTrigger, $clockTrigger)
+    $triggers = @($logonTrigger, $clockTrigger)
     $settings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -StartWhenAvailable `
         -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
         -ExecutionTimeLimit (New-TimeSpan -Minutes 30)
@@ -53,7 +57,7 @@ try {
 
     # Best-effort first convergence so hooks are available immediately after
     # installation. If nobody is signed in, hook-install reports no active
-    # console user; the hourly trigger will retry after the next sign-in.
+    # console user and the logon trigger converges at the next sign-in.
     try { Start-ScheduledTask -TaskName $TaskName } catch { }
 
     exit 0

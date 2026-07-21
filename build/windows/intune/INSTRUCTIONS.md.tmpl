@@ -44,9 +44,9 @@ versions, so upgrades never require editing the install command.
   (`ScanIntervalMinutes` in the registry — change it there to retune
   without reinstalling).
 - Registers a second machine-wide scheduled task running as SYSTEM that
-  executes `obot-sentry hook-install` at boot and hourly. It converges the
-  managed local-agent hooks for the active console user and retries after
-  logon, sleep, upgrades, or configuration changes.
+  executes `obot-sentry hook-install` at logon and hourly. It converges the
+  managed local-agent hooks for the active console user, so hooks appear
+  shortly after each sign-in and are re-checked hourly for drift.
 
 Upgrades re-run the same install command, so assignments configured with
 supersedence carry the configuration forward automatically. To rotate the
