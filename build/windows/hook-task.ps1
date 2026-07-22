@@ -32,7 +32,13 @@ try {
     # The hook installer needs elevation to write machine policy and the
     # signed-in user's files. SYSTEM is used instead of the per-user Users
     # principal used by the scan task; hook-install rejects a limited token.
-    $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+    # Resolve the well-known SYSTEM SID to its (possibly localized) account name
+    # so -UserId is locale-independent, exactly as scan-task.ps1 does for the
+    # Users group: the literal 'SYSTEM' is an English display name and does not
+    # resolve on every localized Windows install.
+    $systemAccount = ([System.Security.Principal.SecurityIdentifier]'S-1-5-18').
+    Translate([System.Security.Principal.NTAccount]).Value
+    $principal = New-ScheduledTaskPrincipal -UserId $systemAccount -LogonType ServiceAccount -RunLevel Highest
 
     # Reconcile at logon and hourly. The command targets the active console
     # user, so convergence is only meaningful once someone is signed in: an
