@@ -1,20 +1,16 @@
-# Install Obot Sentry manually on macOS
+# Install Obot Sentry on macOS
 
-`obot-sentry` is Obot Sentry {{.obotSentryVersion}}, a universal
-(Intel and Apple silicon) binary. Installing it this way sets up
-nothing else and registers no recurring scan — configure the
-deployment settings in your shell and run scans directly.
+Manually install `obot-sentry` to run one-off scans or install hooks
+yourself.
 
-1. **Open Terminal** in this directory.
-
-2. **Install the binary:**
+1. Open Terminal and install the binary:
 
    ```sh
    sudo install -m 755 obot-sentry /usr/local/bin/obot-sentry
    ```
 
-3. **Configure the deployment settings** in the session, replacing
-   `REPLACE_WITH_ENROLLMENT_KEY` with your enrollment key:
+2. Configure Obot Sentry, replacing `REPLACE_WITH_ENROLLMENT_KEY` with your
+   enrollment key:
 
    ```sh
    export OBOT_SENTRY_SERVER_URL="{{.serverURL}}"
@@ -22,11 +18,17 @@ deployment settings in your shell and run scans directly.
    export OBOT_SENTRY_SCAN_INTERVAL_MINUTES="{{.scanIntervalMinutes}}"
    ```
 
-4. **Run a scan:**
+## Run a scan
 
-   ```sh
-   obot-sentry scan --submit
-   ```
+```sh
+obot-sentry scan --submit
+```
+
+## Install hooks
+
+```sh
+sudo obot-sentry hook-install
+```
 
 ## Uninstall
 

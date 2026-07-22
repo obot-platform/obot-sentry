@@ -1,11 +1,43 @@
-# Install Obot Sentry {{.obotSentryVersion}} on Windows
+# Install Obot Sentry on Windows
 
-## Standalone binary
+## MSI
 
-1. **Open PowerShell**
+The MSI sets up Obot Sentry to run automatically. It:
 
-2. **Configure the deployment settings** in the session, replacing
-   `REPLACE_WITH_ENROLLMENT_KEY` with your enrollment key:
+- scans automatically — at logon and every 10 minutes, submitting at most
+  once every {{.scanIntervalMinutes}} minutes;
+- installs and maintains the audit hooks automatically — at logon and
+  hourly;
+- handles upgrades and uninstalls out of the box.
+
+Open PowerShell as Administrator and run the installer, replacing
+`REPLACE_WITH_ENROLLMENT_KEY` with your enrollment key:
+
+```powershell
+msiexec /i "obot-sentry.msi" /qn SERVER_URL="{{.serverURL}}" ENROLLMENT_KEY="REPLACE_WITH_ENROLLMENT_KEY" SCAN_INTERVAL_MINUTES="{{.scanIntervalMinutes}}"
+```
+
+### Uninstall
+
+```powershell
+msiexec /x "obot-sentry.msi" /qn
+```
+
+## Standalone binary (Alternate)
+
+Manually install `obot-sentry.exe` to run one-off scans or install hooks
+yourself. Use this to try Obot Sentry without the automated scanning and
+hook maintenance the MSI sets up.
+
+1. Open PowerShell as Administrator and install the binary:
+
+   ```powershell
+   New-Item -ItemType Directory -Force "C:\Program Files\Obot\obot-sentry" | Out-Null
+   Copy-Item obot-sentry.exe "C:\Program Files\Obot\obot-sentry\obot-sentry.exe"
+   ```
+
+2. Configure Obot Sentry, replacing `REPLACE_WITH_ENROLLMENT_KEY` with your
+   enrollment key:
 
    ```powershell
    $env:OBOT_SENTRY_SERVER_URL = "{{.serverURL}}"
@@ -13,36 +45,14 @@
    $env:OBOT_SENTRY_SCAN_INTERVAL_MINUTES = "{{.scanIntervalMinutes}}"
    ```
 
-3. **Run a scan:**
-
-   ```powershell
-   .\obot-sentry.exe scan --submit
-   ```
-
-## MSI installation
-
-The MSI installs `obot-sentry.exe` under `C:\Program Files\Obot\obot-sentry`,
-stores the deployment configuration, and registers a machine-wide scheduled task
-that runs in each signed-in user's session at logon and every 10 minutes. Each
-user submits a scan at most every {{.scanIntervalMinutes}} minutes.
-
-1. **Open PowerShell as Administrator** in this directory.
-
-2. **Install the MSI**, replacing `REPLACE_WITH_ENROLLMENT_KEY` with your
-   enrollment key:
-
-   ```powershell
-   msiexec /i "obot-sentry.msi" /qn SERVER_URL="{{.serverURL}}" ENROLLMENT_KEY="REPLACE_WITH_ENROLLMENT_KEY" SCAN_INTERVAL_MINUTES="{{.scanIntervalMinutes}}"
-   ```
-
-3. **Run a scan** (the scheduled task also does this automatically):
-
-   ```powershell
-   & "C:\Program Files\Obot\obot-sentry\obot-sentry.exe" scan --submit
-   ```
-
-### Uninstall
+### Run a scan
 
 ```powershell
-msiexec /x "obot-sentry.msi" /qn
+& "C:\Program Files\Obot\obot-sentry\obot-sentry.exe" scan --submit
+```
+
+### Install hooks
+
+```powershell
+& "C:\Program Files\Obot\obot-sentry\obot-sentry.exe" hook-install
 ```

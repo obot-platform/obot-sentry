@@ -20,6 +20,10 @@
     <MajorUpgrade AllowSameVersionUpgrades="yes"
                   DowngradeErrorMessage="Setup cannot continue: this machine already runs a newer Obot Sentry." />
 
+    <!-- Ship one self-contained MSI. Without EmbedCab, WiX writes cab1.cab
+         beside the MSI and Windows Installer requires both files. -->
+    <MediaTemplate EmbedCab="yes" />
+
     <!--
       Tenant configuration arrives as public properties on every install
       and upgrade command; the launch conditions below hard-fail installs
