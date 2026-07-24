@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -36,7 +37,7 @@ func (e *Enroll) Run(cmd *cobra.Command, _ []string) error {
 		return NewConfigError(fmt.Errorf("no enrollment key configured (flag, env, or MDM)"))
 	}
 
-	dir, err := datadir.Dir()
+	dir, err := enrollStateDir()
 	if err != nil {
 		return err
 	}
@@ -51,4 +52,16 @@ func (e *Enroll) Run(cmd *cobra.Command, _ []string) error {
 	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Enrolled as device %s (deployment %d, enrolled at %s)\n",
 		id.DeviceID, st.MDMDeploymentID, st.EnrolledAt.Format(time.RFC3339))
 	return nil
+}
+
+// enrollStateDir returns the directory this command's enrollment state is
+// written to. A root run must use the machine-scoped dir: sudo preserves
+// $HOME on macOS, so the per-user dir would be created root-owned in the
+// invoking user's home and break that user's later scans. Per-user runs
+// keep their own state and re-enroll the shared identity idempotently.
+func enrollStateDir() (string, error) {
+	if os.Geteuid() == 0 {
+		return datadir.MachineDir()
+	}
+	return datadir.Dir()
 }
