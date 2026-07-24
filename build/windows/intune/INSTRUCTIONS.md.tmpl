@@ -21,6 +21,11 @@ editing the install command.
    msiexec /x "obot-sentry.msi" /qn
    ```
 
+   This removes the agent and its scheduled tasks, so no further hook
+   convergence happens, but it does not remove the hook configuration the
+   tasks already wrote into users' agent files. See
+   [Removing the audit hooks](#removing-the-audit-hooks) below.
+
 4. **Install behavior:** System. **Detection rule:** keep the MSI product
    code rule Intune fills in automatically from the package.
 
@@ -45,3 +50,28 @@ editing the install command.
 
 Upgrades re-run the same install command, so assignments configured with
 supersedence carry the configuration forward automatically.
+
+## Removing the audit hooks
+
+`hook-install` has no uninstall command, so uninstalling the MSI stops future
+convergence but leaves the hooks already written into each user's agent
+configuration. Removing them is a per-user, per-device edit that Intune cannot
+make on its own; run it as a remediation script, or have each user run it.
+
+Every entry Obot Sentry writes is marked with `--managed-by obot-sentry`. The
+managed files (`%USERPROFILE%` and `%APPDATA%` resolve per user) are:
+
+- `%USERPROFILE%\.copilot\hooks\obot-sentry.json` — written only by Obot
+  Sentry; delete the whole file.
+- `%USERPROFILE%\.claude\settings.json`,
+  `%ProgramData%\OpenAI\Codex\requirements.toml`, and
+  `%ProgramData%\Cursor\hooks.json` — shared files; delete only the hook
+  entries whose command contains `--managed-by obot-sentry` (the two
+  `%ProgramData%` files are machine-wide and need an elevated context).
+- `%APPDATA%\Code\User\settings.json` — remove the keys Obot Sentry added under
+  `chat.hookFilesLocations` (`~/.copilot/hooks`, `.claude/settings.json`,
+  `.claude/settings.local.json`, `~/.claude/settings.json`).
+
+Restart the agents afterward to drop the hooks. The standalone-binary
+`INSTRUCTIONS.md` in the manual configuration includes ready-to-run PowerShell
+for locating and deleting these entries.

@@ -42,6 +42,37 @@ MDM stores: `HKLM\SOFTWARE\Obot\obot-sentry` on Windows; `/Library/Managed Prefe
 changing hook files if the package has not installed a usable executable at
 that location.
 
+## Removing the hooks
+
+`hook-install` has no uninstall subcommand, and neither packaging path
+removes the hook configuration it writes: on Windows `msiexec /x` unregisters
+the scheduled tasks but leaves the hooks already written into agent config
+files, and on macOS there is no automated removal at all. Remove the hooks by
+hand from each agent's configuration.
+
+Every entry Obot Sentry writes carries the `--managed-by obot-sentry` marker
+— the same signal `hook-install` uses to recognize and replace its own entries
+on each run — so it is also how you identify what to delete. The managed files
+are:
+
+| Agent | macOS | Windows |
+|---|---|---|
+| Claude Code | `~/.claude/settings.json` | `%USERPROFILE%\.claude\settings.json` |
+| Codex | `/etc/codex/requirements.toml` | `%ProgramData%\OpenAI\Codex\requirements.toml` |
+| Copilot (VS Code) hook | `~/.copilot/hooks/obot-sentry.json` | `%USERPROFILE%\.copilot\hooks\obot-sentry.json` |
+| Cursor | `/Library/Application Support/Cursor/hooks.json` | `%ProgramData%\Cursor\hooks.json` |
+| VS Code settings | `~/Library/Application Support/Code/User/settings.json` | `%APPDATA%\Code\User\settings.json` |
+
+The Copilot hook file is written solely by Obot Sentry, so it can be deleted
+outright. The other four are shared with your own configuration: delete only
+the hook entries whose command contains `--managed-by obot-sentry`, and in the
+VS Code settings file also remove the `chat.hookFilesLocations` keys Obot
+Sentry added (`~/.copilot/hooks`, `.claude/settings.json`,
+`.claude/settings.local.json`, `~/.claude/settings.json`). The user-scoped
+files exist once per signed-in user, so repeat for each user on a shared
+machine. Restart the agents afterward to drop the hooks. Per-OS commands are in
+the `INSTRUCTIONS.md` for each configuration under `build/`.
+
 ## MDM packaging
 
 Everything MDM-related lives in `build/`, one directory per OS with the

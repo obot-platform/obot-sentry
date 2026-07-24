@@ -31,6 +31,10 @@ Start-ScheduledTask -TaskName 'Obot Sentry Scan'
 msiexec /x "obot-sentry.msi" /qn
 ```
 
+This unregisters the scheduled tasks but leaves the hook configuration the
+tasks already wrote into each user's agent files. Remove it with the steps in
+[Remove the hooks](#remove-the-hooks) below.
+
 ## Standalone binary (Alternate)
 
 Manually install `obot-sentry.exe` to run one-off scans or install hooks
@@ -72,8 +76,8 @@ By default, scans are submitted at most once every {{.scanIntervalMinutes}} minu
 
 ### Uninstall
 
-Remove the binary, the configuration, and the device identity and scan
-state:
+Remove the hooks (see [Remove the hooks](#remove-the-hooks) below), then remove
+the binary, the configuration, and the device identity and scan state:
 
 ```powershell
 Remove-Item -Recurse -Force "C:\Program Files\Obot\obot-sentry" -ErrorAction SilentlyContinue
@@ -81,3 +85,45 @@ Remove-Item -Recurse -Force "HKLM:\SOFTWARE\Obot\obot-sentry" -ErrorAction Silen
 Remove-Item -Recurse -Force "$env:ProgramData\obot\obot-sentry" -ErrorAction SilentlyContinue
 Remove-Item -Recurse -Force "$env:LOCALAPPDATA\obot\obot-sentry" -ErrorAction SilentlyContinue
 ```
+
+## Remove the hooks
+
+`hook-install` has no uninstall command, so its hook configuration must be
+removed by hand — the MSI uninstall and the cleanup above do not touch it.
+Every entry it writes is marked with `--managed-by obot-sentry`. Find the files
+that still carry one:
+
+```powershell
+Get-ChildItem -Recurse -File -ErrorAction SilentlyContinue `
+  "$env:USERPROFILE\.claude","$env:USERPROFILE\.copilot", `
+  "$env:APPDATA\Code\User","$env:ProgramData\OpenAI\Codex","$env:ProgramData\Cursor" |
+  Select-String -List 'managed-by obot-sentry' | Select-Object -ExpandProperty Path
+```
+
+Then clean up each agent:
+
+- **Copilot (VS Code) hook** — this file is written only by Obot Sentry, so
+  delete it:
+
+  ```powershell
+  Remove-Item -Force "$env:USERPROFILE\.copilot\hooks\obot-sentry.json" -ErrorAction SilentlyContinue
+  ```
+
+- **Claude Code** (`%USERPROFILE%\.claude\settings.json`), **Codex**
+  (`%ProgramData%\OpenAI\Codex\requirements.toml`), and **Cursor**
+  (`%ProgramData%\Cursor\hooks.json`) — open each file and delete every hook
+  entry whose command contains `--managed-by obot-sentry`, leaving any of your
+  own hooks in place. In the Codex file you can also drop `hooks = true` under
+  `[features]` if Obot Sentry was the only reason hooks were enabled. The two
+  `%ProgramData%` files are machine-wide, so edit them in an Administrator
+  PowerShell.
+
+- **VS Code settings** (`%APPDATA%\Code\User\settings.json`) — under
+  `chat.hookFilesLocations`, remove the keys Obot Sentry added
+  (`~/.copilot/hooks`, `.claude/settings.json`, `.claude/settings.local.json`,
+  `~/.claude/settings.json`); delete the whole `chat.hookFilesLocations` object
+  if you had no other entries in it.
+
+The per-user files (`.claude`, `.copilot`, VS Code settings) exist once per
+signed-in user, so repeat for each user on a shared machine. Restart Claude
+Code, Codex, VS Code, and Cursor afterward to drop the hooks.
