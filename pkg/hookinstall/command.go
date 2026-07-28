@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	"github.com/obot-platform/obot-sentry/pkg/localagent"
 )
 
 // hookTimeout is the per-hook timeout, in seconds, written into every managed
@@ -19,6 +21,27 @@ const (
 	packagedDarwinExecutable  = "/usr/local/bin/obot-sentry"
 	packagedWindowsExecutable = `C:\Program Files\Obot\obot-sentry\obot-sentry.exe`
 )
+
+const (
+	// managedByFlag is the flag that marks a hook command as obot-sentry-owned. It is
+	// accepted (and ignored) by `obot-sentry audit submit` precisely so the installer
+	// can recognize and replace its own entries on every run.
+	managedByFlag = "--managed-by"
+	// managedByValue is the sole accepted marker value.
+	managedByValue = "obot-sentry"
+	// managedMarker is the exact token pair every command this package generates
+	// carries, and the signal used to recognize obot-sentry-owned entries.
+	managedMarker = managedByFlag + " " + managedByValue
+)
+
+// isOwnedCommand reports whether command is an obot-sentry-managed hook command,
+// identified by the `--managed-by obot-sentry` marker. Any command without the marker
+// is left untouched. A substring check is sufficient because every command this
+// package writes carries the marker in exactly this form; there are no
+// pre-existing obot-sentry-owned hook configurations in other layouts to recognize.
+func isOwnedCommand(command string) bool {
+	return strings.Contains(command, managedMarker)
+}
 
 // phase names the hook lifecycle point. These are the exact `--phase` argument
 // values accepted by `obot-sentry audit submit`.
@@ -34,7 +57,7 @@ const (
 // sole ownership signal used during convergence. No server URL, enrollment
 // credential, input-mutation, or debug flag is ever included; hook execution
 // owns per-user enrollment and fail-open submission.
-func commandArgs(agent Agent, p phase) []string {
+func commandArgs(agent localagent.Agent, p phase) []string {
 	return []string{
 		"audit", "submit",
 		"--agent", string(agent),
@@ -43,15 +66,25 @@ func commandArgs(agent Agent, p phase) []string {
 	}
 }
 
+func enforceCommandArgs(agent localagent.Agent, event string) []string {
+	return []string{
+		"enforce",
+		"--agent", string(agent),
+		"--event", event,
+		managedByFlag, managedByValue,
+	}
+}
+
 // windowsUsesCallOperator reports whether an agent's Windows command runner
 // requires the PowerShell call operator (`& "..."`) prefix. Codex and VS Code
 // do; Claude Code and Cursor invoke the double-quoted executable directly.
-func windowsUsesCallOperator(agent Agent) bool {
-	return agent == AgentCodex || agent == AgentVSCode
+func windowsUsesCallOperator(agent localagent.Agent) bool {
+	return agent == localagent.Codex || agent == localagent.VSCode
 }
 
-// hookCommand renders the full hook command string for one agent/phase on goos,
-// quoting the executable for the correct command runner:
+// hookCommand renders the full hook command string for one agent on goos from
+// already-built arguments (commandArgs or enforceCommandArgs), quoting the
+// executable for the correct command runner:
 //
 //   - non-Windows: POSIX-shell quoting (single-quote only when needed for
 //     spaces, apostrophes, or other unsafe characters), so any path stays one
@@ -59,8 +92,8 @@ func windowsUsesCallOperator(agent Agent) bool {
 //   - Windows Claude Code / Cursor: a double-quoted executable, invoked directly.
 //   - Windows Codex / VS Code: the same double-quoted executable prefixed with
 //     the PowerShell call operator `& `.
-func hookCommand(exe, goos string, agent Agent, p phase) string {
-	args := strings.Join(commandArgs(agent, p), " ")
+func hookCommand(exe, goos string, agent localagent.Agent, argv []string) string {
+	args := strings.Join(argv, " ")
 	if goos == "windows" {
 		quoted := quoteWindows(exe)
 		if windowsUsesCallOperator(agent) {
@@ -89,7 +122,7 @@ func posixSafe(r rune) bool {
 // quotePOSIX renders s as a single POSIX-shell token. Paths made up entirely of
 // shell-safe characters are returned verbatim; anything else (spaces,
 // apostrophes, Unicode, shell metacharacters) is wrapped in single quotes with
-// embedded single quotes escaped via the "'\\''" idiom.
+// embedded and escaped single quotes.
 func quotePOSIX(s string) string {
 	if s != "" {
 		safe := true

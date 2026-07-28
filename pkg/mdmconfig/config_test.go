@@ -89,3 +89,74 @@ func TestScanInterval(t *testing.T) {
 		}
 	}
 }
+
+func TestFromSource_EnforcementEnabled(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		value   string
+		present bool
+		want    bool
+	}{
+		{"plist bool / REG_DWORD 1", "1", true, true},
+		{"REG_DWORD 0", "0", true, false},
+		{"REG_SZ true", "true", true, true},
+		{"REG_SZ false", "false", true, false},
+		{"mixed case", "TRUE", true, true},
+		{"yes", "yes", true, true},
+		{"no", "no", true, false},
+		{"on", "on", true, true},
+		{"off", "off", true, false},
+		{"padded", "  true  ", true, true},
+		{"junk reads as absent", "sometimes", false, false},
+		{"empty reads as absent", "", false, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, err := FromSource(mapSource{KeyEnforcementEnabled: tt.value})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tt.present {
+				if cfg.EnforcementEnabled == nil {
+					t.Fatalf("EnforcementEnabled = nil, want %v", tt.want)
+				}
+				if *cfg.EnforcementEnabled != tt.want {
+					t.Errorf("EnforcementEnabled = %v, want %v", *cfg.EnforcementEnabled, tt.want)
+				}
+			} else if cfg.EnforcementEnabled != nil {
+				t.Errorf("EnforcementEnabled = %v, want absent", *cfg.EnforcementEnabled)
+			}
+			if got := cfg.Enforcement(); got != tt.want {
+				t.Errorf("Enforcement() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestMerge_EnforcementEnabled(t *testing.T) {
+	ptr := func(b bool) *bool { return &b }
+
+	for _, tt := range []struct {
+		name     string
+		high     *bool
+		fallback *bool
+		want     *bool
+	}{
+		{"flag off beats MDM on", ptr(false), ptr(true), ptr(false)},
+		{"flag on beats MDM off", ptr(true), ptr(false), ptr(true)},
+		{"absent takes the MDM value", nil, ptr(true), ptr(true)},
+		{"absent takes MDM off", nil, ptr(false), ptr(false)},
+		{"absent everywhere stays absent", nil, nil, nil},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got := Config{EnforcementEnabled: tt.high}.Merge(Config{EnforcementEnabled: tt.fallback})
+			switch {
+			case tt.want == nil && got.EnforcementEnabled != nil:
+				t.Fatalf("EnforcementEnabled = %v, want absent", *got.EnforcementEnabled)
+			case tt.want != nil && got.EnforcementEnabled == nil:
+				t.Fatalf("EnforcementEnabled = nil, want %v", *tt.want)
+			case tt.want != nil && *got.EnforcementEnabled != *tt.want:
+				t.Errorf("EnforcementEnabled = %v, want %v", *got.EnforcementEnabled, *tt.want)
+			}
+		})
+	}
+}

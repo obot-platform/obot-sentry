@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/obot-platform/obot-sentry/pkg/toolkind"
 	"github.com/obot-platform/obot-sentry/pkg/version"
 )
 
@@ -215,44 +216,40 @@ func occurredAt(event nativeEvent, now func() time.Time) time.Time {
 	return now().UTC()
 }
 
+// classifyTool derives the audit entry's tool kind, MCP server hint, and MCP
+// tool name from a runtime tool name. The kind heuristics are shared with
+// pkg/enforce via pkg/toolkind; the server-hint rules below are audit's own and
+// deliberately differ from enforcement's (which resolves a server for VS Code
+// too).
 func classifyTool(agent Agent, name string) (kind, server, tool string) {
-	lower := strings.ToLower(name)
+	kind = toolkind.Kind(name)
+	if kind != toolkind.KindMCP {
+		return kind, "", ""
+	}
 
 	// MCP tool names are agent-specific. Claude Code and Codex document the
 	// mcp__<server>__<tool> convention, so only those providers yield a server
 	// hint. Cursor and VS Code do not expose a reliable server name in their
 	// generic tool-hook names.
-	if strings.HasPrefix(lower, "mcp__") {
-		parts := strings.SplitN(name[len("mcp__"):], "__", 2)
-		if len(parts) == 2 {
-			if agent == AgentClaudeCode || agent == AgentCodex {
-				return "mcp", parts[0], parts[1]
-			}
-			return "mcp", "", parts[1]
-		}
-		return "mcp", "", ""
-	}
-	if strings.HasPrefix(lower, "mcp:") {
-		return "mcp", "", name[len("MCP:"):]
-	}
-	if strings.HasPrefix(lower, "mcp_") {
-		parts := strings.SplitN(name[len("mcp_"):], "_", 2)
-		if len(parts) == 2 {
-			return "mcp", "", parts[1]
-		}
-		return "mcp", "", ""
-	}
+	lower := strings.ToLower(name)
 	switch {
-	case lower == "bash" || lower == "shell" || strings.Contains(lower, "shell") || lower == "run_in_terminal":
-		return "shell", "", ""
-	case strings.Contains(lower, "read"):
-		return "read", "", ""
-	case strings.Contains(lower, "write") || strings.Contains(lower, "edit"):
-		return "write", "", ""
-	case strings.Contains(lower, "task"):
-		return "task", "", ""
-	default:
-		return "generic", "", ""
+	case strings.HasPrefix(lower, "mcp__"):
+		parts := strings.SplitN(name[len("mcp__"):], "__", 2)
+		if len(parts) != 2 {
+			return kind, "", ""
+		}
+		if agent == AgentClaudeCode || agent == AgentCodex {
+			return kind, parts[0], parts[1]
+		}
+		return kind, "", parts[1]
+	case strings.HasPrefix(lower, "mcp:"):
+		return kind, "", name[len("MCP:"):]
+	default: // mcp_<server>_<tool>
+		parts := strings.SplitN(name[len("mcp_"):], "_", 2)
+		if len(parts) != 2 {
+			return kind, "", ""
+		}
+		return kind, "", parts[1]
 	}
 }
 

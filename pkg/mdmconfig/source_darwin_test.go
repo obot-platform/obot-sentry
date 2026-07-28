@@ -58,3 +58,35 @@ func TestPlistSource_MissingFilesNotAnError(t *testing.T) {
 		t.Errorf("expected zero config, got %+v", cfg)
 	}
 }
+
+func TestPlistSource_BooleanPayload(t *testing.T) {
+	for _, enc := range []struct {
+		name   string
+		format int
+	}{
+		{"xml", plist.XMLFormat},
+		{"binary", plist.BinaryFormat},
+	} {
+		t.Run(enc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			if err := plist.NewEncoderForFormat(&buf, enc.format).Encode(map[string]any{
+				KeyServerURL:          "https://obot.example.com",
+				KeyEnforcementEnabled: true,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			p := filepath.Join(t.TempDir(), "com.obot.obot-sentry.plist")
+			if err := os.WriteFile(p, buf.Bytes(), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			cfg, err := FromSource(plistSource{paths: []string{p}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !cfg.Enforcement() {
+				t.Errorf("Enforcement() = false, want true from a plist boolean")
+			}
+		})
+	}
+}

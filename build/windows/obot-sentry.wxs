@@ -33,6 +33,7 @@
     <Property Id="SERVER_URL" Secure="yes" />
     <Property Id="ENROLLMENT_KEY" Secure="yes" />
     <Property Id="SCAN_INTERVAL_MINUTES" Secure="yes" />
+    <Property Id="ENFORCEMENT" Value="0" Secure="yes" />
 
     <Launch Condition="SERVER_URL OR REMOVE~=&quot;ALL&quot;"
             Message="The SERVER_URL property is required (obot server base URL). Install with the completed command from INSTRUCTIONS.md." />
@@ -70,6 +71,10 @@
               <RegistryValue Name="ServerURL" Type="string" Value="[SERVER_URL]" KeyPath="yes" />
               <RegistryValue Name="EnrollmentKey" Type="string" Value="[ENROLLMENT_KEY]" />
               <RegistryValue Name="ScanIntervalMinutes" Type="string" Value="[SCAN_INTERVAL_MINUTES]" />
+              <!-- REG_DWORD, the form an MDM registry policy pushes. The reader
+                   accepts a REG_SZ too, so an administrator can set this by hand
+                   as 1/0 or true/false. -->
+              <RegistryValue Name="EnforcementEnabled" Type="integer" Value="[ENFORCEMENT]" />
             </RegistryKey>
           </Component>
         </Directory>

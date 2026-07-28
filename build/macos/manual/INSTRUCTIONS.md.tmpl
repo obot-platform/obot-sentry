@@ -17,6 +17,7 @@ yourself.
    sudo defaults write /Library/Preferences/com.obot.obot-sentry ServerURL -string "{{.serverURL}}"
    sudo defaults write /Library/Preferences/com.obot.obot-sentry EnrollmentKey -string "REPLACE_WITH_ENROLLMENT_KEY"
    sudo defaults write /Library/Preferences/com.obot.obot-sentry ScanIntervalMinutes -string "{{.scanIntervalMinutes}}"
+   sudo defaults write /Library/Preferences/com.obot.obot-sentry EnforcementEnabled -bool {{if .enforcementEnabled}}true{{else}}false{{end}}
    ```
 
 3. Enroll the device:
@@ -39,9 +40,39 @@ By default, scans are submitted at most once every {{.scanIntervalMinutes}} minu
 ## Install hooks
 
 ```sh
-sudo obot-sentry hook-install
+sudo obot-sentry hook-install{{if .enforcementEnabled}} --enforce{{end}}
+```
+{{if .enforcementEnabled}}
+Enforcement is on for this configuration, so `hook-install` also installs the
+pre-tool hooks that check every tool call against your fleet's allowlist. Read
+[Tool-call enforcement](#tool-call-enforcement) before running it: from that
+point on, tool calls this device cannot get a verdict for are blocked.
+
+## Tool-call enforcement
+
+Each tool call in Claude Code, Codex, and Cursor is checked against your fleet's
+allowlist before it runs. The check is a single request to Obot, and it is
+**fail-closed**: if Obot cannot be reached, the device is not enrolled, or the
+hook cannot tell which MCP server a call targets, the call is blocked.
+
+- Blocking a call never *approves* one. Your agents' own approval prompts still
+  apply to everything that is allowed.
+- Visual Studio Code is not supported for enforcement. Its audit hook is unaffected.
+- An MCP server can be allowlisted by URL, by its `npx`/`uvx` package, or — for a
+  claude.ai connector — by display name. A stdio server started from a local
+  executable path presents none of those, so it cannot be allowlisted and is
+  blocked by design.
+
+To see what this machine reports for a server, and why:
+
+```sh
+obot-sentry enforce resolve --agent claude-code --server <server-name>
 ```
 
+Turning enforcement off in Obot stops the blocking immediately — the server
+allows every call for a fleet with enforcement disabled — even before the hooks
+themselves are removed.
+{{end}}
 ## Remove the hooks
 
 `hook-install` has no uninstall command, so its hook configuration must be
@@ -68,9 +99,11 @@ Then clean up each agent:
   (`/etc/codex/requirements.toml`, edit with `sudo`), and **Cursor**
   (`/Library/Application Support/Cursor/hooks.json`, edit with `sudo`) — open
   each file and delete every hook entry whose command contains `--managed-by
-  obot-sentry`, leaving any of your own hooks in place. In the Codex file you
-  can also drop `hooks = true` under `[features]` if Obot Sentry was the only
-  reason hooks were enabled.
+  obot-sentry`, leaving any of your own hooks in place. In the Codex file Obot
+  Sentry also pins two values under `[features]`: `hooks = true`, which you can
+  drop if Obot Sentry was the only reason hooks were enabled, and
+  `non_prefixed_mcp_tool_names = false`, which you can drop if you want that
+  Codex feature available again.
 
 - **VS Code settings** (`~/Library/Application Support/Code/User/settings.json`)
   — under `chat.hookFilesLocations`, remove the keys Obot Sentry added

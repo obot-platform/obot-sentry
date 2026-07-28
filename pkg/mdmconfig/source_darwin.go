@@ -49,6 +49,8 @@ func (s plistSource) Read() (map[string]string, error) {
 				out[k] = strconv.FormatInt(value, 10)
 			case uint64:
 				out[k] = strconv.FormatUint(value, 10)
+			case bool:
+				out[k] = strconv.FormatBool(value)
 			}
 		}
 		return out, nil

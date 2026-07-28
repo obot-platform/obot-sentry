@@ -1,0 +1,17 @@
+{
+  "conversation_id": "2c9ac701-febc-4602-9627-92f5392d14c3",
+  "generation_id": "5ddc57a3-e208-46d7-a53d-5ea76925cd60",
+  "model": "composer-2.5",
+  "tool_name": "MCP:echo",
+  "tool_input": {
+    "message": "hello-stdio-npx"
+  },
+  "tool_use_id": "5660919d-028c-48c7-8299-5d5ad5636cd8",
+  "session_id": "2c9ac701-febc-4602-9627-92f5392d14c3",
+  "hook_event_name": "preToolUse",
+  "cursor_version": "3.12.30",
+  "workspace_roots": [
+    "/Users/dev/probe-workspace"
+  ],
+  "transcript_path": null
+}

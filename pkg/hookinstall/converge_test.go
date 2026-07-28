@@ -3,12 +3,14 @@ package hookinstall
 import (
 	"strings"
 	"testing"
+
+	"github.com/obot-platform/obot-sentry/pkg/localagent"
 )
 
 // destFor returns the darwin destination for an agent, used to drive mergeConfig
 // through its format/agent dispatch exactly as Run does. The two vscode
 // destinations are disambiguated by format.
-func destFor(t *testing.T, agent Agent, format Format) Destination {
+func destFor(t *testing.T, agent localagent.Agent, format Format) Destination {
 	t.Helper()
 	for _, d := range Destinations("darwin") {
 		if d.Agent == agent && d.Format == format {
@@ -22,7 +24,7 @@ func destFor(t *testing.T, agent Agent, format Format) Destination {
 // mergeOnce runs one merge for a destination and fails on error.
 func mergeOnce(t *testing.T, d Destination, existing []byte) mergeOutcome {
 	t.Helper()
-	o, err := mergeConfig(d, existing, macExe, "darwin")
+	o, err := mergeConfig(d, existing, macExe, "darwin", false)
 	if err != nil {
 		t.Fatalf("mergeConfig(%s): %v", d.Label, err)
 	}
@@ -34,13 +36,13 @@ func mergeOnce(t *testing.T, d Destination, existing []byte) mergeOutcome {
 func TestMergeNewFileMatchesGolden(t *testing.T) {
 	cases := []struct {
 		name   string
-		agent  Agent
+		agent  localagent.Agent
 		format Format
 		golden string
 	}{
-		{"claude", AgentClaudeCode, FormatJSON, claudeDarwinGolden},
-		{"cursor", AgentCursor, FormatJSON, cursorDarwinGolden},
-		{"vscode hook", AgentVSCode, FormatJSON, vscodeDarwinGolden},
+		{"claude", localagent.ClaudeCode, FormatJSON, claudeDarwinGolden},
+		{"cursor", localagent.Cursor, FormatJSON, cursorDarwinGolden},
+		{"vscode hook", localagent.VSCode, FormatJSON, vscodeDarwinGolden},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -59,11 +61,11 @@ func TestMergeNewFileMatchesGolden(t *testing.T) {
 // freshly written document again reports unchanged and does not rewrite it.
 func TestMergeIdempotentAcrossAgents(t *testing.T) {
 	dests := []Destination{
-		destFor(t, AgentClaudeCode, FormatJSON),
-		destFor(t, AgentCursor, FormatJSON),
-		destFor(t, AgentVSCode, FormatJSON),
-		destFor(t, AgentVSCode, FormatJSONC),
-		destFor(t, AgentCodex, FormatTOML),
+		destFor(t, localagent.ClaudeCode, FormatJSON),
+		destFor(t, localagent.Cursor, FormatJSON),
+		destFor(t, localagent.VSCode, FormatJSON),
+		destFor(t, localagent.VSCode, FormatJSONC),
+		destFor(t, localagent.Codex, FormatTOML),
 	}
 	for _, d := range dests {
 		t.Run(d.Label, func(t *testing.T) {
@@ -99,7 +101,7 @@ func TestMergePreservesThirdPartyAndReplacesStale(t *testing.T) {
     ]
   }
 }`
-	o := mergeOnce(t, destFor(t, AgentCursor, FormatJSON), []byte(src))
+	o := mergeOnce(t, destFor(t, localagent.Cursor, FormatJSON), []byte(src))
 	if o.status != StatusUpdated {
 		t.Fatalf("status = %q, want updated", o.status)
 	}
@@ -133,7 +135,7 @@ func TestMergeExistingFileWithoutOwnedIsInstalled(t *testing.T) {
     ]
   }
 }`
-	o := mergeOnce(t, destFor(t, AgentClaudeCode, FormatJSON), []byte(src))
+	o := mergeOnce(t, destFor(t, localagent.ClaudeCode, FormatJSON), []byte(src))
 	if o.status != StatusInstalled {
 		t.Fatalf("status = %q, want installed", o.status)
 	}
@@ -146,7 +148,7 @@ func TestMergeExistingFileWithoutOwnedIsInstalled(t *testing.T) {
 // reported as an error rather than silently overwritten.
 func TestMergeIncompatibleHooksTypeRejected(t *testing.T) {
 	src := `{"hooks": "not an object"}`
-	if _, err := mergeConfig(destFor(t, AgentClaudeCode, FormatJSON), []byte(src), macExe, "darwin"); err == nil {
+	if _, err := mergeConfig(destFor(t, localagent.ClaudeCode, FormatJSON), []byte(src), macExe, "darwin", false); err == nil {
 		t.Fatal("expected an error for an incompatible hooks type")
 	}
 }
@@ -154,10 +156,10 @@ func TestMergeIncompatibleHooksTypeRejected(t *testing.T) {
 // TestMergeMalformedRejected proves a malformed document aborts rather than
 // being treated as empty.
 func TestMergeMalformedRejected(t *testing.T) {
-	if _, err := mergeConfig(destFor(t, AgentCursor, FormatJSON), []byte(`{"hooks":`), macExe, "darwin"); err == nil {
+	if _, err := mergeConfig(destFor(t, localagent.Cursor, FormatJSON), []byte(`{"hooks":`), macExe, "darwin", false); err == nil {
 		t.Fatal("expected malformed JSON to be rejected")
 	}
-	if _, err := mergeConfig(destFor(t, AgentCodex, FormatTOML), []byte(`x = = 1`), macExe, "darwin"); err == nil {
+	if _, err := mergeConfig(destFor(t, localagent.Codex, FormatTOML), []byte(`x = = 1`), macExe, "darwin", false); err == nil {
 		t.Fatal("expected malformed TOML to be rejected")
 	}
 }
@@ -173,7 +175,7 @@ func TestMergeVSCodeSettingsConverges(t *testing.T) {
     "~/.copilot/hooks": false
   }
 }`
-	d := destFor(t, AgentVSCode, FormatJSONC)
+	d := destFor(t, localagent.VSCode, FormatJSONC)
 	o := mergeOnce(t, d, []byte(src))
 	if o.status != StatusUpdated {
 		t.Fatalf("status = %q, want updated", o.status)
@@ -203,7 +205,7 @@ func TestMergeVSCodeSettingsConverges(t *testing.T) {
 // a stale owned entry and preserving unrelated tables, and is unchanged on a
 // second pass.
 func TestMergeCodexConvergesMatchesGolden(t *testing.T) {
-	d := destFor(t, AgentCodex, FormatTOML)
+	d := destFor(t, localagent.Codex, FormatTOML)
 	o := mergeOnce(t, d, []byte(codexFixture))
 	if o.status != StatusUpdated {
 		t.Fatalf("status = %q, want updated (a stale owned entry was present)", o.status)
@@ -220,7 +222,7 @@ func TestMergeCodexConvergesMatchesGolden(t *testing.T) {
 // survive template generation and serialization for a fresh install on windows.
 func TestMergeWindowsCommandsSurvive(t *testing.T) {
 	dests := Destinations("windows")
-	find := func(agent Agent, format Format) Destination {
+	find := func(agent localagent.Agent, format Format) Destination {
 		for _, d := range dests {
 			if d.Agent == agent && d.Format == format {
 				return d
@@ -230,7 +232,7 @@ func TestMergeWindowsCommandsSurvive(t *testing.T) {
 		return Destination{}
 	}
 	// VS Code hook uses the PowerShell call operator.
-	vs, err := mergeConfig(find(AgentVSCode, FormatJSON), nil, winExe, "windows")
+	vs, err := mergeConfig(find(localagent.VSCode, FormatJSON), nil, winExe, "windows", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -238,7 +240,7 @@ func TestMergeWindowsCommandsSurvive(t *testing.T) {
 		t.Fatalf("vscode windows call operator not preserved:\n%s", vs.data)
 	}
 	// Cursor uses a directly quoted executable, no call operator.
-	cur, err := mergeConfig(find(AgentCursor, FormatJSON), nil, winExe, "windows")
+	cur, err := mergeConfig(find(localagent.Cursor, FormatJSON), nil, winExe, "windows", false)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -72,7 +72,7 @@ func (a *Agent) EnsureEnrolled(ctx context.Context) (*identity.Identity, state.S
 	now := time.Now().UTC()
 	st.DeviceID = id.DeviceID
 	st.ServerURL = serverURL
-	st.MDMDeploymentID = device.MDMDeploymentID
+	st.MDMDeploymentID = device.MDMConfigurationID
 	st.PublicKeyFingerprint = id.PublicKeyFingerprint()
 	st.EnrolledAt = &now
 	if err := st.Save(a.DataDir); err != nil {

@@ -52,18 +52,25 @@ func encodeCodexTOML(m codexTOMLDoc) ([]byte, error) {
 	return b.Bytes(), nil
 }
 
-// setCodexFeatureHooks forces [features].hooks = true, creating the [features]
-// table if absent. This single operation covers replacing an existing
-// hooks = false, inserting into an existing table, and creating the table. It
-// errors when an existing "features" value is not a table.
-func setCodexFeatureHooks(m codexTOMLDoc) error {
-	switch feats := m["features"].(type) {
-	case nil:
-		m["features"] = map[string]any{"hooks": true}
-	case map[string]any:
-		feats["hooks"] = true
-	default:
-		return fmt.Errorf("codex [features] is %T, want a table", feats)
+// setCodexFeaturePins forces each pinned [features] value, creating the
+// [features] table if absent. One operation covers replacing a value the user
+// set, inserting into an existing table, and creating the table. It errors when
+// an existing "features" value is not a table.
+//
+// Only the pinned keys are touched: any other feature the user has configured is
+// left exactly as it is, because obot-sentry has no business deciding the rest of
+// their Codex configuration.
+func setCodexFeaturePins(m codexTOMLDoc, pins []codexFeaturePin) error {
+	feats, ok := m["features"].(map[string]any)
+	if !ok {
+		if m["features"] != nil {
+			return fmt.Errorf("codex [features] is %T, want a table", m["features"])
+		}
+		feats = make(map[string]any, len(pins))
+		m["features"] = feats
+	}
+	for _, pin := range pins {
+		feats[pin.Key] = pin.Value
 	}
 	return nil
 }
@@ -100,7 +107,7 @@ func tableSlice(v any) ([]map[string]any, error) {
 func filterOwnedInnerHooks(inner []map[string]any) (removed int, kept []map[string]any) {
 	kept = inner[:0]
 	for _, h := range inner {
-		if cmd, ok := h["command"].(string); ok && IsOwnedCommand(cmd) {
+		if cmd, ok := h["command"].(string); ok && isOwnedCommand(cmd) {
 			removed++
 			continue
 		}
@@ -109,14 +116,14 @@ func filterOwnedInnerHooks(inner []map[string]any) (removed int, kept []map[stri
 	return removed, kept
 }
 
-// codexDesiredGroups converts the typed Codex desired state into the decoded
-// map shape appended to the hooks.<event> array-of-tables. Integer values use
-// int64 to match how BurntSushi decodes a re-read document, so the appended
-// group is byte-stable across a decode/re-encode cycle. command_windows is only
-// present when the desired hook set it (Windows).
-func codexDesiredGroups(d codexDesired) []map[string]any {
-	groups := make([]map[string]any, 0, len(d.PostToolUse))
-	for _, g := range d.PostToolUse {
+// codexDesiredGroups converts typed Codex hook groups into the decoded map shape
+// appended to one hooks.<event> array-of-tables. Integer values use int64 to
+// match how BurntSushi decodes a re-read document, so the appended group is
+// byte-stable across a decode/re-encode cycle. command_windows is only present
+// when the desired hook set it (Windows).
+func codexDesiredGroups(desired []codexHookGroup) []map[string]any {
+	groups := make([]map[string]any, 0, len(desired))
+	for _, g := range desired {
 		inner := make([]map[string]any, 0, len(g.Hooks))
 		for _, h := range g.Hooks {
 			hm := map[string]any{

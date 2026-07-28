@@ -24,7 +24,7 @@ func (registrySource) Read() (map[string]string, error) {
 	defer k.Close()
 
 	out := map[string]string{}
-	for _, name := range []string{KeyServerURL, KeyEnrollmentKey, KeyScanIntervalMinutes} {
+	for _, name := range []string{KeyServerURL, KeyEnrollmentKey, KeyScanIntervalMinutes, KeyEnforcementEnabled} {
 		// The MSI writes REG_SZ, but MDM custom registry policies often
 		// push numbers as REG_DWORD — accept both.
 		if v, _, err := k.GetStringValue(name); err == nil {

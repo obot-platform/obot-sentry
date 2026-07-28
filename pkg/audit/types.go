@@ -5,15 +5,19 @@ package audit
 import (
 	"encoding/json"
 	"time"
+
+	"github.com/obot-platform/obot-sentry/pkg/localagent"
 )
 
-type Agent string
+// Agent is a type alias because it is currently too much work to replace all usages of
+// these constants in this package with localagent.Agent.
+type Agent = localagent.Agent
 
 const (
-	AgentClaudeCode Agent = "claude-code"
-	AgentCodex      Agent = "codex"
-	AgentVSCode     Agent = "vscode"
-	AgentCursor     Agent = "cursor"
+	AgentClaudeCode = localagent.ClaudeCode
+	AgentCodex      = localagent.Codex
+	AgentVSCode     = localagent.VSCode
+	AgentCursor     = localagent.Cursor
 )
 
 type Phase string

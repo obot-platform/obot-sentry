@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/obot-platform/obot-sentry/pkg/localagent"
 )
 
 func TestProcessCodexPostToolNormalizesCompletedEntry(t *testing.T) {
@@ -24,7 +26,7 @@ func TestProcessCodexPostToolNormalizesCompletedEntry(t *testing.T) {
 	}`)
 
 	result, err := Process(payload, ProcessOptions{
-		Agent: AgentCodex,
+		Agent: localagent.Codex,
 		Phase: PhasePostTool,
 		Now:   func() time.Time { return now },
 		Enrichment: &Enrichment{
@@ -70,7 +72,7 @@ func TestProcessCodexPostToolNormalizesCompletedEntry(t *testing.T) {
 	}
 
 	result2, err := Process(payload, ProcessOptions{
-		Agent:      AgentCodex,
+		Agent:      localagent.Codex,
 		Phase:      PhasePostTool,
 		Now:        func() time.Time { return now },
 		Enrichment: &Enrichment{},
@@ -87,7 +89,7 @@ func TestProcessPostToolWithoutOutputSubmitsNullOutput(t *testing.T) {
 	// A successful terminal event that reports no tool_response is still a
 	// completed tool call and must produce one entry with an explicit null
 	// output rather than being dropped.
-	for _, agent := range []Agent{AgentCodex, AgentClaudeCode, AgentVSCode} {
+	for _, agent := range []localagent.Agent{localagent.Codex, localagent.ClaudeCode, localagent.VSCode} {
 		t.Run(string(agent), func(t *testing.T) {
 			payload := []byte(`{
 				"session_id": "session-x",
@@ -125,7 +127,7 @@ func TestProcessCursorPostToolWithoutOutputSubmitsNullOutput(t *testing.T) {
 		"tool_input": {"command": "true"}
 	}`)
 	result, err := Process(payload, ProcessOptions{
-		Agent:      AgentCursor,
+		Agent:      localagent.Cursor,
 		Phase:      PhasePostTool,
 		Now:        func() time.Time { return time.Date(2026, 7, 7, 12, 0, 0, 0, time.UTC) },
 		Enrichment: &Enrichment{},
@@ -166,7 +168,7 @@ func TestProcessCursorAcceptsUTF8BOMFractionalDurationAndWindowsWorkspaceRoot(t 
 		"transcript_path": null
 	}`)...)
 	result, err := Process(payload, ProcessOptions{
-		Agent:      AgentCursor,
+		Agent:      localagent.Cursor,
 		Phase:      PhasePostTool,
 		Now:        fixedNow,
 		Enrichment: &Enrichment{CWD: "/fallback"},
@@ -205,7 +207,7 @@ func TestProcessInvalidPayloadWarningIncludesDecoderError(t *testing.T) {
 		"tool_input": {"command": "true"},
 		"duration": "not-a-number"
 	}`), ProcessOptions{
-		Agent:      AgentCursor,
+		Agent:      localagent.Cursor,
 		Phase:      PhasePostTool,
 		Enrichment: &Enrichment{},
 	})
@@ -230,7 +232,7 @@ func TestProcessVSCodeUsesPayloadTimestamp(t *testing.T) {
 		"tool_response": "ok"
 	}`)
 	result, err := Process(payload, ProcessOptions{
-		Agent:      AgentVSCode,
+		Agent:      localagent.VSCode,
 		Phase:      PhasePostTool,
 		Enrichment: &Enrichment{},
 	})
@@ -257,7 +259,7 @@ func TestProcessClaudePostToolUseNormalizesSingleToolEvent(t *testing.T) {
 		"tool_response": {"content": "hello"}
 	}`)
 	result, err := Process(payload, ProcessOptions{
-		Agent:      AgentClaudeCode,
+		Agent:      localagent.ClaudeCode,
 		Phase:      PhasePostTool,
 		Now:        fixedNow,
 		Enrichment: &Enrichment{},
@@ -294,7 +296,7 @@ func TestProcessFailureHooks(t *testing.T) {
 		"duration_ms": 4187
 	}`)
 	result, err := Process(claudePayload, ProcessOptions{
-		Agent:      AgentClaudeCode,
+		Agent:      localagent.ClaudeCode,
 		Phase:      PhaseFailure,
 		Now:        fixedNow,
 		Enrichment: &Enrichment{},
@@ -324,7 +326,7 @@ func TestProcessFailureHooks(t *testing.T) {
 		"cursor_version": "1.2.3"
 	}`)
 	result, err = Process(cursorPayload, ProcessOptions{
-		Agent:      AgentCursor,
+		Agent:      localagent.Cursor,
 		Phase:      PhaseFailure,
 		Now:        fixedNow,
 		Enrichment: &Enrichment{},
@@ -345,7 +347,7 @@ func TestProcessFailureHooks(t *testing.T) {
 
 	codexPayload := []byte(`{"tool_name":"Bash","tool_input":{"command":"false"}}`)
 	result, err = Process(codexPayload, ProcessOptions{
-		Agent:      AgentCodex,
+		Agent:      localagent.Codex,
 		Phase:      PhaseFailure,
 		Enrichment: &Enrichment{},
 	})
@@ -360,40 +362,40 @@ func TestProcessFailureHooks(t *testing.T) {
 func TestClassifyToolRecognizesAgentMCPPrefixes(t *testing.T) {
 	tests := []struct {
 		name       string
-		agent      Agent
+		agent      localagent.Agent
 		toolName   string
 		wantServer string
 		wantTool   string
 	}{
 		{
 			name:       "claude code extracts documented server segment",
-			agent:      AgentClaudeCode,
+			agent:      localagent.ClaudeCode,
 			toolName:   "mcp__github__search",
 			wantServer: "github",
 			wantTool:   "search",
 		},
 		{
 			name:       "codex extracts documented server segment",
-			agent:      AgentCodex,
+			agent:      localagent.Codex,
 			toolName:   "mcp__github__search",
 			wantServer: "github",
 			wantTool:   "search",
 		},
 		{
 			name:     "cursor generic tool hook",
-			agent:    AgentCursor,
+			agent:    localagent.Cursor,
 			toolName: "MCP:generate_bar_chart",
 			wantTool: "generate_bar_chart",
 		},
 		{
 			name:     "cursor never infers a server hint",
-			agent:    AgentCursor,
+			agent:    localagent.Cursor,
 			toolName: "mcp__server__tool",
 			wantTool: "tool",
 		},
 		{
 			name:     "vscode omits unreliable server hint",
-			agent:    AgentVSCode,
+			agent:    localagent.VSCode,
 			toolName: "mcp_mcp-server-ch_generate_bar_chart",
 			wantTool: "generate_bar_chart",
 		},
@@ -410,13 +412,13 @@ func TestClassifyToolRecognizesAgentMCPPrefixes(t *testing.T) {
 }
 
 func TestProcessRejectsUnsupportedAgentAndPhase(t *testing.T) {
-	if _, err := Process([]byte(`{}`), ProcessOptions{Agent: Agent("bad"), Phase: PhasePostTool}); err != ErrUnsupportedAgent {
+	if _, err := Process([]byte(`{}`), ProcessOptions{Agent: localagent.Agent("bad"), Phase: PhasePostTool}); err != ErrUnsupportedAgent {
 		t.Fatalf("expected ErrUnsupportedAgent, got %v", err)
 	}
-	if _, err := Process([]byte(`{}`), ProcessOptions{Agent: AgentCodex, Phase: Phase("permission")}); err != ErrUnsupportedPhase {
+	if _, err := Process([]byte(`{}`), ProcessOptions{Agent: localagent.Codex, Phase: Phase("permission")}); err != ErrUnsupportedPhase {
 		t.Fatalf("expected ErrUnsupportedPhase, got %v", err)
 	}
-	if _, err := Process([]byte(`{}`), ProcessOptions{Agent: AgentCodex, Phase: Phase("pre-tool")}); err != ErrUnsupportedPhase {
+	if _, err := Process([]byte(`{}`), ProcessOptions{Agent: localagent.Codex, Phase: Phase("pre-tool")}); err != ErrUnsupportedPhase {
 		t.Fatalf("expected pre-tool to be unsupported, got %v", err)
 	}
 }
@@ -430,7 +432,7 @@ func TestCursorResultJSONParsesJSONStringPayload(t *testing.T) {
 		"result_json": "{\"ok\":true}"
 	}`)
 	result, err := Process(payload, ProcessOptions{
-		Agent:      AgentCursor,
+		Agent:      localagent.Cursor,
 		Phase:      PhasePostTool,
 		Now:        fixedNow,
 		Enrichment: &Enrichment{},
@@ -459,7 +461,7 @@ func TestCursorToolOutputParsesJSONStringPayload(t *testing.T) {
 		"tool_output": "{\"exitCode\":0,\"stdout\":\"All tests passed\"}"
 	}`)
 	result, err := Process(payload, ProcessOptions{
-		Agent:      AgentCursor,
+		Agent:      localagent.Cursor,
 		Phase:      PhasePostTool,
 		Now:        fixedNow,
 		Enrichment: &Enrichment{},

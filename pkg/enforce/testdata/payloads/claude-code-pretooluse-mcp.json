@@ -1,0 +1,16 @@
+{
+  "session_id": "54e6b176-2282-4891-9518-a4fc86f45d0a",
+  "transcript_path": "/Users/dev/.claude/projects/-Users-dev-probe-workspace/54e6b176-2282-4891-9518-a4fc86f45d0a.jsonl",
+  "cwd": "/Users/dev/probe-workspace",
+  "prompt_id": "f1b8352d-90e4-4af8-a797-3b4860a01c22",
+  "permission_mode": "auto",
+  "effort": {
+    "level": "high"
+  },
+  "hook_event_name": "PreToolUse",
+  "tool_name": "mcp__probe-npx-stdio__echo",
+  "tool_input": {
+    "message": "hello-stdio-npx"
+  },
+  "tool_use_id": "toolu_017UE58dV3jsqUc41AJq65MR"
+}

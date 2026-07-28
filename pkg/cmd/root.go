@@ -24,15 +24,18 @@ func newRoot(loadMDM func() (mdmconfig.Config, error)) *cobra.Command {
 	scan := &Scan{}
 	enroll := &Enroll{}
 	auditCmd, auditSubmit := newAuditCommand()
-	for _, cf := range []*ConfigFlags{&scan.ConfigFlags, &enroll.ConfigFlags, &auditSubmit.ConfigFlags} {
+	enforceCmd, enforceHook := newEnforceCommand()
+	hookInstall := &HookInstall{loadMDMConfig: loadMDM}
+	for _, cf := range []*ConfigFlags{&scan.ConfigFlags, &enroll.ConfigFlags, &auditSubmit.ConfigFlags, &enforceHook.ConfigFlags} {
 		cf.loadMDMConfig = loadMDM
 	}
 	return obotcmd.Command(&ObotSentry{},
 		scan,
 		enroll,
 		&Version{},
-		&HookInstall{},
+		hookInstall,
 		auditCmd,
+		enforceCmd,
 	)
 }
 

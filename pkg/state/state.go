@@ -27,7 +27,9 @@ type State struct {
 	DeviceID string `json:"deviceID,omitempty"`
 	// ServerURL the enrollment was performed against (normalized).
 	ServerURL string `json:"serverURL,omitempty"`
-	// MDMDeploymentID the server placed the device in.
+	// MDMDeploymentID the server placed the device in. The API calls this the
+	// MDM configuration ID; the field and its JSON key keep the older spelling
+	// so state files written by already-enrolled devices still read back.
 	MDMDeploymentID uint `json:"mdmDeploymentID,omitempty"`
 	// PublicKeyFingerprint of the enrolled key (identity.PublicKeyFingerprint).
 	PublicKeyFingerprint string     `json:"publicKeyFingerprint,omitempty"`

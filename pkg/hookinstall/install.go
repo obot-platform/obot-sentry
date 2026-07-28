@@ -50,6 +50,10 @@ type Installer struct {
 	// to Destinations. Tests inject a set rooted under a temporary directory so
 	// the anchored commit can be exercised without writing to real system paths.
 	ResolveDestinations func(goos string) []Destination
+	// Enforce installs the pre-tool enforcement hooks in addition to the
+	// post-tool audit hooks. It is resolved by the command layer from the
+	// --enforce flag, the environment, and the MDM store, in that order.
+	Enforce bool
 	// Out receives operator-facing output; defaults to os.Stdout.
 	Out io.Writer
 }
@@ -101,25 +105,16 @@ func New() *Installer {
 // Plan is the resolved desired-state model for one invocation: the durable
 // executable, the active console user, the shared machine identity directory,
 // and the ordered destinations to converge. The per-agent hook content is
-// derived from Executable via the typed builders in clients.go.
+// derived from Executable via the typed builders in desired.go.
 type Plan struct {
 	GOOS         string
 	Executable   string
 	User         *TargetUser
 	IdentityDir  string
 	Destinations []Destination
+	Enforce      bool
 }
 
-// Run performs preflight — platform support, privilege, durable-executable
-// resolution, active-user resolution, and shared machine-identity provisioning
-// — then converges every managed hook config: it builds all desired documents
-// in memory (aborting before any write if a file is malformed or unreadable),
-// commits the changed ones through the anchored, symlink-safe atomic writer, and
-// prints a per-destination summary. A commit failure leaves already-written
-// files valid and is reported as a partial failure so a rerun can converge the
-// remainder. Cancelling ctx aborts the remaining work at the next destination
-// boundary: preflight stops with the context error before any write, and a
-// cancellation during commit marks the not-yet-written destinations failed.
 func (i *Installer) Run(ctx context.Context) error {
 	goos := i.GOOS
 	if goos == "" {
@@ -179,6 +174,7 @@ func (i *Installer) Run(ctx context.Context) error {
 		User:         user,
 		IdentityDir:  identityDir,
 		Destinations: resolveDests(goos),
+		Enforce:      i.Enforce,
 	}
 
 	// Preflight: read and merge every destination in memory. Any read or parse
@@ -238,7 +234,7 @@ func buildChanges(ctx context.Context, plan Plan) ([]plannedChange, error) {
 		if err != nil {
 			return nil, fmt.Errorf("%s (%s): %w", d.Label, abs, err)
 		}
-		outcome, err := mergeConfig(d, existing, plan.Executable, plan.GOOS)
+		outcome, err := mergeConfig(d, existing, plan.Executable, plan.GOOS, plan.Enforce)
 		if err != nil {
 			return nil, fmt.Errorf("%s (%s): %w", d.Label, abs, err)
 		}

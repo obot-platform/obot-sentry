@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/obot-platform/obot-sentry/pkg/localagent"
 )
 
 func TestSupportedPlatform(t *testing.T) {
@@ -176,11 +178,11 @@ func realTempDir(t *testing.T) string {
 func tempDestinations(machineRoot string) func(string) []Destination {
 	return func(string) []Destination {
 		return []Destination{
-			{Agent: AgentClaudeCode, Label: "Claude Code", Scope: ScopeUser, Format: FormatJSON, Rel: ".claude/settings.json"},
-			{Agent: AgentCodex, Label: "Codex", Scope: ScopeMachine, Format: FormatTOML, Abs: filepath.Join(machineRoot, "etc/codex/requirements.toml")},
-			{Agent: AgentVSCode, Label: "Visual Studio Code", Scope: ScopeUser, Format: FormatJSON, Rel: ".copilot/hooks/obot-sentry.json"},
-			{Agent: AgentCursor, Label: "Cursor", Scope: ScopeMachine, Format: FormatJSON, Abs: filepath.Join(machineRoot, "Cursor/hooks.json")},
-			{Agent: AgentVSCode, Label: "VS Code settings", Scope: ScopeUser, Format: FormatJSONC, Rel: "Library/Application Support/Code/User/settings.json"},
+			{Agent: localagent.ClaudeCode, Label: "Claude Code", Scope: ScopeUser, Format: FormatJSON, Rel: ".claude/settings.json"},
+			{Agent: localagent.Codex, Label: "Codex", Scope: ScopeMachine, Format: FormatTOML, Abs: filepath.Join(machineRoot, "etc/codex/requirements.toml")},
+			{Agent: localagent.VSCode, Label: "Visual Studio Code", Scope: ScopeUser, Format: FormatJSON, Rel: ".copilot/hooks/obot-sentry.json"},
+			{Agent: localagent.Cursor, Label: "Cursor", Scope: ScopeMachine, Format: FormatJSON, Abs: filepath.Join(machineRoot, "Cursor/hooks.json")},
+			{Agent: localagent.VSCode, Label: "VS Code settings", Scope: ScopeUser, Format: FormatJSONC, Rel: "Library/Application Support/Code/User/settings.json"},
 		}
 	}
 }
@@ -339,10 +341,10 @@ func TestRunCancelledContextAbortsBeforeWriting(t *testing.T) {
 
 func TestFormatSummaryIsDeterministicAndSafe(t *testing.T) {
 	results := []Result{
-		{Agent: AgentClaudeCode, Label: "Claude Code", Scope: ScopeUser, Path: "/Users/x/.claude/settings.json", Status: StatusInstalled},
-		{Agent: AgentCodex, Label: "Codex", Scope: ScopeMachine, Path: "/etc/codex/requirements.toml", Status: StatusUpdated, DuplicatesRemoved: 2},
-		{Agent: AgentVSCode, Label: "Visual Studio Code", Scope: ScopeUser, Path: "/Users/x/.copilot/hooks/obot-sentry.json", Status: StatusUnchanged},
-		{Agent: AgentCursor, Label: "Cursor", Scope: ScopeMachine, Path: "/Library/Application Support/Cursor/hooks.json", Status: StatusFailed, Err: errors.New("permission denied")},
+		{Agent: localagent.ClaudeCode, Label: "Claude Code", Scope: ScopeUser, Path: "/Users/x/.claude/settings.json", Status: StatusInstalled},
+		{Agent: localagent.Codex, Label: "Codex", Scope: ScopeMachine, Path: "/etc/codex/requirements.toml", Status: StatusUpdated, DuplicatesRemoved: 2},
+		{Agent: localagent.VSCode, Label: "Visual Studio Code", Scope: ScopeUser, Path: "/Users/x/.copilot/hooks/obot-sentry.json", Status: StatusUnchanged},
+		{Agent: localagent.Cursor, Label: "Cursor", Scope: ScopeMachine, Path: "/Library/Application Support/Cursor/hooks.json", Status: StatusFailed, Err: errors.New("permission denied")},
 	}
 
 	var first bytes.Buffer

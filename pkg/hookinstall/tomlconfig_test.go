@@ -176,38 +176,101 @@ func TestCodexEncodeDeterministicAndStable(t *testing.T) {
 	}
 }
 
-// TestSetCodexFeatureHooks covers creating the table, flipping false->true, and
-// rejecting an incompatible existing value.
-func TestSetCodexFeatureHooks(t *testing.T) {
+// TestSetCodexFeaturePins covers creating the table, overwriting values the user
+// set, preserving unpinned siblings, and rejecting an incompatible existing value.
+func TestSetCodexFeaturePins(t *testing.T) {
+	assertPins := func(t *testing.T, m codexTOMLDoc) {
+		t.Helper()
+		feats, ok := m["features"].(map[string]any)
+		if !ok {
+			t.Fatalf("features is %T, want a table", m["features"])
+		}
+		for _, pin := range codexFeaturePins() {
+			if feats[pin.Key] != pin.Value {
+				t.Errorf("features.%s = %v, want %v", pin.Key, feats[pin.Key], pin.Value)
+			}
+		}
+	}
+
 	t.Run("creates missing table", func(t *testing.T) {
 		m := codexTOMLDoc{}
-		if err := setCodexFeatureHooks(m); err != nil {
+		if err := setCodexFeaturePins(m, codexFeaturePins()); err != nil {
 			t.Fatal(err)
 		}
-		feats := m["features"].(map[string]any)
-		if feats["hooks"] != true {
-			t.Fatalf("features.hooks = %v, want true", feats["hooks"])
-		}
+		assertPins(t, m)
 	})
-	t.Run("flips false and preserves siblings", func(t *testing.T) {
+	t.Run("overwrites the user's values and preserves siblings", func(t *testing.T) {
 		m := decodeTOML(t, []byte(codexFixture))
-		if err := setCodexFeatureHooks(m); err != nil {
+		// The fixture has hooks = false. Set the other pin against us too, so both
+		// directions of overwrite are covered.
+		feats := m["features"].(map[string]any)
+		feats[codexFeatureNonPrefixedMCPToolName] = true
+
+		if err := setCodexFeaturePins(m, codexFeaturePins()); err != nil {
 			t.Fatal(err)
 		}
-		feats := m["features"].(map[string]any)
-		if feats["hooks"] != true {
-			t.Fatalf("features.hooks = %v, want true", feats["hooks"])
-		}
+		assertPins(t, m)
 		if feats["other"] != "keep" {
 			t.Fatalf("unrelated features key lost: %#v", feats)
 		}
 	})
+	t.Run("leaves an unpinned feature alone", func(t *testing.T) {
+		m := codexTOMLDoc{"features": map[string]any{"some_other_feature": true}}
+		if err := setCodexFeaturePins(m, codexFeaturePins()); err != nil {
+			t.Fatal(err)
+		}
+		feats := m["features"].(map[string]any)
+		if feats["some_other_feature"] != true {
+			t.Errorf("an unpinned feature was changed: %#v", feats)
+		}
+	})
 	t.Run("rejects non-table features", func(t *testing.T) {
 		m := codexTOMLDoc{"features": "not a table"}
-		if err := setCodexFeatureHooks(m); err == nil {
+		if err := setCodexFeaturePins(m, codexFeaturePins()); err == nil {
 			t.Fatal("expected error for non-table features")
 		}
 	})
+}
+
+// TestCodexFeaturePinKeys is the lockstep guard on the key strings.
+//
+// A [features] key Codex does not recognize is discarded with only a startup
+// warning ("Ignoring unknown `features` requirement"), which a user will not see.
+// So a typo, or an upstream rename, disables the pin silently and enforcement
+// degrades with no signal anywhere. There is no cross-repository test that can
+// catch that, so these strings are asserted literally: changing one has to be
+// deliberate.
+//
+// Verified against Codex's feature registry (codex-rs/features/src/lib.rs) at
+// revision 3725f02c, where "hooks" is Stage::Stable default_enabled=true and
+// "non_prefixed_mcp_tool_names" is Stage::UnderDevelopment default_enabled=false.
+func TestCodexFeaturePinKeys(t *testing.T) {
+	want := map[string]bool{
+		"hooks":                       true,
+		"non_prefixed_mcp_tool_names": false,
+	}
+
+	got := make(map[string]bool, len(want))
+	for _, pin := range codexFeaturePins() {
+		if _, dup := got[pin.Key]; dup {
+			t.Errorf("feature %q is pinned twice", pin.Key)
+		}
+		got[pin.Key] = pin.Value
+	}
+
+	if len(got) != len(want) {
+		t.Fatalf("pinned features = %v, want %v", got, want)
+	}
+	for key, value := range want {
+		actual, ok := got[key]
+		if !ok {
+			t.Errorf("feature %q is no longer pinned", key)
+			continue
+		}
+		if actual != value {
+			t.Errorf("feature %q pinned to %v, want %v", key, actual, value)
+		}
+	}
 }
 
 // TestFilterCodexOwned proves owned inner hooks are removed while third-party
@@ -230,7 +293,7 @@ func TestFilterCodexOwned(t *testing.T) {
 		t.Fatalf("expected 2 third-party inner hooks preserved, got %d", len(inner))
 	}
 	for _, h := range inner {
-		if IsOwnedCommand(h["command"].(string)) {
+		if isOwnedCommand(h["command"].(string)) {
 			t.Fatalf("owned hook survived: %v", h)
 		}
 	}
@@ -286,6 +349,7 @@ when = 2026-07-16T10:30:00Z
 
 [features]
   hooks = true
+  non_prefixed_mcp_tool_names = false
   other = "keep"
 
 [hooks]
@@ -327,14 +391,14 @@ when = 2026-07-16T10:30:00Z
 // second run, converging a stale owned entry in place rather than appending a
 // duplicate.
 func TestCodexMergeIdempotent(t *testing.T) {
-	desired := desiredCodex(macExe, "darwin")
+	desired := desiredCodex(macExe, "darwin", false)
 
 	merge := func(data []byte) []byte {
 		m, err := parseCodexTOML(data)
 		if err != nil {
 			t.Fatalf("parse: %v", err)
 		}
-		if err := setCodexFeatureHooks(m); err != nil {
+		if err := setCodexFeaturePins(m, desired.Features); err != nil {
 			t.Fatalf("features: %v", err)
 		}
 		if _, err := filterCodexOwned(m, "PostToolUse"); err != nil {
@@ -347,7 +411,7 @@ func TestCodexMergeIdempotent(t *testing.T) {
 		}
 		hm := hooks.(map[string]any)
 		existing, _ := tableSlice(hm["PostToolUse"])
-		hm["PostToolUse"] = append(existing, codexDesiredGroups(desired)...)
+		hm["PostToolUse"] = append(existing, codexDesiredGroups(desired.PostToolUse)...)
 		out, err := encodeCodexTOML(m)
 		if err != nil {
 			t.Fatalf("encode: %v", err)

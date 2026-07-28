@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"fmt"
 
+	"github.com/obot-platform/obot-sentry/pkg/enforce"
+	"github.com/obot-platform/obot-sentry/pkg/localagent"
 	"github.com/tailscale/hujson"
 )
 
@@ -44,17 +46,17 @@ type mergeOutcome struct {
 // content (nil when the file is absent). It dispatches to the per-agent writer
 // by format and agent. A parse error (a malformed existing document or an
 // incompatible field type) is returned so the caller aborts before writing.
-func mergeConfig(d Destination, existing []byte, exe, goos string) (mergeOutcome, error) {
+func mergeConfig(d Destination, existing []byte, exe, goos string, enforcing bool) (mergeOutcome, error) {
 	switch {
 	case d.Format == FormatTOML:
-		return mergeCodex(existing, exe, goos)
-	case d.Agent == AgentClaudeCode:
-		return mergeClaude(existing, exe, goos)
-	case d.Agent == AgentCursor:
-		return mergeCursor(existing, exe, goos)
-	case d.Agent == AgentVSCode && d.Format == FormatJSONC:
+		return mergeCodex(existing, exe, goos, enforcing)
+	case d.Agent == localagent.ClaudeCode:
+		return mergeClaude(existing, exe, goos, enforcing)
+	case d.Agent == localagent.Cursor:
+		return mergeCursor(existing, exe, goos, enforcing)
+	case d.Agent == localagent.VSCode && d.Format == FormatJSONC:
 		return mergeVSCodeSettings(existing)
-	case d.Agent == AgentVSCode:
+	case d.Agent == localagent.VSCode:
 		return mergeVSCodeHook(existing, exe, goos)
 	default:
 		return mergeOutcome{}, fmt.Errorf("no merge writer for destination %q", d.Label)
@@ -131,8 +133,8 @@ func mergeEventArray(hooks *hujson.Object, event string, desired any, filter fun
 
 // mergeClaude converges Claude Code's nested settings.json: one matcher-group
 // entry per event, each carrying the obot-sentry command as an inner hook.
-func mergeClaude(existing []byte, exe, goos string) (mergeOutcome, error) {
-	desired := desiredClaude(exe, goos)
+func mergeClaude(existing []byte, exe, goos string, enforcing bool) (mergeOutcome, error) {
+	desired := desiredClaude(exe, goos, enforcing)
 	return mergeJSONHook(existing, desired, func(obj *hujson.Object) (int, bool, error) {
 		hooks, err := getOrCreateObjectMember(obj, "hooks")
 		if err != nil {
@@ -144,6 +146,12 @@ func mergeClaude(existing []byte, exe, goos string) (mergeOutcome, error) {
 		}{
 			{"PostToolUse", desired.Hooks.PostToolUse[0]},
 			{"PostToolUseFailure", desired.Hooks.PostToolUseFailure[0]},
+		}
+		for i, event := range preToolEvents(localagent.ClaudeCode, enforcing) {
+			events = append(events, struct {
+				key   string
+				group claudeMatcherGroup
+			}{event, desired.Hooks.PreToolUse[i]})
 		}
 		dupes, hadOwned := 0, false
 		for _, ev := range events {
@@ -160,8 +168,8 @@ func mergeClaude(existing []byte, exe, goos string) (mergeOutcome, error) {
 
 // mergeCursor converges Cursor's hooks.json: direct command entries in each
 // event array, plus the supported schema version forced to 1.
-func mergeCursor(existing []byte, exe, goos string) (mergeOutcome, error) {
-	desired := desiredCursor(exe, goos)
+func mergeCursor(existing []byte, exe, goos string, enforcing bool) (mergeOutcome, error) {
+	desired := desiredCursor(exe, goos, enforcing)
 	return mergeJSONHook(existing, desired, func(obj *hujson.Object) (int, bool, error) {
 		objectSet(obj, "version", hujson.Value{Value: hujson.Int(cursorVersion)})
 		hooks, err := getOrCreateObjectMember(obj, "hooks")
@@ -174,6 +182,18 @@ func mergeCursor(existing []byte, exe, goos string) (mergeOutcome, error) {
 		}{
 			{"postToolUse", desired.Hooks.PostToolUse[0]},
 			{"postToolUseFailure", desired.Hooks.PostToolUseFailure[0]},
+		}
+		for _, entry := range desired.Hooks.BeforeMCPExecution {
+			events = append(events, struct {
+				key   string
+				entry cursorHook
+			}{string(enforce.EventCursorBeforeMCPExecution), entry})
+		}
+		for _, entry := range desired.Hooks.PreToolUse {
+			events = append(events, struct {
+				key   string
+				entry cursorHook
+			}{string(enforce.EventCursorPreToolUse), entry})
 		}
 		dupes, hadOwned := 0, false
 		for _, ev := range events {
@@ -257,7 +277,7 @@ func mergeVSCodeSettings(existing []byte) (mergeOutcome, error) {
 // re-encode. The comparison is against the re-encoded original — the encoder
 // normalizes formatting on first touch, so an already-normalized file with the
 // desired hook re-encodes identically and reports unchanged.
-func mergeCodex(existing []byte, exe, goos string) (mergeOutcome, error) {
+func mergeCodex(existing []byte, exe, goos string, enforcing bool) (mergeOutcome, error) {
 	m, err := parseCodexTOML(existing)
 	if err != nil {
 		return mergeOutcome{}, err
@@ -270,12 +290,33 @@ func mergeCodex(existing []byte, exe, goos string) (mergeOutcome, error) {
 		return mergeOutcome{}, err
 	}
 
-	if err := setCodexFeatureHooks(m); err != nil {
+	if err := setCodexFeaturePins(m, codexFeaturePins()); err != nil {
 		return mergeOutcome{}, err
 	}
-	removed, err := filterCodexOwned(m, "PostToolUse")
-	if err != nil {
-		return mergeOutcome{}, err
+
+	// The desired groups, keyed by the event array they belong in. An event with
+	// no desired group is absent from this map and is therefore never filtered or
+	// rewritten, which is what leaves a pre-tool array alone on a run that is not
+	// installing enforcement.
+	desired := desiredCodex(exe, goos, enforcing)
+	events := []struct {
+		key    string
+		groups []codexHookGroup
+	}{{"PostToolUse", desired.PostToolUse}}
+	for i, event := range preToolEvents(localagent.Codex, enforcing) {
+		events = append(events, struct {
+			key    string
+			groups []codexHookGroup
+		}{event, desired.PreToolUse[i : i+1]})
+	}
+
+	removed := 0
+	for _, ev := range events {
+		r, err := filterCodexOwned(m, ev.key)
+		if err != nil {
+			return mergeOutcome{}, err
+		}
+		removed += r
 	}
 
 	hooks, ok := m["hooks"].(map[string]any)
@@ -286,11 +327,13 @@ func mergeCodex(existing []byte, exe, goos string) (mergeOutcome, error) {
 		hooks = map[string]any{}
 		m["hooks"] = hooks
 	}
-	groups, err := tableSlice(hooks["PostToolUse"])
-	if err != nil {
-		return mergeOutcome{}, fmt.Errorf("codex [[hooks.PostToolUse]] %w", err)
+	for _, ev := range events {
+		groups, err := tableSlice(hooks[ev.key])
+		if err != nil {
+			return mergeOutcome{}, fmt.Errorf("codex [[hooks.%s]] %w", ev.key, err)
+		}
+		hooks[ev.key] = append(groups, codexDesiredGroups(ev.groups)...)
 	}
-	hooks["PostToolUse"] = append(groups, codexDesiredGroups(desiredCodex(exe, goos))...)
 
 	out, err := encodeCodexTOML(m)
 	if err != nil {

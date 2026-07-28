@@ -2,50 +2,37 @@
 // supported local coding agents (Claude Code, Codex, Visual Studio Code, and
 // Cursor) onto the hidden `obot-sentry audit submit` command.
 //
-// The package is split into independently testable seams so the same primitives
-// can back a future hook-status/hook-uninstall command:
+// The package reads as a pipeline, one stage per file, so the same primitives can
+// back a future hook-status or hook-uninstall command:
 //
-//   - platform discovery (privilege_*.go, install.go),
-//   - command generation (command.go, clients.go),
-//   - ownership recognition (ownership.go), and
-//   - the CLI orchestration (install.go).
+//   - who and where we are: platform.go and its per-GOOS files resolve the
+//     console user and the privilege to write for them,
+//   - what should be on disk: destinations.go models every managed file,
+//     command.go builds the hook command and recognizes our own marker in one,
+//     and desired.go assembles each agent's desired document,
+//   - how it gets there: converge.go merges desired state into existing state
+//     through the editors in jsonconfig.go and tomlconfig.go, and configio.go
+//     performs the symlink-safe read and atomic commit, and
+//   - install.go drives all of it behind injectable seams.
 //
-// This file defines the vocabulary shared by those seams: the managed agents,
-// their destinations, and the per-destination convergence result.
+// This file defines the vocabulary those stages share: the managed agents, the
+// scope and format of a destination, and the per-destination convergence result.
 package hookinstall
 
-// Agent identifies a supported local coding agent. The string values match the
-// providers accepted by `obot-sentry audit submit --agent`; a test asserts they stay
-// in lockstep with pkg/audit's Agent constants.
-type Agent string
+import "github.com/obot-platform/obot-sentry/pkg/localagent"
+
+type Agent = localagent.Agent
 
 const (
-	AgentClaudeCode Agent = "claude-code"
-	AgentCodex      Agent = "codex"
-	AgentVSCode     Agent = "vscode"
-	AgentCursor     Agent = "cursor"
+	AgentClaudeCode = localagent.ClaudeCode
+	AgentCodex      = localagent.Codex
+	AgentVSCode     = localagent.VSCode
+	AgentCursor     = localagent.Cursor
 )
 
-// Agents returns the fixed, ordered set of agents hook-install manages. Order is
-// deterministic so preflight, plans, and summaries are stable across runs.
+// Agents returns the fixed, ordered set of agents hook-install manages.
 func Agents() []Agent {
-	return []Agent{AgentClaudeCode, AgentCodex, AgentVSCode, AgentCursor}
-}
-
-// DisplayName is the human-readable agent name used in operator-facing output.
-func (a Agent) DisplayName() string {
-	switch a {
-	case AgentClaudeCode:
-		return "Claude Code"
-	case AgentCodex:
-		return "Codex"
-	case AgentVSCode:
-		return "Visual Studio Code"
-	case AgentCursor:
-		return "Cursor"
-	default:
-		return string(a)
-	}
+	return localagent.All()
 }
 
 // Scope distinguishes machine-wide destinations (one file for all users) from

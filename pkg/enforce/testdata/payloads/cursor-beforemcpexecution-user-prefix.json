@@ -1,0 +1,16 @@
+{
+  "conversation_id": "2c9ac701-febc-4602-9627-92f5392d14c3",
+  "generation_id": "4657586e-fc73-4ac3-a92b-cf21ecb09968",
+  "model": "composer-2.5",
+  "tool_name": "get_current_time",
+  "tool_input": "{\"timezone\":\"UTC\"}",
+  "mcp_server_name": "user-probe-uvx-stdio",
+  "command": "user-probe-uvx-stdio",
+  "session_id": "2c9ac701-febc-4602-9627-92f5392d14c3",
+  "hook_event_name": "beforeMCPExecution",
+  "cursor_version": "3.12.30",
+  "workspace_roots": [
+    "/Users/dev/probe-workspace"
+  ],
+  "transcript_path": "/Users/dev/.cursor/projects/Users-dev-probe-workspace/agent-transcripts/2c9ac701-febc-4602-9627-92f5392d14c3/2c9ac701-febc-4602-9627-92f5392d14c3.jsonl"
+}

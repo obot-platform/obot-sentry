@@ -1,6 +1,6 @@
 module github.com/obot-platform/obot-sentry
 
-go 1.26.4
+go 1.26.5
 
 require (
 	github.com/BurntSushi/toml v1.6.0
@@ -24,3 +24,5 @@ require (
 	github.com/sirupsen/logrus v1.9.3 // indirect
 	github.com/spf13/pflag v1.0.9 // indirect
 )
+
+replace github.com/obot-platform/obot/apiclient => ../obot/apiclient

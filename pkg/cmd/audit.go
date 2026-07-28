@@ -14,6 +14,7 @@ import (
 	"github.com/obot-platform/obot-sentry/pkg/audit"
 	"github.com/obot-platform/obot-sentry/pkg/client"
 	"github.com/obot-platform/obot-sentry/pkg/datadir"
+	"github.com/obot-platform/obot-sentry/pkg/localagent"
 	"github.com/obot-platform/obot/apiclient/types"
 	"github.com/spf13/cobra"
 )
@@ -75,7 +76,7 @@ func (s *AuditSubmit) Run(cmd *cobra.Command, _ []string) error {
 	}
 
 	processOpts := audit.ProcessOptions{
-		Agent: audit.Agent(s.Agent),
+		Agent: localagent.Agent(s.Agent),
 		Phase: audit.Phase(s.Phase),
 	}
 	result, err := audit.Process(payload, processOpts)

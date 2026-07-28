@@ -5,7 +5,9 @@
 The MSI sets up Obot Sentry to run automatically. It:
 
 - registers scheduled tasks that scan the device every {{.scanIntervalMinutes}} minutes
-- installs and maintains the audit hooks — at logon and hourly
+- installs and maintains the audit hooks — at logon and hourly{{if .enforcementEnabled}}
+- installs and maintains the tool-call enforcement hooks (see
+  [Tool-call enforcement](#tool-call-enforcement)){{end}}
 - handles upgrades and uninstalls out of the box.
 
 Open PowerShell as Administrator and run the installer, replacing
@@ -14,9 +16,13 @@ Open PowerShell as Administrator and run the installer, replacing
 ### Install
 
 ```powershell
-msiexec /i "obot-sentry.msi" /qn SERVER_URL="{{.serverURL}}" ENROLLMENT_KEY="REPLACE_WITH_ENROLLMENT_KEY" SCAN_INTERVAL_MINUTES="{{.scanIntervalMinutes}}"
+msiexec /i "obot-sentry.msi" /qn SERVER_URL="{{.serverURL}}" ENROLLMENT_KEY="REPLACE_WITH_ENROLLMENT_KEY" SCAN_INTERVAL_MINUTES="{{.scanIntervalMinutes}}"{{if .enforcementEnabled}} ENFORCEMENT=1{{end}}
 ```
-
+{{if .enforcementEnabled}}
+`ENFORCEMENT=1` writes `EnforcementEnabled` to the registry, which is what the
+hook task reads. Keep it in the command you use for **upgrades** too: an install
+command without it writes 0 and stops enforcing.
+{{end}}
 ### Trigger first scan immediately (Optional)
 
 To run a scan immediately after install, run the following command:
@@ -57,6 +63,7 @@ hook maintenance the MSI sets up.
    Set-ItemProperty -Path $key -Name ServerURL -Value "{{.serverURL}}"
    Set-ItemProperty -Path $key -Name EnrollmentKey -Value "REPLACE_WITH_ENROLLMENT_KEY"
    Set-ItemProperty -Path $key -Name ScanIntervalMinutes -Value "{{.scanIntervalMinutes}}"
+   Set-ItemProperty -Path $key -Name EnforcementEnabled -Type DWord -Value {{if .enforcementEnabled}}1{{else}}0{{end}}
    ```
 
 3. Enroll the device:
@@ -79,7 +86,7 @@ By default, scans are submitted at most once every {{.scanIntervalMinutes}} minu
 ### Install hooks
 
 ```powershell
-& "C:\Program Files\Obot\obot-sentry\obot-sentry.exe" hook-install
+& "C:\Program Files\Obot\obot-sentry\obot-sentry.exe" hook-install{{if .enforcementEnabled}} --enforce{{end}}
 ```
 
 ### Uninstall
@@ -94,7 +101,37 @@ Remove-Item -Recurse -Force "$env:ProgramData\obot\obot-sentry" -ErrorAction Sil
 Remove-Item -Recurse -Force "$env:LOCALAPPDATA\obot\obot-sentry" -ErrorAction SilentlyContinue
 ```
 
-## Remove the hooks
+{{if .enforcementEnabled}}## Tool-call enforcement
+
+Each tool call in Claude Code, Codex, and Cursor is checked against your fleet's
+allowlist before it runs. The check is a single request to Obot, and it is
+**fail-closed**: if Obot cannot be reached, the device is not enrolled, or the
+hook cannot tell which MCP server a call targets, the call is blocked.
+
+- Blocking a call never *approves* one. Your agents' own approval prompts still
+  apply to everything that is allowed.
+- Visual Studio Code is not supported for enforcement. Its audit hook is unaffected.
+- An MCP server can be allowlisted by URL, by its `npx`/`uvx` package, or — for a
+  claude.ai connector — by display name. A stdio server started from a local
+  executable path presents none of those, so it cannot be allowlisted and is
+  blocked by design.
+
+To see what this machine reports for a server, and why:
+
+```powershell
+& "C:\Program Files\Obot\obot-sentry\obot-sentry.exe" enforce resolve --agent claude-code --server <server-name>
+```
+
+Turning enforcement off in Obot stops the blocking immediately — the server
+allows every call for a fleet with enforcement disabled — even before the hooks
+themselves are removed. To turn it off on this device instead, set the registry
+value and let the hook task reconverge:
+
+```powershell
+Set-ItemProperty -Path 'HKLM:\SOFTWARE\Obot\obot-sentry' -Name EnforcementEnabled -Type DWord -Value 0
+```
+
+{{end}}## Remove the hooks
 
 `hook-install` has no uninstall command, so its hook configuration must be
 removed by hand — the MSI uninstall and the cleanup above do not touch it.
@@ -121,10 +158,14 @@ Then clean up each agent:
   (`%ProgramData%\OpenAI\Codex\requirements.toml`), and **Cursor**
   (`%ProgramData%\Cursor\hooks.json`) — open each file and delete every hook
   entry whose command contains `--managed-by obot-sentry`, leaving any of your
-  own hooks in place. In the Codex file you can also drop `hooks = true` under
-  `[features]` if Obot Sentry was the only reason hooks were enabled. The two
-  `%ProgramData%` files are machine-wide, so edit them in an Administrator
-  PowerShell.
+  own hooks in place. The marker is on every entry Obot Sentry writes, including
+  the enforcement entries under `PreToolUse`, `beforeMCPExecution`, and
+  `preToolUse` — remove those alongside the post-tool ones. In the Codex file Obot
+  Sentry also pins two values under `[features]`: `hooks = true`, which you can drop if
+  Obot Sentry was the only reason hooks were enabled, and
+  `non_prefixed_mcp_tool_names = false`, which you can drop if you want that
+  Codex feature available again. The two `%ProgramData%` files are machine-wide, so
+  edit them in an Administrator PowerShell.
 
 - **VS Code settings** (`%APPDATA%\Code\User\settings.json`) — under
   `chat.hookFilesLocations`, remove the keys Obot Sentry added

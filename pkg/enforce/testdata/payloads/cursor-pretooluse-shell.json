@@ -1,0 +1,20 @@
+{
+  "conversation_id": "2c9ac701-febc-4602-9627-92f5392d14c3",
+  "generation_id": "4657586e-fc73-4ac3-a92b-cf21ecb09968",
+  "model": "composer-2.5",
+  "tool_name": "Shell",
+  "tool_input": {
+    "command": "uvx mcp-server-time --help 2>&1 || true; echo \"---\"; date -u +\"%Y-%m-%dT%H:%M:%SZ\"",
+    "cwd": "",
+    "timeout": 30000
+  },
+  "tool_use_id": "17af5b6f-519c-4823-a2c1-4c947156e868",
+  "cwd": "",
+  "session_id": "2c9ac701-febc-4602-9627-92f5392d14c3",
+  "hook_event_name": "preToolUse",
+  "cursor_version": "3.12.30",
+  "workspace_roots": [
+    "/Users/dev/probe-workspace"
+  ],
+  "transcript_path": "/Users/dev/.cursor/projects/Users-dev-probe-workspace/agent-transcripts/2c9ac701-febc-4602-9627-92f5392d14c3/2c9ac701-febc-4602-9627-92f5392d14c3.jsonl"
+}

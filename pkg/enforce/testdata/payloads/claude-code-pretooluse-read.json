@@ -1,0 +1,16 @@
+{
+  "session_id": "54e6b176-2282-4891-9518-a4fc86f45d0a",
+  "transcript_path": "/Users/dev/.claude/projects/-Users-dev-probe-workspace/54e6b176-2282-4891-9518-a4fc86f45d0a.jsonl",
+  "cwd": "/Users/dev/probe-workspace",
+  "prompt_id": "2834f250-10c7-415b-aa82-54e004c5bef4",
+  "permission_mode": "auto",
+  "effort": {
+    "level": "high"
+  },
+  "hook_event_name": "PreToolUse",
+  "tool_name": "Read",
+  "tool_input": {
+    "file_path": "/Users/dev/probe-workspace/hello.txt"
+  },
+  "tool_use_id": "toolu_014ActNwoCx3t9mib7t6knCn"
+}

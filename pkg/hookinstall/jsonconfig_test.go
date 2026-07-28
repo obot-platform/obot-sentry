@@ -276,7 +276,7 @@ func TestFilterNestedPreservesPreexistingEmptyGroup(t *testing.T) {
 // re-appending, reproduces byte-identical output. This is what lets a second
 // install report unchanged.
 func TestJSONMergeAppendIdempotent(t *testing.T) {
-	desired := desiredCursor(macExe, "darwin").Hooks.PostToolUse[0]
+	desired := desiredCursor(macExe, "darwin", false).Hooks.PostToolUse[0]
 
 	// Start from a file with a third-party hook and a stale owned entry pointing
 	// at a previous obot-sentry path.

@@ -1,0 +1,14 @@
+{
+  "session_id": "019fa6de-d871-7993-8fee-aa154044e653",
+  "turn_id": "019fa6e1-d6ec-7aa3-94b3-9e4a6b49960e",
+  "transcript_path": "/Users/dev/.codex/sessions/2026/07/27/rollout-2026-07-27T23-57-30-019fa6de-d871-7993-8fee-aa154044e653.jsonl",
+  "cwd": "/Users/dev/probe-workspace",
+  "hook_event_name": "PreToolUse",
+  "model": "gpt-5.6-sol",
+  "permission_mode": "default",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "sed -n '1,240p' hello.txt"
+  },
+  "tool_use_id": "call_cflIGAgzoNellYXJnyv8lM44"
+}

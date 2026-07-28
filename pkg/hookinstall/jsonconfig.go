@@ -296,7 +296,7 @@ func filterDirectOwned(arr *hujson.Array) int {
 	removed := 0
 	kept := arr.Elements[:0]
 	for i := range arr.Elements {
-		if cmd, ok := entryCommand(&arr.Elements[i]); ok && IsOwnedCommand(cmd) {
+		if cmd, ok := entryCommand(&arr.Elements[i]); ok && isOwnedCommand(cmd) {
 			removed++
 			continue
 		}
