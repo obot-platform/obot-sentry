@@ -104,9 +104,6 @@ func evaluate(ctx context.Context, opts Options) Result {
 		return Result{Denied: true, Reason: err.Error(), Unusable: true}
 	}
 
-	// An unsupported event still has a known audience, so it gets a real deny.
-	// The event only names itself back to Claude Code and Codex, whose single
-	// pre-tool event is the first one they fire.
 	event, err := ParseEvent(agent, opts.Event)
 	if err != nil {
 		return deny(agent, Events(agent)[0], Result{}, err.Error(), InfrastructureDenial(err.Error(), DenialContext{}))

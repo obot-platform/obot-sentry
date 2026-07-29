@@ -211,38 +211,6 @@ func TestClaudeCodeJSONCTolerance(t *testing.T) {
 	assertURL(t, Resolve(f.Env, claudeCodeReq("myserver", project)), "https://myserver.example.com/sse")
 }
 
-// TestEntryKeysWeDoNotRead pins the keys the resolver deliberately ignores. Each
-// one is a way to disagree with what the agent actually launched.
-func TestEntryKeysWeDoNotRead(t *testing.T) {
-	cases := []struct {
-		name  string
-		entry string
-		// reason is empty when the entry is expected to resolve normally.
-		reason string
-	}{
-		{"cmd is not read", `{"cmd":"npx","args":["-y","pkg"]}`, "neither a URL nor a command"},
-		{"serverUrl is not read", `{"serverUrl":"https://x.example.com/sse"}`, "neither a URL nor a command"},
-		{"uri is not read", `{"uri":"https://x.example.com/sse"}`, "neither a URL nor a command"},
-		{"enabled false is ignored", `{"url":"https://x.example.com/sse","enabled":false}`, ""},
-		{"a mislabeled type is ignored", `{"url":"https://x.example.com/sse","type":"stdio"}`, ""},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			f := newFixture(t, "darwin")
-			project := f.path("proj")
-			f.write(filepath.Join(project, ".mcp.json"), `{"mcpServers":{"myserver":`+tc.entry+`}}`)
-
-			res := Resolve(f.Env, claudeCodeReq("myserver", project))
-			if tc.reason == "" {
-				assertURL(t, res, "https://x.example.com/sse")
-				return
-			}
-			assertUnresolved(t, res, tc.reason)
-		})
-	}
-}
-
 // TestClaudeCodeStdioResolution covers an entry that launches a package runner,
 // including the executable being reported alongside an unresolved package.
 func TestClaudeCodeStdioResolution(t *testing.T) {

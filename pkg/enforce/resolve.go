@@ -189,7 +189,6 @@ var builtinAgentMCPServers = map[localagent.Agent]map[string]struct{}{
 
 // isBuiltinAgentMCP reports whether serverName names a built-in MCP server of
 // agent.
-// because the failure is a deny that looks like any other.
 func isBuiltinAgentMCP(agent localagent.Agent, serverName string) bool {
 	if serverName == "" {
 		return false
