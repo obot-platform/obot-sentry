@@ -67,13 +67,12 @@ func TestFormCodex(t *testing.T) {
 	}
 }
 
-// TestFormsDifferOnlyOnHyphen states the relationship between the two rules
-// directly. It is the reason there is one folding helper and not two: if a future
-// agent's rule diverges further, this is where that shows up.
-func TestFormsDifferOnlyOnHyphen(t *testing.T) {
+func TestFormsDifferOnlyOnHyphenWithinTheBMP(t *testing.T) {
 	for _, in := range []string{
 		"linear", "my_server", "MixedCase", "a..b", "space name",
 		"my.server", "@acme/server", "double__under", "-lead-trail-",
+		// Non-ASCII, still one UTF-16 code unit each, so the invariant holds.
+		"café", "中文", "★-star",
 	} {
 		claude, codex := formClaudeCode(in), formCodex(in)
 		// Replacing every hyphen in Claude Code's answer must give Codex's.
@@ -92,11 +91,21 @@ func TestFormsDifferOnlyOnHyphen(t *testing.T) {
 	}
 }
 
-func TestFormWithEmoji(t *testing.T) {
-	if got, want := formClaudeCode("a🙂b"), "a__b"; got != want {
-		t.Fatalf("formClaudeCode(%q) = %q, want %q", "a🙂b", got, want)
-	}
-	if got, want := formCodex("a🙂b"), "a_b"; got != want {
-		t.Fatalf("formCodex(%q) = %q, want %q", "a🙂b", got, want)
+func TestFormsDifferAboveTheBMP(t *testing.T) {
+	for _, tc := range []struct{ in, claude, codex string }{
+		{"a🙂b", "a__b", "a_b"},
+		// Two of them, and one adjacent to an ordinary illegal character.
+		{"🙂🙂", "____", "__"},
+		{"a.🙂", "a___", "a__"},
+		// A BMP character stays one underscore under both rules, which is what
+		// makes the code unit — not "non-ASCII" — the thing being tested.
+		{"a★b", "a_b", "a_b"},
+	} {
+		if got := formClaudeCode(tc.in); got != tc.claude {
+			t.Errorf("formClaudeCode(%q) = %q, want %q", tc.in, got, tc.claude)
+		}
+		if got := formCodex(tc.in); got != tc.codex {
+			t.Errorf("formCodex(%q) = %q, want %q", tc.in, got, tc.codex)
+		}
 	}
 }
