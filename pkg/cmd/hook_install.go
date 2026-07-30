@@ -45,7 +45,7 @@ Installs machine policy for Codex and Cursor and user hooks for the active
 console user's Claude Code and Visual Studio Code installations.
 
 With enforcement enabled, also installs the pre-tool hooks that check each tool
-call against the fleet's allowlist, for Claude Code, Codex, and Cursor. A run
+call against Obot's allowlist, for Claude Code, Codex, and Cursor. A run
 without enforcement leaves any pre-tool hook already on disk exactly as it
 found it.`
 	cmd.Args = cobra.NoArgs

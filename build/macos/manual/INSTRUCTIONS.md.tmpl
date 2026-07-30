@@ -44,13 +44,13 @@ sudo obot-sentry hook-install{{if .enforcementEnabled}} --enforce{{end}}
 ```
 {{if .enforcementEnabled}}
 Enforcement is on for this configuration, so `hook-install` also installs the
-pre-tool hooks that check every tool call against your fleet's allowlist. Read
+pre-tool hooks that check every tool call against Obot's allowlist. Read
 [Tool-call enforcement](#tool-call-enforcement) before running it: from that
 point on, tool calls this device cannot get a verdict for are blocked.
 
 ## Tool-call enforcement
 
-Each tool call in Claude Code, Codex, and Cursor is checked against your fleet's
+Each tool call in Claude Code, Codex, and Cursor is checked against Obot's
 allowlist before it runs. The check is a single request to Obot, and it is
 **fail-closed**: if Obot cannot be reached, the device is not enrolled, or the
 hook cannot tell which MCP server a call targets, the call is blocked.
@@ -70,7 +70,7 @@ obot-sentry enforce resolve --agent claude-code --server <server-name>
 ```
 
 Turning enforcement off in Obot stops the blocking immediately — the server
-allows every call for a fleet with enforcement disabled — even before the hooks
+allows every call when enforcement is disabled — even before the hooks
 themselves are removed.
 {{end}}
 ## Remove the hooks

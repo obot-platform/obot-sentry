@@ -16,7 +16,7 @@ var decisionTimeout = 5 * time.Second
 
 // Decide asks obot for a verdict on a normalized tool call, bounded by
 // decisionTimeout, authenticated with a freshly minted device JWT. The server
-// resolves the fleet from that identity and never from the request body.
+// resolves the MDMConfiguration from that identity and never from the request body.
 //
 // Every failure — mint, transport, timeout, non-2xx, undecodable body — comes
 // back as a non-nil error with a zero-valued response. This never turns an

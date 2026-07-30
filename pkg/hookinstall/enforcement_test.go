@@ -526,7 +526,7 @@ func TestRunEnforceEndToEnd(t *testing.T) {
 
 	// And a run without enforcement leaves the pre-tool entries alone: this is
 	// what makes turning enforcement off safe, since the backend allows
-	// unconditionally for a fleet that has it disabled.
+	// unconditionally.
 	before := map[string][]byte{}
 	for _, p := range []string{claudeFile, codexFile, cursorFile, vscodeFile} {
 		data, err := os.ReadFile(p)

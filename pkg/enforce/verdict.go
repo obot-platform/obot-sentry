@@ -164,7 +164,7 @@ type cursorHookOutput struct {
 // defer.
 //
 // Emitting permissionDecision "allow" on every permitted call would turn an
-// enforcement hook into a fleet-wide permission bypass: every shell command and
+// enforcement hook into a permission bypass: every shell command and
 // every file write auto-approved because the allowlist said the tool call was
 // permitted. The allowlist and the agent's own permission model are different
 // controls, and enforcement must not collapse them. This path withholds a denial;

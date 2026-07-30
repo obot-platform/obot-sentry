@@ -10,7 +10,7 @@ It enrolls each machine with an [Obot](https://github.com/obot-platform/obot) se
 - **Enrollment.** Configuration (server URL + an `ode1-...` enrollment credential) is pushed by the MDM — via registry values on Windows, a managed-preferences profile on macOS. On the machine's first scan — by whichever user runs first — obot-sentry generates a shared Ed25519 identity key in the machine-scoped data dir (`%PROGRAMDATA%\obot\obot-sentry` on Windows, `/Library/Application Support/obot/obot-sentry` on macOS; both are prepared user-writable by the installer, with a per-user fallback when unavailable) and enrolls the public key via `POST /api/mdm/enroll` (trust-on-first-use). The device ID derives from the machine ID + key fingerprint, so all users present one device — and a lost key simply mints a fresh device ID instead of a TOFU conflict. Each user's first scan re-enrolls the same identity, which is an idempotent update server-side.
 - **Submission.** Every submission is authenticated with a short-lived self-signed JWT (`aud=obot/device`) verified server-side against the enrolled key; scans land via `POST /api/devices/scans`, attributed to the submitting user by the manifest's `username`. Local-agent audit logs land via `POST /api/local-agent-audit-logs`, with the server stamping authoritative device attribution from the JWT.
 - **Local-agent audit hooks.** Managed hook configuration invokes the hidden `obot-sentry audit submit` command for supported local agents. The hook parser normalizes terminal tool-call events, submits them fail-open, and writes only warnings to stderr when enrollment or submission is unavailable so agent execution is not blocked.
-- **Tool-call enforcement hooks.** With enforcement enabled for the fleet, managed pre-tool hook configuration invokes the hidden `obot-sentry enforce` command for Claude Code, Codex, and Cursor. It is the opposite of the audit hook in every important way: synchronous, fail-**closed**, and stdout is the hook protocol channel rather than something that must stay empty. See [Tool-call enforcement](#tool-call-enforcement).
+- **Tool-call enforcement hooks.** With enforcement enabled in Obot, managed pre-tool hook configuration invokes the hidden `obot-sentry enforce` command for Claude Code, Codex, and Cursor. It is the opposite of the audit hook in every important way: synchronous, fail-**closed**, and stdout is the hook protocol channel rather than something that must stay empty. See [Tool-call enforcement](#tool-call-enforcement).
 - **Audit spool.** Transient audit-log submission failures are stored in an encrypted per-user spool under the obot-sentry cache directory and replayed after a later successful live submit. Server-side client errors are discarded instead of retried.
 - **Scan state + logs.** Every scan run updates `scan.json` (last scan/submit times, status, last error) and appends a JSON record to `scan-logs/` — timestamp-sortable filenames, pruned by age and size — in obot-sentry's per-user cache dir (`%LOCALAPPDATA%\obot\obot-sentry` on Windows, `~/Library/Caches/obot/obot-sentry` on macOS). Support and MDM freshness checks read these; recording problems never fail a scan.
 
@@ -83,8 +83,8 @@ completed blocks every tool call in all three agents until enrollment succeeds.*
 the normal MDM path cannot land there — but a wiped identity directory or a
 revoked enrollment key can, and it will be loud.
 
-Turning enforcement off in obot stops the blocking immediately, fleet-wide: the
-server allows every call for a fleet with enforcement disabled, and logs nothing.
+Turning enforcement off in obot stops the blocking immediately, for all devices: the
+server allows every call when enforcement is disabled, and logs nothing.
 
 ### It never grants permission
 
@@ -190,8 +190,8 @@ permanent. We intend to find a machine-scoped solution for Claude Code in the fu
 Set `EnforcementEnabled` to false (or drop `--enforce`) and the next
 `hook-install` converges the audit hooks and **leaves the pre-tool entries on
 disk exactly as it found them** — the merge is per hook event, so an event that is
-not being installed is never touched. That is safe because a fleet with
-enforcement disabled allows every call: a stale hook costs one round trip per tool
+not being installed is never touched. That is safe because when enforcement is
+disabled, every tool call is allowed: a stale hook costs one round trip per tool
 call and blocks nothing. Remove the entries with the steps below when you want
 them gone.
 

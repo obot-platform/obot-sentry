@@ -41,7 +41,7 @@ func newEnforceCommand() (*cobra.Command, *Enforce) {
 
 func (e *Enforce) Customize(cmd *cobra.Command) {
 	cmd.Use = "enforce"
-	cmd.Short = "Decide a pre-tool hook payload against the fleet's tool policy"
+	cmd.Short = "Decide a pre-tool hook payload against Obot's allowlist"
 	cmd.Hidden = true
 
 	// Flag and argument errors have to fail closed as well. Cobra reports them

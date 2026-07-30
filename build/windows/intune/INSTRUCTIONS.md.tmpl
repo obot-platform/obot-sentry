@@ -66,7 +66,7 @@ editing the install command.
 
 ## Tool-call enforcement
 
-Each tool call in Claude Code, Codex, and Cursor is checked against your fleet's
+Each tool call in Claude Code, Codex, and Cursor is checked against Obot's
 allowlist before it runs. The check is a single request to Obot, and it is
 **fail-closed**: if Obot cannot be reached, the device is not enrolled, or the
 hook cannot tell which MCP server a call targets, the call is blocked.
@@ -78,7 +78,7 @@ hook cannot tell which MCP server a call targets, the call is blocked.
   claude.ai connector — by display name. A stdio server started from a local
   executable path presents none of those, so it cannot be allowlisted and is
   blocked by design.
-- Turning enforcement off in Obot stops the blocking immediately, fleet-wide, even
+- Turning enforcement off in Obot stops the blocking immediately, for all devices, even
   before the hooks are removed from any device.
 
 `obot-sentry enforce resolve --agent claude-code --server <name>`, run on a device,

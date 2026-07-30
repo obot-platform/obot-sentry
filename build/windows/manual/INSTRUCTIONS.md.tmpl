@@ -103,7 +103,7 @@ Remove-Item -Recurse -Force "$env:LOCALAPPDATA\obot\obot-sentry" -ErrorAction Si
 
 {{if .enforcementEnabled}}## Tool-call enforcement
 
-Each tool call in Claude Code, Codex, and Cursor is checked against your fleet's
+Each tool call in Claude Code, Codex, and Cursor is checked against Obot's
 allowlist before it runs. The check is a single request to Obot, and it is
 **fail-closed**: if Obot cannot be reached, the device is not enrolled, or the
 hook cannot tell which MCP server a call targets, the call is blocked.
@@ -123,7 +123,7 @@ To see what this machine reports for a server, and why:
 ```
 
 Turning enforcement off in Obot stops the blocking immediately — the server
-allows every call for a fleet with enforcement disabled — even before the hooks
+allows every call when enforcement is disabled — even before the hooks
 themselves are removed. To turn it off on this device instead, set the registry
 value and let the hook task reconverge:
 
