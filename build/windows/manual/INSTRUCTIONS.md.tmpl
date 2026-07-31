@@ -116,12 +116,6 @@ hook cannot tell which MCP server a call targets, the call is blocked.
   executable path presents none of those, so it cannot be allowlisted and is
   blocked by design.
 
-To see what this machine reports for a server, and why:
-
-```powershell
-& "C:\Program Files\Obot\obot-sentry\obot-sentry.exe" enforce resolve --agent claude-code --server <server-name>
-```
-
 Turning enforcement off in Obot stops the blocking immediately — the server
 allows every call when enforcement is disabled — even before the hooks
 themselves are removed. To turn it off on this device instead, set the registry
