@@ -42,12 +42,8 @@ By default, scans are submitted at most once every {{.scanIntervalMinutes}} minu
 ```sh
 sudo obot-sentry hook-install{{if .enforcementEnabled}} --enforce{{end}}
 ```
-{{if .enforcementEnabled}}
-Enforcement is on for this configuration, so `hook-install` also installs the
-pre-tool hooks that check every tool call against Obot's allowlist. Read
-[Tool-call enforcement](#tool-call-enforcement) before running it: from that
-point on, tool calls this device cannot get a verdict for are blocked.
 
+{{if .enforcementEnabled}}
 ## Tool-call enforcement
 
 Each tool call in Claude Code, Codex, and Cursor is checked against Obot's
