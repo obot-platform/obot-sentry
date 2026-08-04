@@ -287,16 +287,15 @@ func entryCommand(entry *hujson.Value) (string, bool) {
 	return lit.String(), true
 }
 
-// filterDirectOwned removes array elements whose "command" is an obot-sentry-managed
-// hook command, returning the count removed. This is the "direct" layout used by
-// Cursor and VS Code, whose event arrays hold command entries directly.
+// filterDirect removes array elements whose "command" matches owned, returning
+// the count removed. This is the direct layout used by Cursor and VS Code.
 // Third-party entries — and any element without an owned command — are preserved
 // untouched, so unrelated hooks and their formatting survive.
-func filterDirectOwned(arr *hujson.Array) int {
+func filterDirect(arr *hujson.Array, owned func(string) bool) int {
 	removed := 0
 	kept := arr.Elements[:0]
 	for i := range arr.Elements {
-		if cmd, ok := entryCommand(&arr.Elements[i]); ok && isOwnedCommand(cmd) {
+		if cmd, ok := entryCommand(&arr.Elements[i]); ok && owned(cmd) {
 			removed++
 			continue
 		}
@@ -306,13 +305,17 @@ func filterDirectOwned(arr *hujson.Array) int {
 	return removed
 }
 
-// filterNestedOwned removes obot-sentry-managed inner hooks from each matcher group in
-// arr — Claude Code's layout, where each element is {matcher, hooks:[...]}. It
+func filterDirectOwned(arr *hujson.Array) int {
+	return filterDirect(arr, isOwnedCommand)
+}
+
+// filterNested removes matching inner hooks from each matcher group in arr —
+// Claude Code's layout, where each element is {matcher, hooks:[...]}. It
 // filters each group's inner "hooks" list with filterDirectOwned and drops a
 // group only when our removal emptied its inner list, preserving groups that
 // still hold third-party hooks (and any pre-existing empty group we did not
 // touch). Returns the number of inner hooks removed.
-func filterNestedOwned(arr *hujson.Array) int {
+func filterNested(arr *hujson.Array, owned func(string) bool) int {
 	removed := 0
 	kept := arr.Elements[:0]
 	for i := range arr.Elements {
@@ -323,7 +326,7 @@ func filterNestedOwned(arr *hujson.Array) int {
 		}
 		if innerVal := objectMember(grp, "hooks"); innerVal != nil {
 			if innerArr, ok := asArray(innerVal); ok {
-				r := filterDirectOwned(innerArr)
+				r := filterDirect(innerArr, owned)
 				removed += r
 				if r > 0 && len(innerArr.Elements) == 0 {
 					continue // group emptied by removing our hooks; drop it
@@ -334,4 +337,28 @@ func filterNestedOwned(arr *hujson.Array) int {
 	}
 	arr.Elements = kept
 	return removed
+}
+
+func filterNestedOwned(arr *hujson.Array) int {
+	return filterNested(arr, isOwnedCommand)
+}
+
+// filterJSONHookEvents applies filter to every event array under a JSON hook
+// object. Claude uses nested matcher groups; Cursor and VS Code use direct hook
+// entries. An incompatible event value is rejected rather than overwritten.
+func filterJSONHookEvents(hooks *hujson.Object, nested bool, owned func(string) bool) (int, error) {
+	removed := 0
+	for i := range hooks.Members {
+		name := memberName(hooks.Members[i])
+		arr, ok := asArray(&hooks.Members[i].Value)
+		if !ok {
+			return 0, fmt.Errorf("config hook event %q is %s, want a JSON array", name, kindName(hooks.Members[i].Value.Value))
+		}
+		if nested {
+			removed += filterNested(arr, owned)
+		} else {
+			removed += filterDirect(arr, owned)
+		}
+	}
+	return removed, nil
 }

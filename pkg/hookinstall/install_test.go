@@ -341,10 +341,37 @@ func TestRunCancelledContextAbortsBeforeWriting(t *testing.T) {
 
 func TestFormatSummaryIsDeterministicAndSafe(t *testing.T) {
 	results := []Result{
-		{Agent: localagent.ClaudeCode, Label: "Claude Code", Scope: ScopeUser, Path: "/Users/x/.claude/settings.json", Status: StatusInstalled},
-		{Agent: localagent.Codex, Label: "Codex", Scope: ScopeMachine, Path: "/etc/codex/requirements.toml", Status: StatusUpdated, DuplicatesRemoved: 2},
-		{Agent: localagent.VSCode, Label: "Visual Studio Code", Scope: ScopeUser, Path: "/Users/x/.copilot/hooks/obot-sentry.json", Status: StatusUnchanged},
-		{Agent: localagent.Cursor, Label: "Cursor", Scope: ScopeMachine, Path: "/Library/Application Support/Cursor/hooks.json", Status: StatusFailed, Err: errors.New("permission denied")},
+		{
+			Agent:  localagent.ClaudeCode,
+			Label:  "Claude Code",
+			Scope:  ScopeUser,
+			Path:   "/Users/x/.claude/settings.json",
+			Status: StatusInstalled,
+		},
+		{
+			Agent:             localagent.Codex,
+			Label:             "Codex",
+			Scope:             ScopeMachine,
+			Path:              "/etc/codex/requirements.toml",
+			Status:            StatusUpdated,
+			DuplicatesRemoved: 2,
+			HooksRemoved:      1,
+		},
+		{
+			Agent:  localagent.VSCode,
+			Label:  "Visual Studio Code",
+			Scope:  ScopeUser,
+			Path:   "/Users/x/.copilot/hooks/obot-sentry.json",
+			Status: StatusUnchanged,
+		},
+		{
+			Agent:  localagent.Cursor,
+			Label:  "Cursor",
+			Scope:  ScopeMachine,
+			Path:   "/Library/Application Support/Cursor/hooks.json",
+			Status: StatusFailed,
+			Err:    errors.New("permission denied"),
+		},
 	}
 
 	var first bytes.Buffer
@@ -359,7 +386,7 @@ func TestFormatSummaryIsDeterministicAndSafe(t *testing.T) {
 	mustContain := []string{
 		macExe,
 		"installed", "updated", "unchanged", "failed",
-		"2 duplicates removed",
+		"1 hook removed, 2 duplicates removed",
 		"permission denied",
 		"/etc/codex/requirements.toml",
 		restartReminder,

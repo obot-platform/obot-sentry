@@ -101,13 +101,12 @@ func tableSlice(v any) ([]map[string]any, error) {
 	}
 }
 
-// filterOwnedInnerHooks removes obot-sentry-managed inner hooks (matched by their
-// "command" string) from a decoded inner-hook slice, preserving third-party
-// entries. Returns the count removed and the retained slice.
-func filterOwnedInnerHooks(inner []map[string]any) (removed int, kept []map[string]any) {
+// filterInnerHooks removes inner hooks whose command matches owned from a
+// decoded slice, preserving all other entries.
+func filterInnerHooks(inner []map[string]any, owned func(string) bool) (removed int, kept []map[string]any) {
 	kept = inner[:0]
 	for _, h := range inner {
-		if cmd, ok := h["command"].(string); ok && isOwnedCommand(cmd) {
+		if cmd, ok := h["command"].(string); ok && owned(cmd) {
 			removed++
 			continue
 		}
@@ -149,7 +148,7 @@ func codexDesiredGroups(desired []codexHookGroup) []map[string]any {
 // event key is removed when no groups remain. Third-party groups and inner hooks
 // survive. Returns the number of inner hooks removed. An incompatible type on the
 // hooks table or the event array returns an error.
-func filterCodexOwned(m codexTOMLDoc, event string) (int, error) {
+func filterCodexHooks(m codexTOMLDoc, event string, owned func(string) bool) (int, error) {
 	hooksVal, ok := m["hooks"]
 	if !ok {
 		return 0, nil
@@ -170,7 +169,7 @@ func filterCodexOwned(m codexTOMLDoc, event string) (int, error) {
 			if err != nil {
 				return 0, fmt.Errorf("codex [[hooks.%s.hooks]] %w", event, err)
 			}
-			r, keptInner := filterOwnedInnerHooks(inner)
+			r, keptInner := filterInnerHooks(inner, owned)
 			removed += r
 			if r > 0 && len(keptInner) == 0 {
 				continue // group emptied by removing our hooks; drop it
@@ -183,6 +182,32 @@ func filterCodexOwned(m codexTOMLDoc, event string) (int, error) {
 		delete(hooks, event)
 	} else {
 		hooks[event] = kept
+	}
+	return removed, nil
+}
+
+func filterCodexOwned(m codexTOMLDoc, event string) (int, error) {
+	return filterCodexHooks(m, event, isOwnedCommand)
+}
+
+// filterAllCodexHooks applies an ownership predicate to every event under the
+// Codex hooks table, including event names from older or newer agent versions.
+func filterAllCodexHooks(m codexTOMLDoc, owned func(string) bool) (int, error) {
+	hooksVal, ok := m["hooks"]
+	if !ok {
+		return 0, nil
+	}
+	hooks, ok := hooksVal.(map[string]any)
+	if !ok {
+		return 0, fmt.Errorf("codex [hooks] is %T, want a table", hooksVal)
+	}
+	removed := 0
+	for event := range hooks {
+		r, err := filterCodexHooks(m, event, owned)
+		if err != nil {
+			return 0, err
+		}
+		removed += r
 	}
 	return removed, nil
 }

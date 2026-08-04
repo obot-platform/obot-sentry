@@ -33,13 +33,14 @@ import (
 // ---
 
 // mergeOutcome is the in-memory result of merging one destination: the bytes to
-// write, the status to report, how many duplicate owned entries were collapsed,
-// and whether the file actually needs writing (false when already current).
+// write, the status to report, how many duplicate or intentionally removed
+// owned entries were found, and whether the file actually needs writing.
 type mergeOutcome struct {
-	data   []byte
-	status Status
-	dupes  int
-	write  bool
+	data    []byte
+	status  Status
+	dupes   int
+	removed int
+	write   bool
 }
 
 // mergeConfig produces the desired bytes for one destination from its existing
@@ -61,6 +62,74 @@ func mergeConfig(d Destination, existing []byte, exe, goos string, enforcing boo
 	default:
 		return mergeOutcome{}, fmt.Errorf("no merge writer for destination %q", d.Label)
 	}
+}
+
+// removeConfig removes every marker-owned hook from a destination.
+func removeConfig(d Destination, existing []byte) (mergeOutcome, error) {
+	switch {
+	case d.Agent == localagent.VSCode && d.Format == FormatJSONC:
+		return mergeOutcome{data: existing, status: StatusUnchanged}, nil
+	case d.Format == FormatTOML:
+		return removeCodexHooks(existing)
+	case d.Agent == localagent.ClaudeCode:
+		return removeJSONHooks(existing, true)
+	case d.Agent == localagent.Cursor || d.Agent == localagent.VSCode:
+		return removeJSONHooks(existing, false)
+	default:
+		return mergeOutcome{}, fmt.Errorf("no uninstall writer for destination %q", d.Label)
+	}
+}
+
+func removeJSONHooks(existing []byte, nested bool) (mergeOutcome, error) {
+	if isEmptyConfig(existing) {
+		return mergeOutcome{data: existing, status: StatusUnchanged}, nil
+	}
+	cfg, err := parseJSONConfig(existing)
+	if err != nil {
+		return mergeOutcome{}, err
+	}
+	obj, err := cfg.object()
+	if err != nil {
+		return mergeOutcome{}, err
+	}
+	hooksValue := objectMember(obj, "hooks")
+	if hooksValue == nil {
+		return mergeOutcome{data: existing, status: StatusUnchanged}, nil
+	}
+	hooks, ok := asObject(hooksValue)
+	if !ok {
+		return mergeOutcome{}, fmt.Errorf("config member %q is %s, want a JSON object", "hooks", kindName(hooksValue.Value))
+	}
+	removed, err := filterJSONHookEvents(hooks, nested, isOwnedCommand)
+	if err != nil {
+		return mergeOutcome{}, err
+	}
+	if removed == 0 {
+		return mergeOutcome{data: existing, status: StatusUnchanged}, nil
+	}
+	return mergeOutcome{data: cfg.pack(), status: StatusRemoved, removed: removed, write: true}, nil
+}
+
+func removeCodexHooks(existing []byte) (mergeOutcome, error) {
+	if isEmptyConfig(existing) {
+		return mergeOutcome{data: existing, status: StatusUnchanged}, nil
+	}
+	m, err := parseCodexTOML(existing)
+	if err != nil {
+		return mergeOutcome{}, err
+	}
+	removed, err := filterAllCodexHooks(m, isOwnedCommand)
+	if err != nil {
+		return mergeOutcome{}, err
+	}
+	if removed == 0 {
+		return mergeOutcome{data: existing, status: StatusUnchanged}, nil
+	}
+	out, err := encodeCodexTOML(m)
+	if err != nil {
+		return mergeOutcome{}, err
+	}
+	return mergeOutcome{data: out, status: StatusRemoved, removed: removed, write: true}, nil
 }
 
 // isEmptyConfig reports whether data holds no JSON/TOML content — absent,
@@ -135,10 +204,17 @@ func mergeEventArray(hooks *hujson.Object, event string, desired any, filter fun
 // entry per event, each carrying the obot-sentry command as an inner hook.
 func mergeClaude(existing []byte, exe, goos string, enforcing bool) (mergeOutcome, error) {
 	desired := desiredClaude(exe, goos, enforcing)
-	return mergeJSONHook(existing, desired, func(obj *hujson.Object) (int, bool, error) {
+	removedHooks := 0
+	out, err := mergeJSONHook(existing, desired, func(obj *hujson.Object) (int, bool, error) {
 		hooks, err := getOrCreateObjectMember(obj, "hooks")
 		if err != nil {
 			return 0, false, err
+		}
+		if !enforcing {
+			removedHooks, err = filterJSONHookEvents(hooks, true, isOwnedEnforcementCommand)
+			if err != nil {
+				return 0, false, err
+			}
 		}
 		events := []struct {
 			key   string
@@ -162,19 +238,28 @@ func mergeClaude(existing []byte, exe, goos string, enforcing bool) (mergeOutcom
 			dupes += d
 			hadOwned = hadOwned || owned
 		}
-		return dupes, hadOwned, nil
+		return dupes, hadOwned || removedHooks > 0, nil
 	})
+	out.removed = removedHooks
+	return out, err
 }
 
 // mergeCursor converges Cursor's hooks.json: direct command entries in each
 // event array, plus the supported schema version forced to 1.
 func mergeCursor(existing []byte, exe, goos string, enforcing bool) (mergeOutcome, error) {
 	desired := desiredCursor(exe, goos, enforcing)
-	return mergeJSONHook(existing, desired, func(obj *hujson.Object) (int, bool, error) {
+	removedHooks := 0
+	out, err := mergeJSONHook(existing, desired, func(obj *hujson.Object) (int, bool, error) {
 		objectSet(obj, "version", hujson.Value{Value: hujson.Int(cursorVersion)})
 		hooks, err := getOrCreateObjectMember(obj, "hooks")
 		if err != nil {
 			return 0, false, err
+		}
+		if !enforcing {
+			removedHooks, err = filterJSONHookEvents(hooks, false, isOwnedEnforcementCommand)
+			if err != nil {
+				return 0, false, err
+			}
 		}
 		events := []struct {
 			key   string
@@ -204,8 +289,10 @@ func mergeCursor(existing []byte, exe, goos string, enforcing bool) (mergeOutcom
 			dupes += d
 			hadOwned = hadOwned || owned
 		}
-		return dupes, hadOwned, nil
+		return dupes, hadOwned || removedHooks > 0, nil
 	})
+	out.removed = removedHooks
+	return out, err
 }
 
 // mergeVSCodeHook converges the dedicated Copilot obot-sentry.json: a single direct
@@ -294,10 +381,15 @@ func mergeCodex(existing []byte, exe, goos string, enforcing bool) (mergeOutcome
 		return mergeOutcome{}, err
 	}
 
-	// The desired groups, keyed by the event array they belong in. An event with
-	// no desired group is absent from this map and is therefore never filtered or
-	// rewritten, which is what leaves a pre-tool array alone on a run that is not
-	// installing enforcement.
+	removedHooks := 0
+	if !enforcing {
+		removedHooks, err = filterAllCodexHooks(m, isOwnedEnforcementCommand)
+		if err != nil {
+			return mergeOutcome{}, err
+		}
+	}
+
+	// The desired groups, keyed by the event array they belong in.
 	desired := desiredCodex(exe, goos, enforcing)
 	events := []struct {
 		key    string
@@ -343,8 +435,8 @@ func mergeCodex(existing []byte, exe, goos string, enforcing bool) (mergeOutcome
 		return mergeOutcome{data: out, status: StatusUnchanged}, nil
 	}
 	status := StatusInstalled
-	if removed > 0 {
+	if removed > 0 || removedHooks > 0 {
 		status = StatusUpdated
 	}
-	return mergeOutcome{data: out, status: status, dupes: max(0, removed-1), write: true}, nil
+	return mergeOutcome{data: out, status: status, dupes: max(0, removed-1), removed: removedHooks, write: true}, nil
 }

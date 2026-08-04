@@ -237,8 +237,8 @@ type codexDesired struct {
 	// Features are the [features] values forced into requirements.toml.
 	Features    []codexFeaturePin
 	PostToolUse []codexHookGroup
-	// PreToolUse is empty when not installing enforcement, so the writer leaves
-	// that event's array-of-tables alone.
+	// PreToolUse is empty when not installing enforcement; the writer removes
+	// existing managed enforcement groups without appending a replacement.
 	PreToolUse []codexHookGroup
 }
 

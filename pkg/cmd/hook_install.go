@@ -22,7 +22,11 @@ type HookInstall struct {
 	// environment and then the MDM store decide. It cannot be a bare bool because
 	// false is a meaningful value — it is how an operator overrides an
 	// MDM-configured true.
-	Enforce *bool `usage:"also install the pre-tool enforcement hooks (defaults to the MDM-configured EnforcementEnabled)" env:"OBOT_SENTRY_ENFORCEMENT_ENABLED"`
+	Enforce *bool `usage:"also install the pre-tool enforcement hooks (defaults to OBOT_SENTRY_ENFORCEMENT_ENABLED, then the MDM-configured EnforcementEnabled)"`
+	// Uninstall removes hook entries owned by obot-sentry instead of installing
+	// desired audit/enforcement entries. Supporting settings without an ownership
+	// marker are deliberately left alone.
+	Uninstall bool `usage:"remove all hooks managed by obot-sentry"`
 
 	// loadMDMConfig reads the platform MDM store. It is wired by New so tests can
 	// substitute a stub, keeping them independent of any real MDM configuration on
@@ -37,24 +41,34 @@ type HookInstall struct {
 
 func (h *HookInstall) Customize(cmd *cobra.Command) {
 	cmd.Use = "hook-install"
-	cmd.Short = "Install managed local-agent audit hooks"
-	cmd.Long = `Install managed local-agent audit hooks
+	cmd.Short = "Install or uninstall managed local-agent hooks"
+	cmd.Long = `Install or uninstall managed local-agent hooks
 
 Requires root on macOS or an elevated Administrator/SYSTEM token on Windows.
 Installs machine policy for Codex and Cursor and user hooks for the active
 console user's Claude Code and Visual Studio Code installations.
 
 With enforcement enabled, also installs the pre-tool hooks that check each tool
-call against Obot's allowlist, for Claude Code, Codex, and Cursor. A run
-without enforcement leaves any pre-tool hook already on disk exactly as it
-found it.`
+call against Obot's allowlist, for Claude Code, Codex, and Cursor. A run without
+enforcement removes obot-sentry-managed enforcement hooks.
+
+With --uninstall, removes every hook entry marked --managed-by obot-sentry while
+leaving third-party hooks and unmarked supporting settings unchanged.`
 	cmd.Args = cobra.NoArgs
 }
 
 func (h *HookInstall) Run(cmd *cobra.Command, _ []string) error {
-	enforcing, err := h.enforcing()
-	if err != nil {
-		return NewConfigError(err)
+	if h.Uninstall && h.Enforce != nil {
+		return NewConfigError(fmt.Errorf("--uninstall and --enforce cannot be used together"))
+	}
+
+	enforcing := false
+	if !h.Uninstall {
+		var err error
+		enforcing, err = h.enforcing()
+		if err != nil {
+			return NewConfigError(err)
+		}
 	}
 
 	newInstaller := h.newInstaller
@@ -64,6 +78,7 @@ func (h *HookInstall) Run(cmd *cobra.Command, _ []string) error {
 	installer := newInstaller()
 	installer.Out = cmd.OutOrStdout()
 	installer.Enforce = enforcing
+	installer.Uninstall = h.Uninstall
 	return installer.Run(cmd.Context())
 }
 

@@ -200,3 +200,60 @@ func TestHookInstallFlagReachesTheInstaller(t *testing.T) {
 		})
 	}
 }
+
+func TestHookInstallUninstallReachesInstallerAndSkipsEnforcementResolution(t *testing.T) {
+	t.Setenv(envEnforcementEnabled, "true")
+	var installer *hookinstall.Installer
+	hook := &HookInstall{
+		loadMDMConfig: func() (mdmconfig.Config, error) {
+			t.Fatal("uninstall must not read MDM enforcement configuration")
+			return mdmconfig.Config{}, nil
+		},
+		newInstaller: func() *hookinstall.Installer {
+			installer = &hookinstall.Installer{
+				GOOS:                "darwin",
+				Privilege:           func() error { return nil },
+				ResolveUser:         func() (*hookinstall.TargetUser, error) { return &hookinstall.TargetUser{HomeDir: t.TempDir()}, nil },
+				ResolveDestinations: func(string) []hookinstall.Destination { return nil },
+			}
+			return installer
+		},
+	}
+
+	cmd := obotcmd.Command(hook)
+	cmd.SetArgs([]string{"--uninstall"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if installer == nil || !installer.Uninstall {
+		t.Fatalf("installer = %+v, want uninstall mode", installer)
+	}
+	if installer.Enforce {
+		t.Fatal("uninstall unexpectedly enabled enforcement")
+	}
+}
+
+func TestHookInstallRejectsUninstallWithExplicitEnforce(t *testing.T) {
+	for _, value := range []string{"--enforce", "--enforce=false"} {
+		t.Run(value, func(t *testing.T) {
+			t.Setenv(envEnforcementEnabled, "")
+			hook := &HookInstall{
+				loadMDMConfig: func() (mdmconfig.Config, error) {
+					t.Fatal("conflicting flags must fail before MDM resolution")
+					return mdmconfig.Config{}, nil
+				},
+				newInstaller: func() *hookinstall.Installer {
+					t.Fatal("conflicting flags must fail before installer construction")
+					return nil
+				},
+			}
+			cmd := obotcmd.Command(hook)
+			cmd.SetArgs([]string{"--uninstall", value})
+			err := cmd.Execute()
+			var exitErr *ExitCodeError
+			if !errors.As(err, &exitErr) || exitErr.Code != 2 || !strings.Contains(err.Error(), "cannot be used together") {
+				t.Fatalf("err = %v, want exit-code-2 flag conflict", err)
+			}
+		})
+	}
+}

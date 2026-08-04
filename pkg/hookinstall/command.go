@@ -43,6 +43,13 @@ func isOwnedCommand(command string) bool {
 	return strings.Contains(command, managedMarker)
 }
 
+// isOwnedEnforcementCommand narrows the ownership marker to commands invoking
+// the stable enforcement subcommand. It is used when enforcement resolves off:
+// audit hooks remain managed while stale pre-tool enforcement hooks are removed.
+func isOwnedEnforcementCommand(command string) bool {
+	return isOwnedCommand(command) && strings.Contains(command, " enforce ")
+}
+
 // phase names the hook lifecycle point. These are the exact `--phase` argument
 // values accepted by `obot-sentry audit submit`.
 type phase string

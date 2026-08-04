@@ -15,15 +15,13 @@ import (
 )
 
 // This file covers the enforcement half of convergence: the pre-tool entries an
-// --enforce run adds, and — just as important — everything a run without it must
-// leave alone.
+// --enforce run adds and the cleanup performed when enforcement is disabled.
 //
 // It deliberately matches no single production file. Enforcement is one decision
 // threaded through three of them — desired.go decides which events to write,
 // command.go builds the command that answers them, converge.go merges the entries
-// — and the property worth testing is the end-to-end one: with enforcement off,
-// not one pre-tool byte changes. Splitting these tests to sit beside each file
-// would test the seams and lose that.
+// — and the property worth testing is the end-to-end one. Splitting these tests
+// to sit beside each file would test the seams and lose that.
 
 // claudeEnforceDarwinGolden is the whole Claude Code document an --enforce
 // install writes, so the pre-tool entry is pinned in place rather than probed
@@ -198,8 +196,8 @@ func TestDesiredCodexEnforce(t *testing.T) {
 				t.Errorf("command_windows set off Windows: %q", inner[0].CommandWindows)
 			}
 
-			// An audit-only run leaves the event out entirely, which is what makes
-			// the writer skip it.
+			// An audit-only desired document leaves the event out; convergence uses
+			// that absence to remove managed enforcement without replacing it.
 			if audit := desiredCodex(exe, goos, false); len(audit.PreToolUse) != 0 {
 				t.Errorf("an audit-only Codex desired state carries %d pre-tool groups", len(audit.PreToolUse))
 			}
@@ -278,15 +276,31 @@ func TestEnforceAddsNothingForVSCode(t *testing.T) {
 	}
 }
 
-func TestAuditOnlyRunLeavesPreToolEntriesUntouched(t *testing.T) {
+func TestAuditOnlyRunRemovesManagedEnforcementHooks(t *testing.T) {
 	for _, tc := range []struct {
-		name   string
-		agent  localagent.Agent
-		format Format
+		name    string
+		agent   localagent.Agent
+		format  Format
+		removed int
 	}{
-		{"claude", localagent.ClaudeCode, FormatJSON},
-		{"cursor", localagent.Cursor, FormatJSON},
-		{"codex", localagent.Codex, FormatTOML},
+		{
+			name:    "claude",
+			agent:   localagent.ClaudeCode,
+			format:  FormatJSON,
+			removed: 1,
+		},
+		{
+			name:    "cursor",
+			agent:   localagent.Cursor,
+			format:  FormatJSON,
+			removed: 2,
+		},
+		{
+			name:    "codex",
+			agent:   localagent.Codex,
+			format:  FormatTOML,
+			removed: 1,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			d := destFor(t, tc.agent, tc.format)
@@ -300,14 +314,20 @@ func TestAuditOnlyRunLeavesPreToolEntriesUntouched(t *testing.T) {
 			if err != nil {
 				t.Fatalf("audit-only merge: %v", err)
 			}
-			if after.write {
-				t.Errorf("an audit-only run rewrote a converged enforcing file:\n%s", after.data)
+			if !after.write {
+				t.Errorf("an audit-only run did not remove enforcement hooks:\n%s", after.data)
 			}
-			if after.status != StatusUnchanged {
-				t.Errorf("status = %q, want unchanged", after.status)
+			if after.status != StatusUpdated {
+				t.Errorf("status = %q, want updated", after.status)
 			}
-			if !strings.Contains(string(after.data), "enforce --agent") {
-				t.Errorf("the pre-tool entry did not survive an audit-only run:\n%s", after.data)
+			if after.removed != tc.removed {
+				t.Errorf("removed = %d, want %d", after.removed, tc.removed)
+			}
+			if strings.Contains(string(after.data), "enforce --agent") {
+				t.Errorf("an enforcement entry survived an audit-only run:\n%s", after.data)
+			}
+			if !strings.Contains(string(after.data), "audit submit --agent") {
+				t.Errorf("the audit entry did not survive:\n%s", after.data)
 			}
 		})
 	}
@@ -464,13 +484,29 @@ func TestRunEnforceEndToEnd(t *testing.T) {
 		path string
 		want []string
 	}{
-		{claudeFile, []string{`"PreToolUse"`, "enforce --agent claude-code --event PreToolUse --managed-by obot-sentry"}},
-		{codexFile, []string{"[[hooks.PreToolUse]]", "enforce --agent codex --event PreToolUse --managed-by obot-sentry"}},
-		{cursorFile, []string{
-			`"beforeMCPExecution"`, `"preToolUse"`,
-			"enforce --agent cursor --event beforeMCPExecution --managed-by obot-sentry",
-			"enforce --agent cursor --event preToolUse --managed-by obot-sentry",
-		}},
+		{
+			path: claudeFile,
+			want: []string{
+				`"PreToolUse"`,
+				"enforce --agent claude-code --event PreToolUse --managed-by obot-sentry",
+			},
+		},
+		{
+			path: codexFile,
+			want: []string{
+				"[[hooks.PreToolUse]]",
+				"enforce --agent codex --event PreToolUse --managed-by obot-sentry",
+			},
+		},
+		{
+			path: cursorFile,
+			want: []string{
+				`"beforeMCPExecution"`,
+				`"preToolUse"`,
+				"enforce --agent cursor --event beforeMCPExecution --managed-by obot-sentry",
+				"enforce --agent cursor --event preToolUse --managed-by obot-sentry",
+			},
+		},
 	} {
 		data, err := os.ReadFile(tc.path)
 		if err != nil {
@@ -524,28 +560,25 @@ func TestRunEnforceEndToEnd(t *testing.T) {
 		t.Errorf("second enforcing run was not idempotent:\n%s", again.String())
 	}
 
-	// And a run without enforcement leaves the pre-tool entries alone: this is
-	// what makes turning enforcement off safe, since the backend allows
-	// unconditionally.
-	before := map[string][]byte{}
-	for _, p := range []string{claudeFile, codexFile, cursorFile, vscodeFile} {
-		data, err := os.ReadFile(p)
-		if err != nil {
-			t.Fatal(err)
-		}
-		before[p] = data
-	}
+	// A run without enforcement removes the managed pre-tool hooks while leaving
+	// each audit hook installed.
 	var auditOnly bytes.Buffer
 	if err := newInstaller(false, &auditOnly).Run(context.Background()); err != nil {
 		t.Fatalf("audit-only run: %v", err)
 	}
-	for p, want := range before {
+	if !strings.Contains(auditOnly.String(), "hook removed") {
+		t.Errorf("audit-only summary did not report removals:\n%s", auditOnly.String())
+	}
+	for _, p := range []string{claudeFile, codexFile, cursorFile, vscodeFile} {
 		got, err := os.ReadFile(p)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if string(got) != string(want) {
-			t.Errorf("an audit-only run changed %s:\n--- before ---\n%s\n--- after ---\n%s", p, want, got)
+		if strings.Contains(string(got), "enforce --agent") {
+			t.Errorf("an enforcement hook survived in %s:\n%s", p, got)
+		}
+		if !strings.Contains(string(got), "audit submit --agent") {
+			t.Errorf("the audit hook was lost from %s:\n%s", p, got)
 		}
 	}
 }

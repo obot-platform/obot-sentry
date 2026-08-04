@@ -9,6 +9,7 @@ import (
 	"os"
 	"runtime"
 	"slices"
+	"strings"
 	"text/tabwriter"
 
 	"github.com/obot-platform/obot-sentry/pkg/datadir"
@@ -26,7 +27,7 @@ func supportedPlatform(goos string) bool {
 	return goos == "darwin" || goos == "windows"
 }
 
-// Installer converges the managed audit hooks. Every external dependency is an
+// Installer converges or removes the managed hooks. Every external dependency is an
 // injectable seam so platform discovery, command generation, and (later) the
 // filesystem commit can be exercised independently in tests without root, a
 // specific OS, or a real obot-sentry binary on disk.
@@ -56,6 +57,9 @@ type Installer struct {
 	// post-tool audit hooks. It is resolved by the command layer from the
 	// --enforce flag, the environment, and the MDM store, in that order.
 	Enforce bool
+	// Uninstall removes every marker-owned hook instead of installing desired
+	// hooks. Supporting settings without ownership markers remain unchanged.
+	Uninstall bool
 	// Out receives operator-facing output; defaults to os.Stdout.
 	Out io.Writer
 }
@@ -104,10 +108,9 @@ func New() *Installer {
 	}
 }
 
-// Plan is the resolved desired-state model for one invocation: the durable
-// executable, the active console user, the shared machine identity directory,
-// and the ordered destinations to converge. The per-agent hook content is
-// derived from Executable via the typed builders in desired.go.
+// Plan is the resolved desired-state model for one invocation: its mode, the
+// active console user, and the ordered destinations to converge. Install mode
+// also carries the durable executable and shared machine identity directory.
 type Plan struct {
 	GOOS         string
 	Executable   string
@@ -115,6 +118,7 @@ type Plan struct {
 	IdentityDir  string
 	Destinations []Destination
 	Enforce      bool
+	Uninstall    bool
 }
 
 func (i *Installer) Run(ctx context.Context) error {
@@ -134,13 +138,17 @@ func (i *Installer) Run(ctx context.Context) error {
 		return err
 	}
 
-	resolveExe := i.ResolveExe
-	if resolveExe == nil {
-		resolveExe = defaultResolveExe
-	}
-	exe, err := resolveExe()
-	if err != nil {
-		return err
+	var exe string
+	if !i.Uninstall {
+		resolveExe := i.ResolveExe
+		if resolveExe == nil {
+			resolveExe = defaultResolveExe
+		}
+		var err error
+		exe, err = resolveExe()
+		if err != nil {
+			return err
+		}
 	}
 
 	resolveUser := i.ResolveUser
@@ -152,13 +160,16 @@ func (i *Installer) Run(ctx context.Context) error {
 		return err
 	}
 
-	provision := i.ProvisionIdentity
-	if provision == nil {
-		provision = defaultProvisionIdentity
-	}
-	identityDir, err := provision()
-	if err != nil {
-		return err
+	var identityDir string
+	if !i.Uninstall {
+		provision := i.ProvisionIdentity
+		if provision == nil {
+			provision = defaultProvisionIdentity
+		}
+		identityDir, err = provision()
+		if err != nil {
+			return err
+		}
 	}
 
 	out := i.Out
@@ -177,6 +188,7 @@ func (i *Installer) Run(ctx context.Context) error {
 		IdentityDir:  identityDir,
 		Destinations: resolveDests(goos),
 		Enforce:      i.Enforce,
+		Uninstall:    i.Uninstall,
 	}
 
 	// Preflight: read and merge every destination in memory. Any read or parse
@@ -213,6 +225,7 @@ type plannedChange struct {
 	existed  bool
 	status   Status
 	dupes    int
+	removed  int
 	write    bool
 }
 
@@ -238,7 +251,12 @@ func buildChanges(ctx context.Context, plan Plan) ([]plannedChange, error) {
 		if err != nil {
 			return nil, fmt.Errorf("%s (%s): %w", d.Label, abs, err)
 		}
-		outcome, err := mergeConfig(d, existing, plan.Executable, plan.GOOS, plan.Enforce)
+		var outcome mergeOutcome
+		if plan.Uninstall {
+			outcome, err = removeConfig(d, existing)
+		} else {
+			outcome, err = mergeConfig(d, existing, plan.Executable, plan.GOOS, plan.Enforce)
+		}
 		if err != nil {
 			return nil, fmt.Errorf("%s (%s): %w", d.Label, abs, err)
 		}
@@ -250,6 +268,7 @@ func buildChanges(ctx context.Context, plan Plan) ([]plannedChange, error) {
 			existed:  existed,
 			status:   outcome.status,
 			dupes:    outcome.dupes,
+			removed:  outcome.removed,
 			write:    outcome.write,
 		})
 	}
@@ -271,11 +290,13 @@ func commitChanges(ctx context.Context, plan Plan, changes []plannedChange) []Re
 			Path:              c.absPath,
 			Status:            c.status,
 			DuplicatesRemoved: c.dupes,
+			HooksRemoved:      c.removed,
 		}
 		if err := ctx.Err(); err != nil {
 			r.Status = StatusFailed
 			r.Err = err
 			r.DuplicatesRemoved = 0
+			r.HooksRemoved = 0
 			results = append(results, r)
 			continue
 		}
@@ -285,6 +306,7 @@ func commitChanges(ctx context.Context, plan Plan, changes []plannedChange) []Re
 				r.Status = StatusFailed
 				r.Err = fmt.Errorf("re-reading before commit: %w", err)
 				r.DuplicatesRemoved = 0
+				r.HooksRemoved = 0
 				results = append(results, r)
 				continue
 			}
@@ -292,6 +314,7 @@ func commitChanges(ctx context.Context, plan Plan, changes []plannedChange) []Re
 				r.Status = StatusFailed
 				r.Err = errors.New("config changed after preflight; refusing to overwrite concurrent edits")
 				r.DuplicatesRemoved = 0
+				r.HooksRemoved = 0
 				results = append(results, r)
 				continue
 			}
@@ -299,6 +322,7 @@ func commitChanges(ctx context.Context, plan Plan, changes []plannedChange) []Re
 				r.Status = StatusFailed
 				r.Err = err
 				r.DuplicatesRemoved = 0
+				r.HooksRemoved = 0
 			}
 		}
 		results = append(results, r)
@@ -317,7 +341,11 @@ func homeOf(u *TargetUser) string {
 // followed by the per-destination result table. It emits only paths and
 // statuses — never config contents or credentials.
 func writeSummary(w io.Writer, plan Plan, results []Result) {
-	_, _ = fmt.Fprintf(w, "obot-sentry hook-install (%s)\n", plan.GOOS)
+	command := "hook-install"
+	if plan.Uninstall {
+		command += " --uninstall"
+	}
+	_, _ = fmt.Fprintf(w, "obot-sentry %s (%s)\n", command, plan.GOOS)
 	if plan.User != nil {
 		_, _ = fmt.Fprintf(w, "Active user: %s (%s)\n", plan.User.Username, plan.User.HomeDir)
 	}
@@ -325,18 +353,24 @@ func writeSummary(w io.Writer, plan Plan, results []Result) {
 		_, _ = fmt.Fprintf(w, "Machine identity: %s\n", plan.IdentityDir)
 	}
 	_, _ = fmt.Fprintln(w)
-	FormatSummary(w, plan.Executable, results)
+	formatSummary(w, plan.Executable, results, plan.Uninstall)
 }
 
 // restartReminder is appended to successful output so the operator reloads every
-// agent and the new hooks take effect.
-const restartReminder = "Restart or reload Claude Code, Codex, Visual Studio Code, and Cursor to apply the audit hooks."
+// agent and the hook changes take effect.
+const restartReminder = "Restart or reload Claude Code, Codex, Visual Studio Code, and Cursor to apply the hook changes."
 
 // FormatSummary renders the deterministic per-destination result summary. It
 // reports the resolved executable and one line per destination with its status
-// and any deduplicated entries, but never config contents or credentials.
+// and change counts, but never config contents or credentials.
 func FormatSummary(w io.Writer, exe string, results []Result) {
-	_, _ = fmt.Fprintf(w, "Executable: %s\n\n", exe)
+	formatSummary(w, exe, results, false)
+}
+
+func formatSummary(w io.Writer, exe string, results []Result, uninstall bool) {
+	if !uninstall {
+		_, _ = fmt.Fprintf(w, "Executable: %s\n\n", exe)
+	}
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 	_, _ = fmt.Fprintln(tw, "AGENT\tSTATUS\tPATH\tDETAIL")
 	for _, r := range results {
@@ -358,11 +392,19 @@ func resultDetail(r Result) string {
 	if r.Status == StatusFailed && r.Err != nil {
 		return r.Err.Error()
 	}
+	var details []string
+	if r.HooksRemoved == 1 {
+		details = append(details, "1 hook removed")
+	} else if r.HooksRemoved > 1 {
+		details = append(details, fmt.Sprintf("%d hooks removed", r.HooksRemoved))
+	}
 	if r.DuplicatesRemoved == 1 {
-		return "1 duplicate removed"
+		details = append(details, "1 duplicate removed")
+	} else if r.DuplicatesRemoved > 1 {
+		details = append(details, fmt.Sprintf("%d duplicates removed", r.DuplicatesRemoved))
 	}
-	if r.DuplicatesRemoved > 1 {
-		return fmt.Sprintf("%d duplicates removed", r.DuplicatesRemoved)
+	if len(details) == 0 {
+		return "-"
 	}
-	return "-"
+	return strings.Join(details, ", ")
 }

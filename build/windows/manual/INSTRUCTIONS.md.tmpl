@@ -110,44 +110,18 @@ Nothing in step 2 touches the hook configuration.
 
 ### 1. Remove the hooks
 
-`hook-install` has no uninstall command, so its hook configuration must be
-removed by hand. Every entry it writes is marked with `--managed-by
-obot-sentry`. Find the files that still carry one:
+From an Administrator PowerShell, remove every Obot Sentry-managed hook while
+preserving third-party hooks:
 
 ```powershell
-Get-ChildItem -Recurse -File -ErrorAction SilentlyContinue `
-  "$env:USERPROFILE\.claude","$env:USERPROFILE\.copilot", `
-  "$env:APPDATA\Code\User","$env:ProgramData\OpenAI\Codex","$env:ProgramData\Cursor" |
-  Select-String -List 'managed-by obot-sentry' | Select-Object -ExpandProperty Path
+& "C:\Program Files\Obot\obot-sentry\obot-sentry.exe" hook-install --uninstall
 ```
 
-Then clean up each agent:
-
-- **Copilot (VS Code) hook** — this file is written only by Obot Sentry, so
-  delete it:
-
-  ```powershell
-  Remove-Item -Force "$env:USERPROFILE\.copilot\hooks\obot-sentry.json" -ErrorAction SilentlyContinue
-  ```
-
-- **Claude Code** (`%USERPROFILE%\.claude\settings.json`), **Codex**
-  (`%ProgramData%\OpenAI\Codex\requirements.toml`), and **Cursor**
-  (`%ProgramData%\Cursor\hooks.json`) — open each file and delete every hook
-  entry whose command contains `--managed-by obot-sentry`, leaving any of your
-  own hooks in place. The marker is on every entry Obot Sentry writes, including
-  the enforcement entries under `PreToolUse`, `beforeMCPExecution`, and
-  `preToolUse` — remove those alongside the post-tool ones. In the Codex file Obot
-  Sentry also pins two values under `[features]`: `hooks = true`, which you can drop if
-  Obot Sentry was the only reason hooks were enabled, and
-  `non_prefixed_mcp_tool_names = false`, which you can drop if you want that
-  Codex feature available again. The two `%ProgramData%` files are machine-wide, so
-  edit them in an Administrator PowerShell.
-
-- **VS Code settings** (`%APPDATA%\Code\User\settings.json`) — under
-  `chat.hookFilesLocations`, remove the keys Obot Sentry added
-  (`~/.copilot/hooks`, `.claude/settings.json`, `.claude/settings.local.json`,
-  `~/.claude/settings.json`); delete the whole `chat.hookFilesLocations` object
-  if you had no other entries in it.
+The command removes only entries marked `--managed-by obot-sentry`; it does not
+delete files or change unmarked supporting settings. If desired, manually remove
+the Codex `[features]` pins `hooks = true` and
+`non_prefixed_mcp_tool_names = false`, and remove the Obot-added values under VS
+Code's `chat.hookFilesLocations`.
 
 The per-user files (`.claude`, `.copilot`, VS Code settings) exist once per
 signed-in user, so repeat for each user on a shared machine. Restart Claude

@@ -22,6 +22,7 @@ obot-sentry scan              # build + print the manifest (add --submit to enro
 obot-sentry enroll            # explicit enrollment, for verifying a configuration
 obot-sentry hook-install      # install managed local-agent hooks (root/Administrator)
                               #   --enforce also installs the tool-call enforcement hooks
+                              #   --uninstall removes all marker-owned hooks
 obot-sentry version
 ```
 
@@ -198,21 +199,26 @@ permanent. We intend to find a machine-scoped solution for Claude Code in the fu
 
 ### Turning it off
 
-Set `EnforcementEnabled` to false (or drop `--enforce`) and the next
-`hook-install` converges the audit hooks and **leaves the pre-tool entries on
-disk exactly as it found them** — the merge is per hook event, so an event that is
-not being installed is never touched. That is safe because when enforcement is
-disabled, every tool call is allowed: a stale hook costs one round trip per tool
-call and blocks nothing. Remove the entries with the steps below when you want
-them gone.
+Set `EnforcementEnabled` to false (or pass `--enforce=false`) and the next
+`hook-install` converges the audit hooks and removes every Obot Sentry-managed
+enforcement hook. Third-party pre-tool hooks are left untouched. A plain
+`hook-install` still follows the configured enforcement value, so explicitly set
+`EnforcementEnabled` false (or use `--enforce=false`) when disabling it.
 
 ## Removing the hooks
 
-`hook-install` has no uninstall subcommand, and neither packaging path
-removes the hook configuration it writes: on Windows `msiexec /x` unregisters
-the scheduled tasks but leaves the hooks already written into agent config
-files, and on macOS there is no automated removal at all. Remove the hooks by
-hand from each agent's configuration.
+Run the following before removing the binary:
+
+```sh
+sudo obot-sentry hook-install --uninstall
+```
+
+On Windows, run the equivalent command in an elevated PowerShell. The command
+removes all hook entries whose command contains `--managed-by obot-sentry` from
+Claude Code, Codex, VS Code, and Cursor while preserving third-party
+hooks. It targets machine-wide files and the active console user's files, so
+repeat it for each user on a shared machine. Stop the scheduled hook task or
+uninstall the package afterward so a later convergence does not reinstall them.
 
 Every entry Obot Sentry writes carries the `--managed-by obot-sentry` marker
 — the same signal `hook-install` uses to recognize and replace its own entries
@@ -227,17 +233,12 @@ are:
 | Cursor | `/Library/Application Support/Cursor/hooks.json` | `%ProgramData%\Cursor\hooks.json` |
 | VS Code settings | `~/Library/Application Support/Code/User/settings.json` | `%APPDATA%\Code\User\settings.json` |
 
-The Copilot hook file is written solely by Obot Sentry, so it can be deleted
-outright. The other four are shared with your own configuration: delete only
-the hook entries whose command contains `--managed-by obot-sentry` — the marker
-is on every entry Obot Sentry writes, including the enforcement entries under
-`PreToolUse`, `beforeMCPExecution`, and `preToolUse`, and in the
-VS Code settings file also remove the `chat.hookFilesLocations` keys Obot
-Sentry added (`~/.copilot/hooks`, `.claude/settings.json`,
-`.claude/settings.local.json`, `~/.claude/settings.json`). The user-scoped
-files exist once per signed-in user, so repeat for each user on a shared
-machine. Restart the agents afterward to drop the hooks. Per-OS commands are in
-the `INSTRUCTIONS.md` for each configuration under `build/`.
+The uninstall flag intentionally changes only marker-owned hooks. It does not
+delete files, remove Codex's unmarked `[features]` pins, or remove the unmarked
+`chat.hookFilesLocations` values in VS Code settings because their previous
+values cannot be recovered safely. Remove those supporting settings manually if
+you no longer want them. Restart the agents afterward to drop the hooks. Per-OS
+commands are in the `INSTRUCTIONS.md` for each configuration under `build/`.
 
 ## MDM packaging
 

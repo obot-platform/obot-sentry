@@ -67,6 +67,8 @@ const (
 	StatusUpdated Status = "updated"
 	// StatusUnchanged means the destination already held the desired state.
 	StatusUnchanged Status = "unchanged"
+	// StatusRemoved means one or more managed hooks were removed.
+	StatusRemoved Status = "removed"
 	// StatusFailed means the destination could not be converged; see Err.
 	StatusFailed Status = "failed"
 )
@@ -86,6 +88,9 @@ type Result struct {
 	Status Status
 	// DuplicatesRemoved counts owned entries collapsed during convergence.
 	DuplicatesRemoved int
+	// HooksRemoved counts managed hooks removed without replacement, either by
+	// uninstall or because enforcement was disabled.
+	HooksRemoved int
 	// Err is set when Status is StatusFailed.
 	Err error
 }
