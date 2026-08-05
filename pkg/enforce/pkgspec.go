@@ -2,6 +2,7 @@ package enforce
 
 import (
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 
@@ -81,11 +82,7 @@ var uvxInheritedConfigEnv = map[string]struct{}{
 }
 
 func unsafeConfiguredPackageEnv(run runner, env map[string]string) (string, bool) {
-	names := make([]string, 0, len(env))
-	for name := range env {
-		names = append(names, name)
-	}
-	slices.Sort(names)
+	names := slices.Sorted(maps.Keys(env))
 	for _, name := range names {
 		if packageEnvAffectsIdentity(run, name, true) {
 			return name, true
