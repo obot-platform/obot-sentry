@@ -51,7 +51,7 @@ const claudeWindowsGolden = `{
         "hooks": [
           {
             "type": "command",
-            "command": "\"C:\\Program Files\\Obot\\obot-sentry\\obot-sentry.exe\" audit submit --agent claude-code --phase post-tool --managed-by obot-sentry",
+            "command": "& \"C:\\Program Files\\Obot\\obot-sentry\\obot-sentry.exe\" audit submit --agent claude-code --phase post-tool --managed-by obot-sentry",
             "timeout": 30,
             "statusMessage": "Submitting Obot audit log"
           }
@@ -64,7 +64,7 @@ const claudeWindowsGolden = `{
         "hooks": [
           {
             "type": "command",
-            "command": "\"C:\\Program Files\\Obot\\obot-sentry\\obot-sentry.exe\" audit submit --agent claude-code --phase failure --managed-by obot-sentry",
+            "command": "& \"C:\\Program Files\\Obot\\obot-sentry\\obot-sentry.exe\" audit submit --agent claude-code --phase failure --managed-by obot-sentry",
             "timeout": 30,
             "statusMessage": "Submitting Obot audit failure"
           }

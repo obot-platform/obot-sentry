@@ -73,9 +73,10 @@ func TestHookCommandGolden(t *testing.T) {
 		{"darwin cursor post", macExe, "darwin", localagent.Cursor, phasePostTool,
 			"/usr/local/bin/obot-sentry audit submit --agent cursor --phase post-tool --managed-by obot-sentry"},
 
-		// Windows Claude Code and Cursor: directly quoted executable, no operator.
+		// Windows Claude Code: PowerShell call operator prefix.
 		{"windows claude post", winExe, "windows", localagent.ClaudeCode, phasePostTool,
-			`"C:\Program Files\Obot\obot-sentry\obot-sentry.exe" audit submit --agent claude-code --phase post-tool --managed-by obot-sentry`},
+			`& "C:\Program Files\Obot\obot-sentry\obot-sentry.exe" audit submit --agent claude-code --phase post-tool --managed-by obot-sentry`},
+		// Windows Cursor: directly quoted executable, no operator.
 		{"windows cursor failure", winExe, "windows", localagent.Cursor, phaseFailure,
 			`"C:\Program Files\Obot\obot-sentry\obot-sentry.exe" audit submit --agent cursor --phase failure --managed-by obot-sentry`},
 		// Windows Codex and VS Code: PowerShell call operator prefix.

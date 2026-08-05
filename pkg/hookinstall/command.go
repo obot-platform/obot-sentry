@@ -76,10 +76,10 @@ func enforceCommandArgs(agent localagent.Agent, event string) []string {
 }
 
 // windowsUsesCallOperator reports whether an agent's Windows command runner
-// requires the PowerShell call operator (`& "..."`) prefix. Codex and VS Code
-// do; Claude Code and Cursor invoke the double-quoted executable directly.
+// requires the PowerShell call operator (`& "..."`) prefix. Claude Code, Codex,
+// and VS Code do; Cursor invokes the double-quoted executable directly.
 func windowsUsesCallOperator(agent localagent.Agent) bool {
-	return agent == localagent.Codex || agent == localagent.VSCode
+	return agent == localagent.ClaudeCode || agent == localagent.Codex || agent == localagent.VSCode
 }
 
 // hookCommand renders the full hook command string for one agent on goos from
@@ -89,9 +89,9 @@ func windowsUsesCallOperator(agent localagent.Agent) bool {
 //   - non-Windows: POSIX-shell quoting (single-quote only when needed for
 //     spaces, apostrophes, or other unsafe characters), so any path stays one
 //     token.
-//   - Windows Claude Code / Cursor: a double-quoted executable, invoked directly.
-//   - Windows Codex / VS Code: the same double-quoted executable prefixed with
-//     the PowerShell call operator `& `.
+//   - Windows Cursor: a double-quoted executable, invoked directly.
+//   - Windows Claude Code / Codex / VS Code: the same double-quoted executable
+//     prefixed with the PowerShell call operator `& `.
 func hookCommand(exe, goos string, agent localagent.Agent, argv []string) string {
 	args := strings.Join(argv, " ")
 	if goos == "windows" {

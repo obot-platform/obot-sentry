@@ -409,7 +409,7 @@ func TestEnforceCommandQuoting(t *testing.T) {
 			"/usr/local/bin/obot-sentry enforce --agent cursor --event beforeMCPExecution --managed-by obot-sentry",
 			"/usr/local/bin/obot-sentry enforce --agent cursor --event preToolUse --managed-by obot-sentry"}},
 		{localagent.ClaudeCode, "windows", winExe, []string{
-			`"C:\Program Files\Obot\obot-sentry\obot-sentry.exe" enforce --agent claude-code --event PreToolUse --managed-by obot-sentry`}},
+			`& "C:\Program Files\Obot\obot-sentry\obot-sentry.exe" enforce --agent claude-code --event PreToolUse --managed-by obot-sentry`}},
 		{localagent.Codex, "windows", winExe, []string{
 			`& "C:\Program Files\Obot\obot-sentry\obot-sentry.exe" enforce --agent codex --event PreToolUse --managed-by obot-sentry`}},
 		{localagent.Cursor, "windows", winExe, []string{
