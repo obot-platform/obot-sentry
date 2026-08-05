@@ -17,9 +17,9 @@ import (
 )
 
 // errUnsupportedPlatform is returned for any GOOS other than darwin or windows.
-// It is a plain error so the CLI maps it to the normal runtime exit code:
-// installing hooks is local configuration, not a deployment-config failure.
-var errUnsupportedPlatform = errors.New("obot-sentry hook-install is only supported on macOS and Windows")
+// It is a plain error so the CLI maps it to the normal runtime exit code: hook
+// management is local configuration, not a deployment-config failure.
+var errUnsupportedPlatform = errors.New("hook management is only supported on macOS and Windows")
 
 // supportedPlatform reports whether goos has a defined destination layout and
 // privilege model.
@@ -127,7 +127,7 @@ func (i *Installer) Run(ctx context.Context) error {
 		goos = runtime.GOOS
 	}
 	if !supportedPlatform(goos) {
-		return errUnsupportedPlatform
+		return fmt.Errorf("obot-sentry %s: %w", i.commandName(), errUnsupportedPlatform)
 	}
 
 	privilege := i.Privilege
@@ -210,9 +210,16 @@ func (i *Installer) Run(ctx context.Context) error {
 		}
 	}
 	if failed > 0 {
-		return fmt.Errorf("hook-install could not converge %d of %d destinations; see summary", failed, len(results))
+		return fmt.Errorf("%s could not converge %d of %d destinations; see summary", i.commandName(), failed, len(results))
 	}
 	return nil
+}
+
+func (i *Installer) commandName() string {
+	if i.Uninstall {
+		return "hook-uninstall"
+	}
+	return "hook-install"
 }
 
 // plannedChange is one destination's converged bytes, decided during preflight
@@ -343,7 +350,7 @@ func homeOf(u *TargetUser) string {
 func writeSummary(w io.Writer, plan Plan, results []Result) {
 	command := "hook-install"
 	if plan.Uninstall {
-		command += " --uninstall"
+		command = "hook-uninstall"
 	}
 	_, _ = fmt.Fprintf(w, "obot-sentry %s (%s)\n", command, plan.GOOS)
 	if plan.User != nil {

@@ -3,7 +3,7 @@
 // Cursor) onto the hidden `obot-sentry audit submit` command.
 //
 // The package reads as a pipeline, one stage per file, so the same primitives can
-// back a future hook-status or hook-uninstall command:
+// back the hook-install and hook-uninstall commands.
 //
 //   - who and where we are: platform.go and its per-GOOS files resolve the
 //     console user and the privilege to write for them,

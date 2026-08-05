@@ -59,7 +59,7 @@ func checkPrivilege() error {
 	if token.IsElevated() {
 		return nil
 	}
-	return fmt.Errorf("obot-sentry hook-install must run from an elevated Administrator or SYSTEM token on Windows")
+	return fmt.Errorf("obot-sentry hook commands must run from an elevated Administrator or SYSTEM token on Windows")
 }
 
 // isSystemToken reports whether token's user is the local SYSTEM account. This

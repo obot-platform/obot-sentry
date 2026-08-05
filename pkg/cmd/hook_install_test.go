@@ -27,6 +27,9 @@ func TestHookInstallVisibleInRootHelp(t *testing.T) {
 	if !slices.Contains(cmds, "hook-install") {
 		t.Fatalf("expected hook-install command in root help, got %v", cmds)
 	}
+	if !slices.Contains(cmds, "hook-uninstall") {
+		t.Fatalf("expected hook-uninstall command in root help, got %v", cmds)
+	}
 	// The audit plumbing stays hidden even though hook-install (whose
 	// description mentions "audit") is public.
 	if slices.Contains(cmds, "audit") {
@@ -71,27 +74,32 @@ func TestHookInstallRejectsPositionalArgs(t *testing.T) {
 	}
 }
 
-// TestHookInstallUnsupportedPlatformMakesNoChanges exercises the command on the
-// test host. On Linux (the CI/dev platform for this suite) hook-install must
-// report an unsupported-platform error and write nothing to stdout.
+// TestHookCommandsUnsupportedPlatformMakeNoChanges exercises the commands on
+// the test host. On Linux (the CI/dev platform for this suite) each command
+// must identify itself in the unsupported-platform error and write nothing to
+// stdout.
 // This test is skipped when not run on Linux
-func TestHookInstallUnsupportedPlatformMakesNoChanges(t *testing.T) {
+func TestHookCommandsUnsupportedPlatformMakeNoChanges(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("skipping test on non-Linux platform")
 	}
 
-	root := New()
-	var stdout, stderr bytes.Buffer
-	root.SetOut(&stdout)
-	root.SetErr(&stderr)
-	root.SetArgs([]string{"hook-install"})
+	for _, command := range []string{"hook-install", "hook-uninstall"} {
+		t.Run(command, func(t *testing.T) {
+			root := New()
+			var stdout, stderr bytes.Buffer
+			root.SetOut(&stdout)
+			root.SetErr(&stderr)
+			root.SetArgs([]string{command})
 
-	err := root.Execute()
-	if err == nil {
-		t.Fatal("expected hook-install to error without a supported platform and privilege")
-	}
-	if stdout.Len() != 0 {
-		t.Fatalf("expected no stdout when preflight fails, got %q", stdout.String())
+			err := root.Execute()
+			if err == nil || !strings.Contains(err.Error(), "obot-sentry "+command) {
+				t.Fatalf("err = %v, want unsupported-platform error for %s", err, command)
+			}
+			if stdout.Len() != 0 {
+				t.Fatalf("expected no stdout when preflight fails, got %q", stdout.String())
+			}
+		})
 	}
 }
 
@@ -201,14 +209,10 @@ func TestHookInstallFlagReachesTheInstaller(t *testing.T) {
 	}
 }
 
-func TestHookInstallUninstallReachesInstallerAndSkipsEnforcementResolution(t *testing.T) {
+func TestHookUninstallReachesInstaller(t *testing.T) {
 	t.Setenv(envEnforcementEnabled, "true")
 	var installer *hookinstall.Installer
-	hook := &HookInstall{
-		loadMDMConfig: func() (mdmconfig.Config, error) {
-			t.Fatal("uninstall must not read MDM enforcement configuration")
-			return mdmconfig.Config{}, nil
-		},
+	hook := &HookUninstall{
 		newInstaller: func() *hookinstall.Installer {
 			installer = &hookinstall.Installer{
 				GOOS:                "darwin",
@@ -221,7 +225,6 @@ func TestHookInstallUninstallReachesInstallerAndSkipsEnforcementResolution(t *te
 	}
 
 	cmd := obotcmd.Command(hook)
-	cmd.SetArgs([]string{"--uninstall"})
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("execute: %v", err)
 	}
@@ -230,30 +233,5 @@ func TestHookInstallUninstallReachesInstallerAndSkipsEnforcementResolution(t *te
 	}
 	if installer.Enforce {
 		t.Fatal("uninstall unexpectedly enabled enforcement")
-	}
-}
-
-func TestHookInstallRejectsUninstallWithExplicitEnforce(t *testing.T) {
-	for _, value := range []string{"--enforce", "--enforce=false"} {
-		t.Run(value, func(t *testing.T) {
-			t.Setenv(envEnforcementEnabled, "")
-			hook := &HookInstall{
-				loadMDMConfig: func() (mdmconfig.Config, error) {
-					t.Fatal("conflicting flags must fail before MDM resolution")
-					return mdmconfig.Config{}, nil
-				},
-				newInstaller: func() *hookinstall.Installer {
-					t.Fatal("conflicting flags must fail before installer construction")
-					return nil
-				},
-			}
-			cmd := obotcmd.Command(hook)
-			cmd.SetArgs([]string{"--uninstall", value})
-			err := cmd.Execute()
-			var exitErr *ExitCodeError
-			if !errors.As(err, &exitErr) || exitErr.Code != 2 || !strings.Contains(err.Error(), "cannot be used together") {
-				t.Fatalf("err = %v, want exit-code-2 flag conflict", err)
-			}
-		})
 	}
 }

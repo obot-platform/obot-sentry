@@ -22,7 +22,7 @@ obot-sentry scan              # build + print the manifest (add --submit to enro
 obot-sentry enroll            # explicit enrollment, for verifying a configuration
 obot-sentry hook-install      # install managed local-agent hooks (root/Administrator)
                               #   --enforce also installs the tool-call enforcement hooks
-                              #   --uninstall removes all marker-owned hooks
+obot-sentry hook-uninstall    # remove all marker-owned hooks (root/Administrator)
 obot-sentry version
 ```
 
@@ -210,7 +210,7 @@ enforcement hook. Third-party pre-tool hooks are left untouched. A plain
 Run the following before removing the binary:
 
 ```sh
-sudo obot-sentry hook-install --uninstall
+sudo obot-sentry hook-uninstall
 ```
 
 On Windows, run the equivalent command in an elevated PowerShell. The command
@@ -233,7 +233,7 @@ are:
 | Cursor | `/Library/Application Support/Cursor/hooks.json` | `%ProgramData%\Cursor\hooks.json` |
 | VS Code settings | `~/Library/Application Support/Code/User/settings.json` | `%APPDATA%\Code\User\settings.json` |
 
-The uninstall flag intentionally changes only marker-owned hooks. It does not
+The uninstall command intentionally changes only marker-owned hooks. It does not
 delete files, remove Codex's unmarked `[features]` pins, or remove the unmarked
 `chat.hookFilesLocations` values in VS Code settings because their previous
 values cannot be recovered safely. Remove those supporting settings manually if

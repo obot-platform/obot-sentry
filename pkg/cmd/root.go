@@ -26,6 +26,7 @@ func newRoot(loadMDM func() (mdmconfig.Config, error)) *cobra.Command {
 	auditCmd, auditSubmit := newAuditCommand()
 	enforceCmd, enforceHook := newEnforceCommand()
 	hookInstall := &HookInstall{loadMDMConfig: loadMDM}
+	hookUninstall := &HookUninstall{}
 	for _, cf := range []*ConfigFlags{&scan.ConfigFlags, &enroll.ConfigFlags, &auditSubmit.ConfigFlags} {
 		cf.loadMDMConfig = loadMDM
 	}
@@ -35,6 +36,7 @@ func newRoot(loadMDM func() (mdmconfig.Config, error)) *cobra.Command {
 		enroll,
 		&Version{},
 		hookInstall,
+		hookUninstall,
 		auditCmd,
 		enforceCmd,
 	)

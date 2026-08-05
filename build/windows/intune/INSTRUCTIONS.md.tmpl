@@ -36,7 +36,7 @@ editing the install command.
 
    This removes the agent and its scheduled tasks, so no further hook
    convergence happens, but it does not remove existing hook configuration.
-   Run `hook-install --uninstall` first — see **Uninstall** below.
+   Run `hook-uninstall` first — see **Uninstall** below.
 
 4. **Install behavior:** System. **Detection rule:** keep the MSI product
    code rule Intune fills in automatically from the package.
@@ -94,7 +94,7 @@ Before uninstalling the MSI, run this from an elevated remediation script while
 the target user is the active console user:
 
 ```powershell
-& "C:\Program Files\Obot\obot-sentry\obot-sentry.exe" hook-install --uninstall
+& "C:\Program Files\Obot\obot-sentry\obot-sentry.exe" hook-uninstall
 ```
 
 This removes every hook entry marked `--managed-by obot-sentry` from the

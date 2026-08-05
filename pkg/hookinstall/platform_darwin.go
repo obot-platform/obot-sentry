@@ -19,15 +19,15 @@ const minDarwinUserUID = 500
 // is rejected before the first config write.
 func checkPrivilege() error {
 	if os.Geteuid() != 0 {
-		return fmt.Errorf("obot-sentry hook-install must run as root on macOS; rerun with sudo")
+		return fmt.Errorf("obot-sentry hook commands must run as root on macOS; rerun with sudo")
 	}
 	return nil
 }
 
 // resolveTargetUser resolves the active console user on macOS. It prefers the
-// account named by SUDO_UID (the interactive `sudo obot-sentry hook-install`
-// case), then falls back to the owner of /dev/console (the MDM/root case where
-// a user is logged in at the GUI).
+// account named by SUDO_UID (the interactive sudo command case), then falls
+// back to the owner of /dev/console (the MDM/root case where a user is logged
+// in at the GUI).
 func resolveTargetUser() (*TargetUser, error) {
 	if u := targetUserFromSudo(); u != nil {
 		return u, nil

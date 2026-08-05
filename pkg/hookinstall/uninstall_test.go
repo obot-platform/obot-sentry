@@ -178,7 +178,7 @@ func TestRunUninstallEndToEnd(t *testing.T) {
 	if err := inst.Run(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(uninstallOut.String(), "Executable:") || !strings.Contains(uninstallOut.String(), "hook-install --uninstall") || !strings.Contains(uninstallOut.String(), "removed") {
+	if strings.Contains(uninstallOut.String(), "Executable:") || !strings.Contains(uninstallOut.String(), "hook-uninstall") || !strings.Contains(uninstallOut.String(), "removed") {
 		t.Fatalf("unexpected uninstall summary:\n%s", uninstallOut.String())
 	}
 
