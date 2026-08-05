@@ -52,6 +52,7 @@ const claudeWindowsGolden = `{
           {
             "type": "command",
             "command": "& \"C:\\Program Files\\Obot\\obot-sentry\\obot-sentry.exe\" audit submit --agent claude-code --phase post-tool --managed-by obot-sentry",
+            "shell": "powershell",
             "timeout": 30,
             "statusMessage": "Submitting Obot audit log"
           }
@@ -65,6 +66,7 @@ const claudeWindowsGolden = `{
           {
             "type": "command",
             "command": "& \"C:\\Program Files\\Obot\\obot-sentry\\obot-sentry.exe\" audit submit --agent claude-code --phase failure --managed-by obot-sentry",
+            "shell": "powershell",
             "timeout": 30,
             "statusMessage": "Submitting Obot audit failure"
           }
@@ -172,6 +174,18 @@ func TestDesiredJSONDocumentsGolden(t *testing.T) {
 				t.Fatalf("desired document mismatch\n--- got ---\n%s\n--- want ---\n%s", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestDesiredClaudeWindowsHooksUsePowerShell(t *testing.T) {
+	got := desiredClaude(winExe, "windows", true)
+	groups := append(append(got.Hooks.PostToolUse, got.Hooks.PostToolUseFailure...), got.Hooks.PreToolUse...)
+	for _, group := range groups {
+		for _, hook := range group.Hooks {
+			if hook.Shell != "powershell" {
+				t.Errorf("Claude Code Windows hook shell = %q, want powershell: %#v", hook.Shell, hook)
+			}
+		}
 	}
 }
 

@@ -31,6 +31,7 @@ func preToolEvents(agent localagent.Agent, enforcing bool) []string {
 type claudeInnerHook struct {
 	Type          string `json:"type"`
 	Command       string `json:"command"`
+	Shell         string `json:"shell,omitempty"`
 	Timeout       int    `json:"timeout"`
 	StatusMessage string `json:"statusMessage"`
 }
@@ -53,11 +54,16 @@ type claudeDocument struct {
 
 func desiredClaude(exe, goos string, enforcing bool) claudeDocument {
 	matcherGroup := func(command, status string) claudeMatcherGroup {
+		shell := ""
+		if goos == "windows" {
+			shell = "powershell"
+		}
 		return claudeMatcherGroup{
 			Matcher: "*",
 			Hooks: []claudeInnerHook{{
 				Type:          "command",
 				Command:       command,
+				Shell:         shell,
 				Timeout:       hookTimeout,
 				StatusMessage: status,
 			}},
