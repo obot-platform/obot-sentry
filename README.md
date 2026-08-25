@@ -273,8 +273,8 @@ The installers are tenant-agnostic; per-tenant configuration (server URL
 + an enrollment key created in obot) is applied at deploy time — as MSI
 properties on Windows, as a managed-preferences profile on macOS — so one
 installer serves every tenant. The macOS MDM channel and the DIY channel
-ship the *same* `dist/obot-sentry.pkg`; only the configuration surface
-around it differs. The Windows chain runs
+ship the *same* `dist/obot-sentry-<version>.pkg`; only the configuration
+surface around it differs. The Windows chain runs
 **on Windows**: [obot-sentry.wxs](build/windows/obot-sentry.wxs) via
 [WiX Toolset v4](https://docs.firegiant.com/wix/) (`dotnet tool install
 --global wix`), wrapped by Microsoft's
@@ -294,7 +294,7 @@ being present, so a plain local run still produces an installable (unsigned)
 pkg for smoke tests:
 
 ```
-build/macos/pkg.sh 1.2.3 bin/obot-sentry   # dist/obot-sentry.pkg (version inside, name stable)
+build/macos/pkg.sh 1.2.3 bin/obot-sentry   # dist/obot-sentry-1.2.3.pkg (versioned name: Jamf keys packages by filename)
 ```
 
 Signing reads `INSTALLER_SIGN_P12` (the p12 path or its base64 contents)

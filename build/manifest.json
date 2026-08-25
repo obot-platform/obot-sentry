@@ -60,7 +60,7 @@
       "suggestedName": "macOS Devices",
       "instructions": "macos/intune/INSTRUCTIONS.md.tmpl",
       "assets": [
-        "macos/obot-sentry.pkg",
+        "macos/obot-sentry-${VERSION}.pkg",
         "macos/ai.obot.obot-sentry.mobileconfig.tmpl",
         "macos/ai.obot.obot-sentry.pppc.mobileconfig",
         "macos/uninstall.sh",
@@ -75,7 +75,7 @@
       "suggestedName": "macOS Devices",
       "instructions": "macos/jamf/INSTRUCTIONS.md.tmpl",
       "assets": [
-        "macos/obot-sentry.pkg",
+        "macos/obot-sentry-${VERSION}.pkg",
         "macos/ai.obot.obot-sentry.mobileconfig.tmpl",
         "macos/ai.obot.obot-sentry.pppc.mobileconfig",
         "macos/uninstall.sh",
@@ -103,7 +103,7 @@
       "suggestedName": "macOS Devices",
       "instructions": "macos/manual/INSTRUCTIONS.md.tmpl",
       "assets": [
-        "macos/obot-sentry.pkg",
+        "macos/obot-sentry-${VERSION}.pkg",
         "macos/manual/obot-sentry",
         "macos/uninstall.sh",
         "macos/manual/INSTRUCTIONS.md.tmpl"

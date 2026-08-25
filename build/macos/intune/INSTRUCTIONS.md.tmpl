@@ -2,9 +2,8 @@
 
 This install package contains:
 
-- `obot-sentry.pkg` — the obot-sentry device agent (version
-  {{.obotSentryVersion}}), signed and notarized. Installs the agent and its
-  two launchd jobs.
+- `obot-sentry-{{.obotSentryVersion}}.pkg` — the obot-sentry device agent,
+  signed and notarized. Installs the agent and its two launchd jobs.
 - `ai.obot.obot-sentry.mobileconfig` — the deployment configuration. The
   server URL and scan interval are already filled in; you supply the
   enrollment key.
@@ -14,7 +13,7 @@ This install package contains:
 ## 1. Add the installer
 
 1. In the Intune admin center, go to *Apps > macOS > Add*, select **macOS app
-   (PKG)**, and upload `obot-sentry.pkg`.
+   (PKG)**, and upload `obot-sentry-{{.obotSentryVersion}}.pkg`.
 
 2. In the **Detection rules** tab, set **Ignore app version** to **Yes**.
 
@@ -26,9 +25,9 @@ This install package contains:
 1. Open `ai.obot.obot-sentry.mobileconfig` in a text editor and replace
    `REPLACE_WITH_ENROLLMENT_KEY` with your enrollment key.
 
-2. Go to *Devices > Configuration > Create > New policy*, choose platform
-   **macOS** and profile type **Templates > Custom**, then upload the edited
-   file.
+2. Go to *Devices > Manage devices > Configuration > Create > New policy*,
+   choose platform **macOS** and profile type **Templates > Custom**, then
+   upload the edited file.
 
 3. Set the **Assignments** to the same targets selected by the app.
 
@@ -38,8 +37,10 @@ sync.
 
 ## 3. Grant file access
 
-Create a second **Templates > Custom** profile, upload
-`ai.obot.obot-sentry.pppc.mobileconfig` as-is, and assign it to the same targets.
+Create a second policy for `ai.obot.obot-sentry.pppc.mobileconfig` the same
+way as step 2 above: go to *Devices > Manage devices > Configuration > Create >
+New policy*, choose platform **macOS** and profile type **Templates > Custom**,
+upload the file as-is, and assign it to the same targets.
 
 ## What the installer does
 
@@ -74,7 +75,7 @@ Create a second **Templates > Custom** profile, upload
    sudo killall IntuneMdmAgent
    ```
 
-   Alternatively, the user can open Company Portal and select **Check settings**.
+   Alternatively, the user can open Company Portal and select **Check Status**.
 
    If the app reports installed but the receipt is missing, check the contents of `/var/log/install.log`
    to debug further.
@@ -150,17 +151,17 @@ hook cannot tell which MCP server a call targets, the call is blocked.
 {{end}}
 ## Upgrades
 
-To upgrade to a new version of Obot Sentry, upload the new `obot-sentry.pkg` file
-to the existing app and save. Devices pick it up on the management agent's next
-check-in.
+To upgrade to a new version of Obot Sentry, upload the new
+`obot-sentry-{{.obotSentryVersion}}.pkg` file to the existing app and save.
+Devices pick it up on the management agent's next check-in.
 
 The profiles are separate. If the new download contains changed `.mobileconfig`
 files, re-upload them to the same profiles.
 
 ## Uninstall
 
-1. Add `uninstall.sh` as a shell script under *Devices > macOS > Scripts > Add*,
-   and set **Run script as signed-in user** to **No**.
+1. Add `uninstall.sh` as a shell script under *Devices > macOS > Manage devices >
+   Scripts > Add*, and set **Run script as signed-in user** to **No**.
 
 2. Assign it to the targets you are removing Obot Sentry from. It is idempotent,
    so a device that already ran it is unaffected.

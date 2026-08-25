@@ -148,7 +148,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: installers-macos
-          path: dist/obot-sentry.pkg
+          path: dist/obot-sentry-*.pkg
           if-no-files-found: error
 
   # Assemble dist/mdm-assets (build/mdm-assets.sh: manifest completion +

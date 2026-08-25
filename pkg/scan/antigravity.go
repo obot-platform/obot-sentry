@@ -5,8 +5,10 @@ import (
 	"path"
 )
 
-// Antigravity keeps its runtime state in ~/.gemini/antigravity and its
-// configuration in ~/.gemini/config.
+// Antigravity keeps per-variant runtime state under ~/.gemini
+// (antigravity, antigravity-cli, antigravity-ide) and the configuration
+// shared by every variant in ~/.gemini/config:
+// https://antigravity.google/docs/mcp
 const (
 	antigravityMCPConfigRel   = ".gemini/config/mcp_config.json"
 	antigravityPluginsRel     = ".gemini/config/plugins"

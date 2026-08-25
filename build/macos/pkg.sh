@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
-# Build the macOS installer (dist/obot-sentry.pkg): a distribution-style
-# flat package that lays down the universal binary at
+# Build the macOS installer (dist/obot-sentry-<version>.pkg): a
+# distribution-style flat package that lays down the universal binary at
 # /usr/local/bin/obot-sentry plus the scan LaunchAgent and hook-install
 # LaunchDaemon, and bootstraps both via the postinstall script. The file
-# name is stable across versions (like the MSI); the version lives in the
-# package metadata, which MDMs compare against the device's
+# name carries the version because Jamf keys packages by filename: it
+# refuses a second upload with an existing name, and replacing the file
+# on an existing package trips its checksum recalculation, so each
+# release must coexist as a distinct package. The version also lives in
+# the package metadata, which MDMs compare against the device's
 # `pkgutil --pkg-info ai.obot.obot-sentry` receipt for upgrades.
 #
 # Runs on macOS: pkgbuild, productbuild, productsign, and notarytool all
@@ -38,7 +41,7 @@ buildDir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repoRoot="$(cd "$buildDir/../.." && pwd)"
 distDir="$repoRoot/dist"
 workDir="$distDir/macos-pkg"
-out="$distDir/obot-sentry.pkg"
+out="$distDir/obot-sentry-$version.pkg"
 
 # distribution.xml claims both architectures, so the binary has to carry
 # both. Build one locally with:

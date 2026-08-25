@@ -2,9 +2,8 @@
 
 This install package contains:
 
-- `obot-sentry.pkg` — the obot-sentry device agent (version
-  {{.obotSentryVersion}}), signed and notarized. Installs the agent and its
-  two launchd jobs.
+- `obot-sentry-{{.obotSentryVersion}}.pkg` — the obot-sentry device agent,
+  signed and notarized. Installs the agent and its two launchd jobs.
 - `ai.obot.obot-sentry.mobileconfig` — the deployment configuration. The server
   URL and scan interval are already filled in; you supply the enrollment key.
 - `ai.obot.obot-sentry.pppc.mobileconfig` — the file access the agent's
@@ -13,7 +12,8 @@ This install package contains:
 
 ## 1. Install the agent
 
-1. Upload `obot-sentry.pkg` under *Settings > Computer Management > Packages*.
+1. Upload `obot-sentry-{{.obotSentryVersion}}.pkg` under *Settings > Computer
+   Management > Packages*.
 
 2. Create a policy under *Computers > Policies* with a **Packages** payload that
    installs it. Set the trigger to **Recurring Check-in** and the execution
@@ -159,12 +159,22 @@ hook cannot tell which MCP server a call targets, the call is blocked.
 {{end}}
 ## Upgrades
 
-Upload the new `obot-sentry.pkg` and replace the package in the policy's
-**Packages** payload. A policy set to **Once per computer** has already run
-everywhere, so it will not reinstall on its own — either flush its logs
-(*Computers > Policies > the policy > Logs > Flush All*), or scope it to a smart
-group built on the extension attribute from step 4, which re-includes each
-computer as soon as its reported version falls behind.
+Package filenames carry the version, so releases coexist in Jamf:
+
+1. Upload the new `obot-sentry-{{.obotSentryVersion}}.pkg` under *Settings >
+   Computer Management > Packages*.
+
+2. In the install policy's **Packages** payload, replace the old package with
+   the new one.
+
+3. A policy set to **Once per computer** has already run everywhere, so it will
+   not reinstall on its own — either flush its logs (*Computers > Policies > the
+   policy > Logs > Flush All*), or scope it to a smart group built on the
+   extension attribute from step 4, which re-includes each computer as soon as
+   its reported version falls behind.
+
+Once the rollout completes, the old release's package can be deleted from
+*Settings > Computer Management > Packages*.
 
 The profiles are separate. If the new download contains changed `.mobileconfig`
 files, re-upload them to the same profiles.

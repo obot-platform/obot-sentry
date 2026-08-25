@@ -181,6 +181,41 @@ func TestScan_SkillClientSets(t *testing.T) {
 	}
 }
 
+// TestScan_AntigravityConfigPath: Antigravity's configuration home is
+// ~/.gemini/config, reported as ConfigPath ahead of the dot-directories
+// — and without them, since not every install has one.
+func TestScan_AntigravityConfigPath(t *testing.T) {
+	t.Run("gemini config preferred", func(t *testing.T) {
+		manifest := runScan(t, map[string]string{
+			".gemini/antigravity/installation_id": "x\n",
+			".gemini/config/mcp_config.json":      `{"mcpServers":{}}`,
+			".antigravity-ide/argv.json":          "{}\n",
+		})
+		c := findClient(manifest, "antigravity")
+		if c == nil {
+			t.Fatal("no clients[] row for antigravity")
+		}
+		if want := filepath.Join("/home/test", ".gemini/config"); c.ConfigPath != want {
+			t.Errorf("ConfigPath = %q, want %q", c.ConfigPath, want)
+		}
+	})
+
+	// The dot-directory is the fallback when ~/.gemini/config is absent.
+	t.Run("dot-directory fallback", func(t *testing.T) {
+		manifest := runScan(t, map[string]string{
+			".gemini/antigravity/installation_id": "x\n",
+			".antigravity/argv.json":              "{}\n",
+		})
+		c := findClient(manifest, "antigravity")
+		if c == nil {
+			t.Fatal("no clients[] row for antigravity")
+		}
+		if want := filepath.Join("/home/test", ".antigravity"); c.ConfigPath != want {
+			t.Errorf("ConfigPath = %q, want %q", c.ConfigPath, want)
+		}
+	})
+}
+
 // TestScan_Issue7288 reproduces both machines from the bug report.
 //
 // macOS: five clients installed and configured, plus skills in

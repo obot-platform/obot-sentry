@@ -59,8 +59,11 @@ func clients(platform string) []Client {
 		{
 			// Antigravity 2.0 renamed the app bundle, the Windows install
 			// directory and the dot-directory from "Antigravity" to
-			// "Antigravity IDE"; both generations are checked. Despite
-			// the name, ~/.gemini/antigravity is Antigravity's own state.
+			// "Antigravity IDE"; both generations are checked. Despite the
+			// name, ~/.gemini/antigravity is Antigravity's own state;
+			// ~/.gemini/config is its configuration home (see
+			// antigravity.go) and so is reported ahead of the
+			// dot-directories, which hold only argv.json and extensions.
 			Name: "antigravity",
 			Installed: []string{
 				".gemini/antigravity/installation_id",
@@ -74,7 +77,7 @@ func clients(platform string) []Client {
 				"AppData/Local/Programs/Antigravity",
 				"AppData/Local/agy/bin",
 			},
-			Config: []string{".antigravity-ide", ".antigravity"},
+			Config: []string{".gemini/config", ".antigravity-ide", ".antigravity"},
 		},
 		{
 			Name: "claude_code",

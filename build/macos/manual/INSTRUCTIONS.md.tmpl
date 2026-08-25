@@ -2,9 +2,8 @@
 
 Install Obot Sentry on a Mac without an MDM. This install package contains:
 
-- `obot-sentry.pkg` — the installer (version {{.obotSentryVersion}}). Installs
-  the agent and schedules scans and hook convergence, exactly as the MDM
-  channels do.
+- `obot-sentry-{{.obotSentryVersion}}.pkg` — the installer. Installs the agent
+  and schedules scans and hook convergence, exactly as the MDM channels do.
 - `obot-sentry` — the bare universal binary, for installing by hand instead.
 
 Everything below needs an administrator account.
@@ -24,7 +23,7 @@ Everything below needs an administrator account.
 2. Install the agent:
 
    ```sh
-   sudo installer -pkg obot-sentry.pkg -target /
+   sudo installer -pkg obot-sentry-{{.obotSentryVersion}}.pkg -target /
    ```
 
 3. Enroll the device:
