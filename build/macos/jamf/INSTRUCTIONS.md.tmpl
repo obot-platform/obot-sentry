@@ -41,17 +41,6 @@ sync.
 Upload `ai.obot.obot-sentry.pppc.mobileconfig` the same way, at **Computer
 Level**, scoped to the same targets.
 
-## 4. Report the installed version
-
-Give Jamf the version from the package by creating an extension attribute under
-*Settings > Computer Management > Extension Attributes*, with input type **Script**:
-
-```sh
-#!/bin/sh
-version=$(/usr/sbin/pkgutil --pkg-info ai.obot.obot-sentry 2>/dev/null | awk '/^version:/ { print $2 }')
-echo "<result>${version}</result>"
-```
-
 ## What the installer does
 
 - Installs `obot-sentry` to `/usr/local/bin`.
@@ -74,9 +63,8 @@ echo "<result>${version}</result>"
    pkgutil --pkg-info ai.obot.obot-sentry
    ```
 
-   This prints the identifier, version, and install time from the receipt — the
-   same receipt the extension attribute above reports. No receipt at all means the
-   policy never installed it.
+   This prints the identifier, version, and install time from the receipt. No
+   receipt at all means the policy never installed it.
 
    If there is no package receipt, check `/var/log/jamf.log` for the policy run,
    then trigger a check-in with:
@@ -168,10 +156,8 @@ Package filenames carry the version, so releases coexist in Jamf:
    the new one.
 
 3. A policy set to **Once per computer** has already run everywhere, so it will
-   not reinstall on its own — either flush its logs (*Computers > Policies > the
-   policy > Logs > Flush All*), or scope it to a smart group built on the
-   extension attribute from step 4, which re-includes each computer as soon as
-   its reported version falls behind.
+   not reinstall on its own — flush its logs (*Computers > Policies > the
+   policy > Logs > Flush All*) so it runs again on the next check-in.
 
 Once the rollout completes, the old release's package can be deleted from
 *Settings > Computer Management > Packages*.
@@ -181,13 +167,22 @@ files, re-upload them to the same profiles.
 
 ## Uninstall
 
-1. Add `uninstall.sh` under *Settings > Computer Management > Scripts*.
+1. Remove the computers, users, or groups you are removing Obot Sentry from
+   from the **Scope** of the install policy (*Computers > Policies*) and of
+   both configuration profiles (*Computers > Configuration Profiles*).
 
-2. Create a policy under *Computers > Policies* with a **Scripts** payload that
-   runs it, scoped to the computers, users, or groups you are removing it from.
-   Leave the priority at **After**.
+2. Flush the install policy's log for those computers under *Computers >
+   Policies > the policy > Logs*: **Flush** on each computer's row, or **Flush
+   All** if you are removing every computer. The policy's **Once per computer**
+   frequency is keyed on that log, so without the flush a computer you scope
+   back in later would receive the profiles and never reinstall the agent.
 
-3. Once the policy has run everywhere, remove the targets from the scope of
-   both configuration profiles and of the install policy.
+3. Add `uninstall.sh` under *Settings > Computer Management > Scripts*, then
+   create a policy under *Computers > Policies* with a **Scripts** payload that
+   runs it, scoped to the computers removed in step 1. Leave the priority at
+   **After**.
+
+The script needs none of the settings removed in step 1, so it removes the
+agent, both launchd jobs, and the hooks whenever it lands.
 
 Restart Claude Code, Codex, VS Code, and Cursor afterward to drop the hooks.
