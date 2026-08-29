@@ -30,6 +30,19 @@ builds:
     ldflags:
       - -s -w -X "github.com/obot-platform/obot-sentry/pkg/version.Tag=v{{ .Version }}"
 
+  # The scan task's console-less launcher; -H=windowsgui is the whole point.
+  - id: windows-launcher
+    binary: obot-sentryw
+    main: ./cmd/obot-sentryw
+    goos:
+      - windows
+    goarch:
+      - amd64
+    env:
+      - CGO_ENABLED=0
+    ldflags:
+      - -s -w -H=windowsgui
+
   - id: macos
     binary: obot-sentry
     goos:

@@ -71,6 +71,7 @@ jobs:
         run: |
           mkdir -p bin
           cp dist/*_windows_amd64*/obot-sentry.exe bin/
+          cp dist/*_windows_amd64*/obot-sentryw.exe bin/
           cp dist/*_darwin_all/obot-sentry bin/
       - name: Upload binaries
         uses: actions/upload-artifact@v7
@@ -106,7 +107,7 @@ jobs:
       - name: Build MSI + .intunewin
         shell: pwsh
         run: |
-          ./build/windows/msi.ps1 -Version $env:VERSION -Exe bin/obot-sentry.exe
+          ./build/windows/msi.ps1 -Version $env:VERSION -Exe bin/obot-sentry.exe -Launcher bin/obot-sentryw.exe
           ./build/windows/intune/intunewin.ps1
       - name: Upload installers
         uses: actions/upload-artifact@v7

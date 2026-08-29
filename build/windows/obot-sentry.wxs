@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
   Obot Sentry MSI (WiX Toolset v4, built by msi.ps1). Installs
-  obot-sentry.exe and its scheduler scripts under
-  %ProgramFiles%\Obot\obot-sentry, registers the per-user scan and
+  obot-sentry.exe, the obot-sentryw.exe launcher, and the scheduler
+  scripts under %ProgramFiles%\Obot\obot-sentry, registers the per-user scan and
   machine-wide hook-install scheduled tasks, and writes the tenant
   configuration from the msiexec command line to
   HKLM\SOFTWARE\Obot\obot-sentry, where pkg/mdmconfig reads it.
@@ -58,6 +58,11 @@
           <Component Id="MainExecutable" Guid="6BA5BA35-12D6-4AA1-B1F8-9EC20B042359">
             <File Id="ObotSentryExe" Name="obot-sentry.exe" Source="$(var.ExePath)" KeyPath="yes" />
           </Component>
+          <!-- The scan task's windowless launcher; it resolves obot-sentry.exe
+               as its directory sibling, so the two install together. -->
+          <Component Id="LauncherExecutable" Guid="63AFC18C-B0F3-4DC5-B81F-177EB40ED9EC">
+            <File Id="ObotSentryLauncherExe" Name="obot-sentryw.exe" Source="$(var.LauncherPath)" KeyPath="yes" />
+          </Component>
           <!-- Registers/removes the per-user scan scheduled task at
                install/uninstall (see the custom actions below). -->
           <Component Id="TaskScript" Guid="924DCA37-C6CD-4882-BAC3-15F6BA98381D">
@@ -100,6 +105,7 @@
 
     <Feature Id="Main" Level="1">
       <ComponentRef Id="MainExecutable" />
+      <ComponentRef Id="LauncherExecutable" />
       <ComponentRef Id="TaskScript" />
       <ComponentRef Id="HookTaskScript" />
       <ComponentRef Id="DeploymentRegistry" />
@@ -114,9 +120,12 @@
       execute phase; SetPowerShellPath (immediate) resolves powershell.exe
       into the POWERSHELL property. The ExeCommand fields are formatted when
       the deferred actions are scheduled into the execution script (after
-      CostFinalize), so [INSTALLDIR] resolves. We pass the full obot-sentry.exe
-      path (not the directory) so there is no trailing "\" immediately before
-      a closing quote to break CommandLineToArgvW parsing.
+      CostFinalize), so [INSTALLDIR] resolves. We pass the full path to the
+      executable (not the directory) so there is no trailing "\" immediately
+      before a closing quote to break CommandLineToArgvW parsing.
+
+      The scan task runs obot-sentryw.exe because its session is interactive,
+      where console-subsystem binaries are visible; the SYSTEM hook task is not.
 
       InstallScanTask and InstallHookTask run on install/upgrade; -Force
       re-creates both tasks idempotently. The uninstall actions run only on a
@@ -127,7 +136,7 @@
     <CustomAction Id="SetPowerShellPath" Property="POWERSHELL"
                   Value="[System64Folder]WindowsPowerShell\v1.0\powershell.exe" />
     <CustomAction Id="InstallScanTask" Property="POWERSHELL"
-                  ExeCommand="-ExecutionPolicy Bypass -NonInteractive -NoProfile -File &quot;[INSTALLDIR]scan-task.ps1&quot; -Mode install -ExePath &quot;[INSTALLDIR]obot-sentry.exe&quot;"
+                  ExeCommand="-ExecutionPolicy Bypass -NonInteractive -NoProfile -File &quot;[INSTALLDIR]scan-task.ps1&quot; -Mode install -ExePath &quot;[INSTALLDIR]obot-sentryw.exe&quot;"
                   Execute="deferred" Impersonate="no" Return="check" />
     <CustomAction Id="InstallHookTask" Property="POWERSHELL"
                   ExeCommand="-ExecutionPolicy Bypass -NonInteractive -NoProfile -File &quot;[INSTALLDIR]hook-task.ps1&quot; -Mode install -ExePath &quot;[INSTALLDIR]obot-sentry.exe&quot;"

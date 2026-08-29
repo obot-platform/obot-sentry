@@ -15,6 +15,12 @@ Release version, stamped into the MSI as its ProductVersion.
 .PARAMETER Exe
 The obot-sentry.exe to package. CI cross-compiles it; for a local build:
 $env:GOOS='windows'; $env:GOARCH='amd64'; go build -o bin\obot-sentry.exe .
+
+.PARAMETER Launcher
+The obot-sentryw.exe the scan task runs; must be linked -H=windowsgui, which
+this script enforces. For a local build:
+$env:GOOS='windows'; $env:GOARCH='amd64'
+go build -ldflags="-H=windowsgui" -o bin\obot-sentryw.exe .\cmd\obot-sentryw
 #>
 [CmdletBinding()]
 param(
@@ -24,7 +30,11 @@ param(
 
     [Parameter(Mandatory)]
     [ValidateNotNullOrEmpty()]
-    [string] $Exe
+    [string] $Exe,
+
+    [Parameter(Mandatory)]
+    [ValidateNotNullOrEmpty()]
+    [string] $Launcher
 )
 
 $ErrorActionPreference = 'Stop'
@@ -43,11 +53,16 @@ function Assert-ProductVersion([string] $Candidate) {
     }
 }
 
-# Refuses anything that isn't an x64 Windows image, so a mixed-up
-# artifact can never ship inside the installer. IMAGE_FILE_MACHINE_AMD64
-# is 0x8664; the machine field sits four bytes past the PE signature,
-# whose offset lives at 0x3C in the DOS header.
-function Assert-Amd64Image([string] $Path) {
+# Refuses any image that isn't x64 of the expected subsystem: a launcher built
+# without -H=windowsgui is console-subsystem, and visible. PE offset at 0x3C;
+# machine 4 bytes on, subsystem at +0x18+0x44.
+$IMAGE_SUBSYSTEM_WINDOWS_GUI = 2
+$IMAGE_SUBSYSTEM_WINDOWS_CUI = 3
+function Assert-WindowsImage {
+    param(
+        [Parameter(Mandatory)][string] $Path,
+        [Parameter(Mandatory)][ValidateSet(2, 3)][int] $Subsystem
+    )
     $header = [byte[]]::new(0x40)
     $stream = [System.IO.File]::OpenRead($Path)
     try {
@@ -56,7 +71,8 @@ function Assert-Amd64Image([string] $Path) {
         }
         $signatureOffset = [System.BitConverter]::ToUInt32($header, 0x3C)
         $stream.Position = $signatureOffset
-        $fields = [byte[]]::new(6)
+        # Through the optional header's Subsystem field, at 0x18 + 0x44.
+        $fields = [byte[]]::new(0x5E)
         if ($stream.Read($fields, 0, $fields.Length) -lt $fields.Length) {
             throw "'$Path' is truncated."
         }
@@ -71,6 +87,14 @@ function Assert-Amd64Image([string] $Path) {
     if ($machine -ne 0x8664) {
         throw ("'{0}' targets machine type 0x{1:X4}; obot-sentry.msi only ships x64." -f $Path, $machine)
     }
+    $actual = [System.BitConverter]::ToUInt16($fields, 0x5C)
+    if ($actual -ne $Subsystem) {
+        $names = @{ 2 = 'GUI (windowless)'; 3 = 'console' }
+        $actualName = $names[[int]$actual]
+        if (-not $actualName) { $actualName = "subsystem $actual" }
+        throw ("'{0}' is a {1} image; obot-sentry.msi needs a {2} one here. Check the -H=windowsgui link flag." -f
+            $Path, $actualName, $names[$Subsystem])
+    }
 }
 
 Assert-ProductVersion $Version
@@ -79,7 +103,13 @@ if (-not (Test-Path -LiteralPath $Exe -PathType Leaf)) {
     throw "No executable at '$Exe'."
 }
 $binary = (Resolve-Path -LiteralPath $Exe).ProviderPath
-Assert-Amd64Image $binary
+Assert-WindowsImage -Path $binary -Subsystem $IMAGE_SUBSYSTEM_WINDOWS_CUI
+
+if (-not (Test-Path -LiteralPath $Launcher -PathType Leaf)) {
+    throw "No launcher at '$Launcher'."
+}
+$launcherBinary = (Resolve-Path -LiteralPath $Launcher).ProviderPath
+Assert-WindowsImage -Path $launcherBinary -Subsystem $IMAGE_SUBSYSTEM_WINDOWS_GUI
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).ProviderPath
 $outDir = Join-Path $repoRoot 'dist'
@@ -89,8 +119,8 @@ $installer = Join-Path $outDir 'obot-sentry.msi'
 Write-Host "wix: obot-sentry.wxs + $binary -> $installer (ProductVersion $Version)"
 
 # obot-sentry.wxs pulls obot-sentry.ico and both scheduler scripts from the
-# bind path (this directory); the exe arrives through the ExePath preprocessor
-# variable.
+# bind path (this directory); the two executables arrive through the ExePath
+# and LauncherPath preprocessor variables.
 # -arch x64 makes ProgramFiles64Folder and component bitness 64-bit.
 & wix build `
     -arch x64 `
@@ -98,6 +128,7 @@ Write-Host "wix: obot-sentry.wxs + $binary -> $installer (ProductVersion $Versio
     -bindpath $PSScriptRoot `
     -d "Version=$Version" `
     -d "ExePath=$binary" `
+    -d "LauncherPath=$launcherBinary" `
     -out $installer
 
 if ($LASTEXITCODE -ne 0) {

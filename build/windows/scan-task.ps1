@@ -2,8 +2,11 @@
 # Run by the MSI's custom actions (SYSTEM). The task runs a submitting
 # device scan in each signed-in user's session, as that user.
 #
+# -ExePath is obot-sentryw.exe, the windowless launcher: this task's session is
+# interactive, where the console-subsystem obot-sentry.exe is visible.
+#
 # Usage:
-#   powershell -ExecutionPolicy Bypass -NoProfile -File scan-task.ps1 -Mode install -ExePath "C:\Program Files\Obot\obot-sentry\obot-sentry.exe"
+#   powershell -ExecutionPolicy Bypass -NoProfile -File scan-task.ps1 -Mode install -ExePath "C:\Program Files\Obot\obot-sentry\obot-sentryw.exe"
 #   powershell -ExecutionPolicy Bypass -NoProfile -File scan-task.ps1 -Mode uninstall
 
 [CmdletBinding()]
@@ -22,7 +25,7 @@ try {
     }
 
     if (-not $ExePath) { throw '-ExePath is required for install' }
-    if (-not (Test-Path -LiteralPath $ExePath)) { throw "obot-sentry.exe not found at $ExePath" }
+    if (-not (Test-Path -LiteralPath $ExePath)) { throw "no executable at $ExePath" }
 
     $action = New-ScheduledTaskAction -Execute $ExePath -Argument 'scan --submit --quiet'
 
