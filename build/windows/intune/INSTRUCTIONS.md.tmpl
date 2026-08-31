@@ -41,7 +41,9 @@ This install package contains:
 
 ## What the installer does
 
-- Installs `obot-sentry.exe` under `C:\Program Files\Obot\obot-sentry`.
+- Installs `obot-sentry.exe` under `C:\Program Files\Obot\obot-sentry`, next
+  to `obot-sentryw.exe` — a small launcher the scan task uses so scheduled
+  scans never flash a console window on screen.
 - Writes the deployment configuration from the install command's properties to
   `HKLM\SOFTWARE\Obot\obot-sentry`.
 - Registers a machine-wide scheduled task (`Obot Sentry Scan`) that runs in each
