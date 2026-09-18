@@ -47,37 +47,118 @@ func (src Source) projectOf(s *state, rel string) string {
 // a client means adding rows here and a decoder in its own file. Order
 // is by client name so emit order is deterministic.
 func sources(platform string) []Source {
-	return []Source{
-		{antigravityMCPConfigRel, Home, antigravityServers},
-		{antigravityPluginsRel, Home, antigravityPlugins},
+	return append(
+		claudeDesktopSources(platform),
+		Source{
+			Path:  antigravityMCPConfigRel,
+			Scope: Home,
+			Read:  antigravityServers,
+		},
+		Source{
+			Path:  antigravityPluginsRel,
+			Scope: Home,
+			Read:  antigravityPlugins,
+		},
 
 		// Claude Code's global config carries both its own servers and a
 		// projects map; project-scope .mcp.json is the standard shape.
-		{claudeGlobalConfigRel, Home, claudeCodeHomeServers},
-		{claudePluginsRel, Home, claudeCodePlugins},
-		{".mcp.json", Project, claudeCodeProjectServers},
+		Source{
+			Path:  claudeGlobalConfigRel,
+			Scope: Home,
+			Read:  claudeCodeHomeServers,
+		},
+		Source{
+			Path:  claudePluginsRel,
+			Scope: Home,
+			Read:  claudeCodePlugins,
+		},
+		Source{
+			Path:  ".mcp.json",
+			Scope: Project,
+			Read:  claudeCodeProjectServers,
+		},
 
-		{codexGlobalConfigRel, Home | Project, codexServers},
-		{codexPluginCacheRel, Home, codexPlugins},
+		Source{
+			Path:  codexGlobalConfigRel,
+			Scope: Home | Project,
+			Read:  codexServers,
+		},
+		Source{
+			Path:  codexPluginCacheRel,
+			Scope: Home,
+			Read:  codexPlugins,
+		},
 
-		{cursorGlobalConfigRel, Home | Project, cursorServers},
-		{cursorPluginCacheRel, Home, cursorPlugins},
+		Source{
+			Path:  cursorGlobalConfigRel,
+			Scope: Home | Project,
+			Read:  cursorServers,
+		},
+		Source{
+			Path:  cursorPluginCacheRel,
+			Scope: Home,
+			Read:  cursorPlugins,
+		},
 
-		{gooseGlobalConfigRel(platform), Home, gooseServers},
-		{hermesGlobalConfigRel, Home, hermesServers},
+		Source{
+			Path:  gooseGlobalConfigRel(platform),
+			Scope: Home,
+			Read:  gooseServers,
+		},
+		Source{
+			Path:  hermesGlobalConfigRel,
+			Scope: Home,
+			Read:  hermesServers,
+		},
 
-		{opencodeGlobalConfigJSONRel, Home, opencodeServers},
-		{opencodeGlobalConfigJSONCRel, Home, opencodeServers},
-		{"opencode.json", Project, opencodeServers},
-		{opencodeLocalPluginsRel, Home, opencodeLocalPlugins},
-		{opencodeNPMCacheRel, Home, opencodeNPMPlugins},
+		Source{
+			Path:  opencodeGlobalConfigJSONRel,
+			Scope: Home,
+			Read:  opencodeServers,
+		},
+		Source{
+			Path:  opencodeGlobalConfigJSONCRel,
+			Scope: Home,
+			Read:  opencodeServers,
+		},
+		Source{
+			Path:  "opencode.json",
+			Scope: Project,
+			Read:  opencodeServers,
+		},
+		Source{
+			Path:  opencodeLocalPluginsRel,
+			Scope: Home,
+			Read:  opencodeLocalPlugins,
+		},
+		Source{
+			Path:  opencodeNPMCacheRel,
+			Scope: Home,
+			Read:  opencodeNPMPlugins,
+		},
 
-		{path.Join(vscodeUserDir(platform), "mcp.json"), Home, vscodeServers},
-		{".vscode/mcp.json", Project, vscodeServers},
+		Source{
+			Path:  path.Join(vscodeUserDir(platform), "mcp.json"),
+			Scope: Home,
+			Read:  vscodeServers,
+		},
+		Source{
+			Path:  ".vscode/mcp.json",
+			Scope: Project,
+			Read:  vscodeServers,
+		},
 
-		{zedSettingsRel(platform), Home, zedHomeServers},
-		{".zed/settings.json", Project, zedProjectServers},
-	}
+		Source{
+			Path:  zedSettingsRel(platform),
+			Scope: Home,
+			Read:  zedHomeServers,
+		},
+		Source{
+			Path:  ".zed/settings.json",
+			Scope: Project,
+			Read:  zedProjectServers,
+		},
+	)
 }
 
 // claudeDesktopSources are separate because Claude Desktop's layout
@@ -88,15 +169,22 @@ func claudeDesktopSources(platform string) []Source {
 	var out []Source
 	for _, dir := range claudeDesktopDirs(platform) {
 		out = append(out,
-			Source{path.Join(dir, "extensions-installations.json"), Home, claudeDesktopRegistry},
-			Source{path.Join(dir, "claude_desktop_config.json"), Home, claudeDesktopServers},
-			Source{dir, Home, claudeDesktopCowork},
+			Source{
+				Path:  path.Join(dir, "extensions-installations.json"),
+				Scope: Home,
+				Read:  claudeDesktopRegistry,
+			},
+			Source{
+				Path:  path.Join(dir, "claude_desktop_config.json"),
+				Scope: Home,
+				Read:  claudeDesktopServers,
+			},
+			Source{
+				Path:  dir,
+				Scope: Home,
+				Read:  claudeDesktopCowork,
+			},
 		)
 	}
 	return out
-}
-
-// allSources is what the pipeline iterates.
-func allSources(platform string) []Source {
-	return append(sources(platform), claudeDesktopSources(platform)...)
 }
