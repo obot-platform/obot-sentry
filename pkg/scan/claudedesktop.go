@@ -49,32 +49,11 @@ type claudeDesktopExtensions struct {
 }
 
 // claudeDesktopConfig is the JSON shape of claude_desktop_config.json.
-// One parse feeds both the MCP server observations and the connector
-// plugin rows.
 type claudeDesktopConfig struct {
 	MCPServers map[string]mcpServerSpec `json:"mcpServers"`
 }
 
-// ScanHome emits four flavors of observation, all tagged
-// client=claude_desktop:
-//
-//  1. One MCP server per extension in extensions-installations.json and
-//     per entry in claude_desktop_config.json's mcpServers block.
-//  2. One plugin per mcpServers entry (plugin_type =
-//     claude_desktop_connector), capturing the connector as a
-//     first-class artifact alongside its MCP server.
-//  3. One plugin per Cowork RPM-installed plugin under
-//     local-agent-mode-sessions/<X>/<Y>/rpm/plugin_<id>/, plus its
-//     nested MCP servers (from .mcp.json) and skills.
-//  4. Skills for every skills/<name>/SKILL.md under
-//     local-agent-mode-sessions/skills-plugin/<install>/<plugin>/.
-//     Cowork ships these as a bundle — there's no .mcp.json, no
-//     commands, no hooks; treating the bundle as a plugin would inflate
-//     the inventory with an empty wrapper, so only the skills surface.
-//
-// scanClaudeDesktopServers parses claude_desktop_config.json once and
-// emits both an MCP server and a connector plugin row per enabled
-// entry.
+// scanClaudeDesktopServers parses claude_desktop_config.json and emits an MCP server row per enabled entry.
 func claudeDesktopServers(s *state, configRel, _ string) observations {
 	cfg, ok := readJSON[claudeDesktopConfig](s.fsys, configRel)
 	if !ok {
@@ -89,15 +68,6 @@ func claudeDesktopServers(s *state, configRel, _ string) observations {
 			continue
 		}
 		obs.servers = append(obs.servers, e.toServer(name, "claude_desktop", configPath, ""))
-		obs.plugins = append(obs.plugins, types.DeviceScanPlugin{
-			Client:        "claude_desktop",
-			ConfigPath:    configPath,
-			Name:          name,
-			PluginType:    "claude_desktop_connector",
-			Enabled:       true,
-			Files:         []string{configPath},
-			HasMCPServers: true,
-		})
 	}
 	return obs
 }
