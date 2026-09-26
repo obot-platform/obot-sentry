@@ -35,7 +35,7 @@ func formClaudeCode(name string) string {
 
 // formCodex is Codex's transform, transcribed from
 // sanitize_responses_api_tool_name in codex-rs/codex-mcp/src/mcp/mod.rs at
-// revision 3725f02c:
+// revision 3725f02c://
 //
 //	for c in name.chars() {
 //	    if c.is_ascii_alphanumeric() || c == '_' { sanitized.push(c); }
@@ -70,6 +70,18 @@ func formCodex(name string) string {
 		return "_"
 	}
 	return foldToNamespace(name, false)
+}
+
+// formOpenCode matches the namespace sanitizer OpenCode's MCP registry applies
+// to a server name before exposing its tools: ASCII alphanumerics, underscore,
+// and hyphen survive, and every other character becomes one underscore.
+//
+// The transform is lossy 鈥?"a.b" and "a_b" both become "a_b" 鈥?so a match here
+// is only a candidate to resolve against OpenCode's own configuration, never a
+// decision on its own. Callers must treat a namespace produced by more than one
+// configured name as ambiguous.
+func formOpenCode(name string) string {
+	return foldToNamespace(name, true)
 }
 
 // foldToNamespace keeps ASCII alphanumerics and underscores, optionally keeps

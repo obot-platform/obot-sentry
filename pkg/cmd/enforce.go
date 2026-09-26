@@ -51,8 +51,8 @@ func (e *Enforce) Customize(cmd *cobra.Command) {
 	cmd.Use = "enforce"
 	cmd.Short = "Decide a pre-tool hook payload against Obot's allowlist"
 	cmd.Hidden = true
-	cmd.Flags().StringVar(&e.agent, "agent", "", "local agent provider: claude-code, codex, cursor")
-	cmd.Flags().StringVar(&e.event, "event", "", "the agent's own pre-tool event: PreToolUse, beforeMCPExecution, preToolUse")
+	cmd.Flags().StringVar(&e.agent, "agent", "", "local agent provider: claude-code, codex, cursor, opencode")
+	cmd.Flags().StringVar(&e.event, "event", "", "the agent's own pre-tool event: PreToolUse, beforeMCPExecution, preToolUse, permission.evaluate")
 	cmd.Flags().StringVar(&e.managedBy, "managed-by", "", "managed hook marker")
 	if err := cmd.Flags().MarkHidden("managed-by"); err != nil {
 		panic(err)
@@ -177,7 +177,7 @@ func (e *Enforce) decider(envErr error) enforce.DecideFunc {
 // hook uses rather than a reimplementation, so a trace that says FOUND is
 // evidence about production behavior.
 type EnforceResolve struct {
-	Agent  string `usage:"local agent provider: claude-code, codex, cursor"`
+	Agent  string `usage:"local agent provider: claude-code, codex, cursor, opencode"`
 	Server string `usage:"MCP server name, as the tool call reports it"`
 	CWD    string `usage:"working directory to resolve project configuration against (default: the current directory)" name:"cwd"`
 }

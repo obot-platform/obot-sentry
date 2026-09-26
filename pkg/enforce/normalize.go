@@ -209,6 +209,9 @@ func normalizeCall(env Env, agent localagent.Agent, event Event, raw []byte) (Ca
 }
 
 func normalizeCallContext(ctx context.Context, env Env, agent localagent.Agent, event Event, raw []byte) (Call, error) {
+	if agent == localagent.OpenCode && event == EventOpenCodePermission {
+		return normalizeOpenCodePermission(ctx, env, raw)
+	}
 	if agent == localagent.Cursor && event == EventCursorBeforeMCPExecution {
 		return normalizeCursorMCP(ctx, env, raw)
 	}

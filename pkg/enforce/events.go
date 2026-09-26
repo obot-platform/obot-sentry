@@ -18,12 +18,17 @@ const (
 	EventPreToolUse               Event = "PreToolUse"
 	EventCursorBeforeMCPExecution Event = "beforeMCPExecution"
 	EventCursorPreToolUse         Event = "preToolUse"
+	// EventOpenCodePermission is OpenCode V2's own permission.evaluate event.
+	// It is not a native hook event: no managed hook install writes it. The
+	// external OpenCode plugin calls the enforce command with it directly.
+	EventOpenCodePermission Event = "permission.evaluate"
 )
 
 const (
 	wireAgentClaudeCode = "claude_code"
 	wireAgentCodex      = "codex"
 	wireAgentCursor     = "cursor"
+	wireAgentOpenCode   = "opencode"
 )
 
 // ParseAgent maps a CLI --agent value to a supported agent.
@@ -35,6 +40,8 @@ func ParseAgent(value string) (localagent.Agent, error) {
 		return localagent.Codex, nil
 	case localagent.Cursor:
 		return localagent.Cursor, nil
+	case localagent.OpenCode:
+		return localagent.OpenCode, nil
 	default:
 		return "", fmt.Errorf("unsupported enforcement agent %q", value)
 	}
@@ -42,12 +49,16 @@ func ParseAgent(value string) (localagent.Agent, error) {
 
 // ParseEvent maps a CLI --event value to one of agent's own pre-tool events.
 // Events are not interchangeable across agents: Cursor's preToolUse is a
-// different event from the PreToolUse the other two fire.
+// different event from the PreToolUse the other supported agents fire.
 func ParseEvent(agent localagent.Agent, value string) (Event, error) {
 	switch agent {
 	case localagent.ClaudeCode, localagent.Codex:
 		if Event(value) == EventPreToolUse {
 			return EventPreToolUse, nil
+		}
+	case localagent.OpenCode:
+		if Event(value) == EventOpenCodePermission {
+			return EventOpenCodePermission, nil
 		}
 	case localagent.Cursor:
 		switch Event(value) {
@@ -69,6 +80,8 @@ func wireAgent(agent localagent.Agent) string {
 		return wireAgentCodex
 	case localagent.Cursor:
 		return wireAgentCursor
+	case localagent.OpenCode:
+		return wireAgentOpenCode
 	default:
 		return ""
 	}
@@ -83,6 +96,8 @@ func Events(agent localagent.Agent) []Event {
 		return []Event{EventPreToolUse}
 	case localagent.Cursor:
 		return []Event{EventCursorBeforeMCPExecution, EventCursorPreToolUse}
+	case localagent.OpenCode:
+		return []Event{EventOpenCodePermission}
 	default:
 		return nil
 	}
