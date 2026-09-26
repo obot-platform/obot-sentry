@@ -17,6 +17,13 @@ type mcpEntry struct {
 	Command     string            `json:"command" toml:"command"`
 	Args        []string          `json:"args" toml:"args"`
 	Environment map[string]string `json:"env" toml:"env"`
+
+	// Disabled and ConfigError are resolver metadata, not MCP wire fields. A
+	// disabled entry remains in the scope table so it can mask a lower-priority
+	// definition; ConfigError records a missing environment expansion without
+	// ever carrying the missing value into the decision request.
+	Disabled    bool   `json:"-"`
+	ConfigError string `json:"-"`
 }
 
 // TraceStep records one source the resolver consulted. The trace is what makes
@@ -132,6 +139,8 @@ func resolve(ctx context.Context, loader *configLoader, env Env, req ResolveRequ
 		res = resolveCodex(ctx, loader, env, serverName, tr)
 	case localagent.Cursor:
 		res = resolveCursor(ctx, loader, env, req, serverName, tr)
+		case localagent.OpenCode:
+		res = resolveOpenCode(ctx, loader, env, req, serverName, tr)
 	default:
 		return unresolved(serverName, fmt.Sprintf("unsupported agent %q", req.Agent))
 	}
@@ -152,6 +161,12 @@ func resolve(ctx context.Context, loader *configLoader, env Env, req ResolveRequ
 // uvx, is still a match; reporting the tool-name hint there would name a server
 // that appears in no configuration file.
 func resolved(env Env, matchedKey string, entry mcpEntry) Resolution {
+	if entry.Disabled {
+		return unresolved(matchedKey, "MCP server is disabled by the agent configuration")
+	}
+	if entry.ConfigError != "" {
+		return unresolved(matchedKey, entry.ConfigError)
+	}
 	if rawURL := strings.TrimSpace(entry.URL); rawURL != "" {
 		safeURL, ok := enforcementURL(rawURL)
 		if !ok {
@@ -260,8 +275,10 @@ func agentNamespaceForm(agent localagent.Agent) namespaceForm {
 	switch agent {
 	case localagent.ClaudeCode:
 		return formClaudeCode
-	case localagent.Codex:
+		case localagent.Codex:
 		return formCodex
+	case localagent.OpenCode:
+		return formOpenCode
 	default:
 		return nil
 	}

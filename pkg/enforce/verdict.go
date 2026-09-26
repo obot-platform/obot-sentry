@@ -111,6 +111,15 @@ type cursorHookOutput struct {
 	UserMessage string `json:"user_message,omitempty"`
 }
 
+// openCodeHookOutput is the OpenCode V2 permission.evaluate response. Like
+// Cursor it needs an explicit verdict, but for the same reason Claude Code and
+// Codex emit nothing on allow: OpenCode's own ask/allow effect must survive, so
+// an allow here means "this hook does not object", never "skip the prompt".
+type openCodeHookOutput struct {
+	Effect  string `json:"effect"`
+	Message string `json:"message,omitempty"`
+}
+
 // Allow renders the response for a permitted tool call.
 //
 // For Claude Code and Codex this is ZERO BYTES, and that is not an
@@ -130,6 +139,9 @@ type cursorHookOutput struct {
 // Cursor is the exception by protocol — its hooks require an explicit allow — and
 // "allow" there means "this hook does not object", not "skip the user's approval".
 func Allow(agent localagent.Agent) []byte {
+	if agent == localagent.OpenCode {
+		return marshal(openCodeHookOutput{Effect: "allow"})
+	}
 	if agent != localagent.Cursor {
 		return nil
 	}
@@ -138,6 +150,9 @@ func Allow(agent localagent.Agent) []byte {
 
 // Deny renders the response that blocks a tool call.
 func Deny(agent localagent.Agent, event Event, denial Denial) []byte {
+	if agent == localagent.OpenCode {
+		return marshal(openCodeHookOutput{Effect: "deny", Message: denial.AgentMessage})
+	}
 	if agent == localagent.Cursor {
 		return marshal(cursorHookOutput{
 			Permission:  "deny",
