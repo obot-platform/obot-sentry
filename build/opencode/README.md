@@ -1,4 +1,4 @@
-# OpenCode audit adapter
+# OpenCode plugin adapter
 
 `obot-sentry-audit.js` is a local OpenCode plugin that forwards completed tool
 calls to the installed Obot Sentry binary. It supports both the OpenCode 1.x

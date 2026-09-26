@@ -8,7 +8,7 @@ import (
 )
 
 func TestAllowEmitsNoBytes(t *testing.T) {
-	for _, agent := range []localagent.Agent{localagent.ClaudeCode, localagent.Codex} {
+	for _, agent := range []localagent.Agent{localagent.ClaudeCode, localagent.Codex, localagent.WorkBuddy} {
 		if got := Allow(agent); len(got) != 0 {
 			t.Errorf("Allow(%s) emitted %d bytes (%q), want zero", agent, len(got), got)
 		}
@@ -17,7 +17,7 @@ func TestAllowEmitsNoBytes(t *testing.T) {
 
 func TestAllowNeverGrantsPermission(t *testing.T) {
 	denial := Denial{UserMessage: "blocked", AgentMessage: "blocked"}
-	for _, agent := range []localagent.Agent{localagent.ClaudeCode, localagent.Codex} {
+	for _, agent := range []localagent.Agent{localagent.ClaudeCode, localagent.Codex, localagent.WorkBuddy} {
 		for _, out := range [][]byte{Allow(agent), Deny(agent, EventPreToolUse, denial)} {
 			if strings.Contains(string(out), `"permissionDecision":"allow"`) {
 				t.Errorf("%s output granted permission: %s", agent, out)
@@ -50,6 +50,11 @@ func TestDenyGolden(t *testing.T) {
 		},
 		{
 			agent: localagent.Codex,
+			event: EventPreToolUse,
+			want:  `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"agent copy"}}`,
+		},
+		{
+			agent: localagent.WorkBuddy,
 			event: EventPreToolUse,
 			want:  `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"agent copy"}}`,
 		},

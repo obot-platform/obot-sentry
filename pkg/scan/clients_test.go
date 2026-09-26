@@ -129,6 +129,33 @@ func TestScanners_Smoke(t *testing.T) {
 			},
 		},
 		{
+			name:      "workbuddy http",
+			client:    "workbuddy",
+			serverNm:  "connector",
+			transport: "http",
+			files: map[string]string{
+				".workbuddy/.mcp.json": `{"mcpServers":{"connector":{"type":"http","url":"http://127.0.0.1:2855/mcp"}}}`,
+			},
+		},
+		{
+			name:      "workbuddy legacy home mcp",
+			client:    "workbuddy",
+			serverNm:  "legacy-home",
+			transport: "http",
+			files: map[string]string{
+				".workbuddy/mcp.json": `{"mcpServers":{"legacy-home":{"type":"http","url":"https://legacy.example/mcp"}}}`,
+			},
+		},
+		{
+			name:      "workbuddy legacy home json",
+			client:    "workbuddy",
+			serverNm:  "legacy-json",
+			transport: "http",
+			files: map[string]string{
+				".workbuddy.json": `{"mcpServers":{"legacy-json":{"type":"http","url":"https://legacy-json.example/mcp"}}}`,
+			},
+		},
+		{
 			name:      "vscode stdio darwin",
 			client:    "vscode",
 			serverNm:  "github",
@@ -319,6 +346,74 @@ func TestScan_ProjectScopeWalk(t *testing.T) {
 // command/env extraction, streamable-http detection with sorted header
 // keys, enabled semantics, settings-only stub skipping, and config file
 // capture even when no servers parse.
+func TestScan_WorkBuddyUserProjectsMCP(t *testing.T) {
+	manifest := runScan(t, map[string]string{
+		".workbuddy/.mcp.json": `{
+			"mcpServers": {
+				"user": {"type": "http", "url": "https://user.example/mcp"},
+				"user-disabled": {"type": "http", "url": "https://user-disabled.example/mcp"}
+			},
+			"disabledMcpServers": ["user-disabled"],
+			"projects": {
+				"/home/test/projects/foo": {
+					"mcpServers": {
+						"local": {"type": "http", "url": "https://local.example/mcp"},
+						"disabled": {"enabled": false, "url": "https://disabled.example/mcp"},
+						"listed-disabled": {"type": "http", "url": "https://listed-disabled.example/mcp"}
+					},
+					"disabledMcpServers": ["listed-disabled"]
+				}
+			}
+		}`,
+	})
+
+	for _, name := range []string{"user", "local"} {
+		if findServer(manifest, "workbuddy", name) == nil {
+			t.Errorf("WorkBuddy user/project server %q missing: %+v", name, manifest.MCPServers)
+		}
+	}
+	for _, name := range []string{"disabled", "user-disabled", "listed-disabled"} {
+		if findServer(manifest, "workbuddy", name) != nil {
+			t.Errorf("disabled WorkBuddy server %q was emitted: %+v", name, manifest.MCPServers)
+		}
+	}
+	local := findServer(manifest, "workbuddy", "local")
+	if want := filepath.Join("/home/test", "projects", "foo"); local.ProjectPath != want {
+		t.Errorf("local ProjectPath = %q, want %q", local.ProjectPath, want)
+	}
+}
+
+func TestScan_WorkBuddyUsesFirstExistingUserConfig(t *testing.T) {
+	manifest := runScan(t, map[string]string{
+		".workbuddy/.mcp.json": `{"mcpServers":{"preferred":{"url":"https://preferred.example/mcp"}}}`,
+		".workbuddy/mcp.json":  `{"mcpServers":{"legacy":{"url":"https://legacy.example/mcp"}}}`,
+		".workbuddy.json":      `{"mcpServers":{"older":{"url":"https://older.example/mcp"}}}`,
+	})
+
+	if findServer(manifest, "workbuddy", "preferred") == nil {
+		t.Errorf("preferred WorkBuddy server missing: %+v", manifest.MCPServers)
+	}
+	for _, name := range []string{"legacy", "older"} {
+		if findServer(manifest, "workbuddy", name) != nil {
+			t.Errorf("suppressed WorkBuddy server %q was emitted: %+v", name, manifest.MCPServers)
+		}
+	}
+}
+
+func TestScan_WorkBuddyProjectMCPFile(t *testing.T) {
+	manifest := runScan(t, map[string]string{
+		"projects/foo/.mcp.json": `{"mcpServers":{"project-standard":{"type":"http","url":"https://standard.example/mcp"}}}`,
+	})
+
+	server := findServer(manifest, "workbuddy", "project-standard")
+	if server == nil {
+		t.Fatalf("WorkBuddy project server missing: %+v", manifest.MCPServers)
+	}
+	if want := filepath.Join("/home/test", "projects", "foo"); server.ProjectPath != want {
+		t.Errorf("ProjectPath = %q, want %q", server.ProjectPath, want)
+	}
+}
+
 func TestScanHermes(t *testing.T) {
 	manifest := runScan(t, map[string]string{
 		".hermes/config.yaml": `
@@ -590,7 +685,7 @@ func TestDetect_NothingInstalled(t *testing.T) {
 func TestDetect_ConfigDirIsNotEvidence(t *testing.T) {
 	isolateHost(t)
 	home := t.TempDir()
-	mkdirs(t, home, ".claude", ".codex", ".cursor", ".config/opencode")
+	mkdirs(t, home, ".claude", ".codex", ".cursor", ".config/opencode", ".workbuddy")
 	// What hook-install writes, and a skill a user dropped in.
 	if err := os.WriteFile(filepath.Join(home, ".claude", "settings.json"), []byte("{}"), 0o600); err != nil {
 		t.Fatalf("write settings: %v", err)
@@ -607,15 +702,15 @@ func TestDetect_ConfigDirIsNotEvidence(t *testing.T) {
 func TestDetect_RuntimeState(t *testing.T) {
 	isolateHost(t)
 	home := t.TempDir()
-	mkdirs(t, home, ".claude", ".local/share/opencode")
-	for _, rel := range []string{".claude/history.jsonl", ".local/share/opencode/opencode.db"} {
+	mkdirs(t, home, ".claude", ".local/share/opencode", ".workbuddy/app")
+	for _, rel := range []string{".claude/history.jsonl", ".local/share/opencode/opencode.db", ".workbuddy/device-id"} {
 		if err := os.WriteFile(filepath.Join(home, filepath.FromSlash(rel)), nil, 0o600); err != nil {
 			t.Fatalf("write %s: %v", rel, err)
 		}
 	}
 
 	clients := runDetect(t, home)
-	for _, name := range []string{"claude_code", "opencode"} {
+	for _, name := range []string{"claude_code", "opencode", "workbuddy"} {
 		c, ok := clients[name]
 		if !ok {
 			t.Fatalf("%s not detected: %+v", name, clients)
@@ -626,6 +721,9 @@ func TestDetect_RuntimeState(t *testing.T) {
 	}
 	if c := clients["claude_code"]; c.ConfigPath != filepath.Join(home, ".claude") {
 		t.Errorf("ConfigPath = %q, want %q", c.ConfigPath, filepath.Join(home, ".claude"))
+	}
+	if c := clients["workbuddy"]; c.ConfigPath != filepath.Join(home, ".workbuddy") {
+		t.Errorf("WorkBuddy ConfigPath = %q, want %q", c.ConfigPath, filepath.Join(home, ".workbuddy"))
 	}
 }
 

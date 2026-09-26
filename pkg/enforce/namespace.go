@@ -84,6 +84,15 @@ func formOpenCode(name string) string {
 	return foldToNamespace(name, true)
 }
 
+// formZCode matches the namespace ZCode exposes to the model: ASCII
+// alphanumerics and underscores survive, while punctuation (including the
+// plugin-name separators) folds to one underscore. The raw plugin key is
+// retained separately by the resolver when ZCode exposes it in a protocol
+// field; this function is only the model-facing tool namespace.
+func formZCode(name string) string {
+	return foldToNamespace(name, false)
+}
+
 // foldToNamespace keeps ASCII alphanumerics and underscores, optionally keeps
 // hyphens, and replaces every other character with a single underscore.
 func foldToNamespace(name string, hyphenLegal bool) string {

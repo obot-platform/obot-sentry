@@ -147,6 +147,10 @@ func (s *Scan) submit(ctx context.Context, cmd *cobra.Command, cfg mdmconfig.Con
 		return fmt.Errorf("submit scan: %w", err)
 	}
 	_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Submitted scan (received_at=%s)\n", submitted.ReceivedAt.GetTime().Format(time.RFC3339))
+	// A ZCode PostToolUse hook may defer audit submission to this process's
+	// local spool. A successful scheduled scan is the reliable background
+	// drain point, so queued events do not wait for another tool call.
+	(&AuditSubmit{}).drainSpool(cmd, a)
 	return nil
 }
 

@@ -365,7 +365,7 @@ func writeSummary(w io.Writer, plan Plan, results []Result) {
 
 // restartReminder is appended to successful output so the operator reloads every
 // agent and the hook changes take effect.
-const restartReminder = "Restart or reload Claude Code, Codex, Visual Studio Code, and Cursor to apply the hook changes."
+const restartReminder = "Restart or reload Claude Code, Codex, Visual Studio Code, Cursor, and WorkBuddy to apply the hook changes."
 
 // FormatSummary renders the deterministic per-destination result summary. It
 // reports the resolved executable and one line per destination with its status

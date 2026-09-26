@@ -12,9 +12,9 @@ import (
 const envEnforcementEnabled = "OBOT_SENTRY_ENFORCEMENT_ENABLED"
 
 // HookInstall is the operator-facing `obot-sentry hook-install` command. It converges
-// the native audit-hook configuration for the four supported local agents onto
-// the hidden `obot-sentry audit submit` command, and — with enforcement enabled —
-// the pre-tool hooks for the three supported by `obot-sentry enforce`. All platform,
+// the native audit-hook configuration for every supported local agent onto the
+// hidden `obot-sentry audit submit` command, and — with enforcement enabled — the
+// pre-tool hooks for agents supported by `obot-sentry enforce`. All platform,
 // privilege, path, and executable resolution lives in pkg/hookinstall behind
 // injectable seams so this command stays a thin orchestration layer.
 type HookInstall struct {
@@ -42,11 +42,11 @@ func (h *HookInstall) Customize(cmd *cobra.Command) {
 
 Requires root on macOS or an elevated Administrator/SYSTEM token on Windows.
 Installs machine policy for Codex and Cursor and user hooks for the active
-console user's Claude Code and Visual Studio Code installations.
+console user's Claude Code, WorkBuddy, and Visual Studio Code installations.
 
 With enforcement enabled, also installs the pre-tool hooks that check each tool
-call against Obot's allowlist, for Claude Code, Codex, and Cursor. A run without
-enforcement removes obot-sentry-managed enforcement hooks.`
+call against Obot's allowlist, for Claude Code, Codex, Cursor, and WorkBuddy. A
+run without enforcement removes obot-sentry-managed enforcement hooks.`
 	cmd.Args = cobra.NoArgs
 }
 

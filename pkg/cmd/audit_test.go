@@ -81,6 +81,113 @@ func TestAuditSubmitPrintNormalized(t *testing.T) {
 	}
 }
 
+func TestAuditSubmitPrintNormalizedOpenCode(t *testing.T) {
+	input := writeTempAuditPayload(t, `{
+		"session_id": "session-opencode",
+		"call_id": "call-opencode",
+		"tool_name": "mcp__github__search",
+		"tool_input": {"query": "obot"},
+		"tool_response": {"ok": true},
+		"agent_version": "1.18.29"
+	}`)
+
+	root := New()
+	var stdout, stderr bytes.Buffer
+	root.SetOut(&stdout)
+	root.SetErr(&stderr)
+	root.SetArgs([]string{"audit", "submit", "--agent", "opencode", "--phase", "post-tool", "--input", input, "--print-normalized"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("expected empty stderr, got %q", stderr.String())
+	}
+	var entries []map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &entries); err != nil {
+		t.Fatalf("expected normalized JSON on stdout, got %q: %v", stdout.String(), err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("unexpected normalized entries: %#v", entries)
+	}
+	details, _ := entries[0]["details"].(map[string]any)
+	agent, _ := details["agent"].(map[string]any)
+	if agent["provider"] != "opencode" || agent["version"] != "1.18.29" {
+		t.Fatalf("unexpected OpenCode normalized entry: %#v", entries[0])
+	}
+}
+
+func TestAuditSubmitPrintNormalizedZCode(t *testing.T) {
+	input := writeTempAuditPayload(t, `{
+		"session_id": "session-zcode",
+		"tool_use_id": "tool-zcode",
+		"tool_name": "mcp__docs__search",
+		"tool_input": {"query": "obot"},
+		"tool_response": {"ok": true},
+		"agent_version": "3.14.3"
+	}`)
+
+	root := New()
+	var stdout, stderr bytes.Buffer
+	root.SetOut(&stdout)
+	root.SetErr(&stderr)
+	root.SetArgs([]string{"audit", "submit", "--agent", "zcode", "--phase", "post-tool", "--input", input, "--print-normalized"})
+	if err := root.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("expected empty stderr, got %q", stderr.String())
+	}
+	var entries []map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &entries); err != nil || len(entries) != 1 {
+		t.Fatalf("unexpected normalized entries: %q (%v)", stdout.String(), err)
+	}
+	details, _ := entries[0]["details"].(map[string]any)
+	agent, _ := details["agent"].(map[string]any)
+	if agent["provider"] != "zcode" || agent["version"] != "3.14.3" {
+		t.Fatalf("unexpected ZCode entry: %#v", entries[0])
+	}
+}
+
+func TestAuditSubmitDeferQueuesZCodeEvent(t *testing.T) {
+	input := writeTempAuditPayload(t, `{
+		"session_id": "session-zcode",
+		"tool_use_id": "tool-zcode",
+		"tool_name": "mcp__docs__search",
+		"tool_input": {"query": "obot"},
+		"tool_response": {"ok": true}
+	}`)
+	auditCacheDir(t)
+
+	root := New()
+	var stdout, stderr bytes.Buffer
+	root.SetOut(&stdout)
+	root.SetErr(&stderr)
+	root.SetArgs([]string{"audit", "submit", "--agent", "zcode", "--phase", "post-tool", "--input", input, "--defer"})
+	if err := root.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("deferred audit wrote stdout: %q", stdout.String())
+	}
+
+	spool, err := audit.DefaultSpool()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var queued []types.LocalAgentToolCallAuditLogInput
+	count, err := spool.Drain(10, func(logs []types.LocalAgentToolCallAuditLogInput) error {
+		queued = append(queued, logs...)
+		return nil
+	}, func(error) bool { return false })
+	if err != nil || count != 1 || len(queued) != 1 {
+		t.Fatalf("deferred spool drain = %d/%d events, err=%v", count, len(queued), err)
+	}
+	if queued[0].Details.Agent.Provider != "zcode" {
+		t.Fatalf("deferred provider = %q, want zcode", queued[0].Details.Agent.Provider)
+	}
+}
+
 func TestAuditSubmitDryRunWritesAuditLogToUserCache(t *testing.T) {
 	input := writeTempAuditPayload(t, `{
 		"session_id": "session-1",

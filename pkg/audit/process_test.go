@@ -89,7 +89,7 @@ func TestProcessPostToolWithoutOutputSubmitsNullOutput(t *testing.T) {
 	// A successful terminal event that reports no tool_response is still a
 	// completed tool call and must produce one entry with an explicit null
 	// output rather than being dropped.
-	for _, agent := range []localagent.Agent{localagent.Codex, localagent.ClaudeCode, localagent.VSCode} {
+	for _, agent := range []localagent.Agent{localagent.Codex, localagent.ClaudeCode, localagent.VSCode, localagent.WorkBuddy, localagent.OpenCode, localagent.ZCode} {
 		t.Run(string(agent), func(t *testing.T) {
 			payload := []byte(`{
 				"session_id": "session-x",
@@ -278,6 +278,107 @@ func TestProcessClaudePostToolUseNormalizesSingleToolEvent(t *testing.T) {
 	}
 }
 
+func TestProcessWorkBuddyPostToolUseNormalizesSingleToolEvent(t *testing.T) {
+	payload := []byte(`{
+		"session_id": "session-workbuddy",
+		"generation_id": "turn-workbuddy",
+		"call_id": "tool-workbuddy",
+		"tool_name": "mcp__github__search",
+		"tool_input": {"query": "obot"},
+		"tool_response": {"ok": true},
+		"cwd": "C:/Users/dev/project",
+		"permission_mode": "default",
+		"version": "2.103.1",
+		"agent_id": "agent-1",
+		"agent_type": "general-purpose"
+	}`)
+	result, err := Process(payload, ProcessOptions{
+		Agent:      localagent.WorkBuddy,
+		Phase:      PhasePostTool,
+		Now:        fixedNow,
+		Enrichment: &Enrichment{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Entries) != 1 || len(result.Warnings) != 0 {
+		t.Fatalf("expected one WorkBuddy entry without warnings, got entries=%d warnings=%v", len(result.Entries), result.Warnings)
+	}
+	entry := result.Entries[0]
+	if entry.AgentProvider != "workbuddy" || entry.Status != StatusSuccess {
+		t.Fatalf("unexpected provider/status: %#v", entry)
+	}
+	if entry.SessionID != "session-workbuddy" || entry.TurnID != "turn-workbuddy" || entry.ToolUseID != "tool-workbuddy" || entry.AgentVersion != "2.103.1" {
+		t.Fatalf("WorkBuddy IDs/version were not normalized: %#v", entry)
+	}
+	if entry.ToolKind != "mcp" || entry.MCPServerHint != "github" || entry.MCPToolName != "search" {
+		t.Fatalf("WorkBuddy MCP classification failed: %#v", entry)
+	}
+}
+
+func TestProcessOpenCodePostToolNormalizesPluginPayload(t *testing.T) {
+	payload := []byte(`{
+		"session_id": "session-opencode",
+		"call_id": "call-opencode",
+		"tool_name": "mcp__github__search",
+		"tool_input": {"query": "obot"},
+		"tool_response": {"ok": true},
+		"cwd": "C:/Users/dev/project",
+		"agent_version": "1.18.29",
+		"timestamp": "2026-07-07T12:00:00Z"
+	}`)
+	result, err := Process(payload, ProcessOptions{
+		Agent:      localagent.OpenCode,
+		Phase:      PhasePostTool,
+		Now:        fixedNow,
+		Enrichment: &Enrichment{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Entries) != 1 || len(result.Warnings) != 0 {
+		t.Fatalf("expected one OpenCode entry without warnings, got entries=%d warnings=%v", len(result.Entries), result.Warnings)
+	}
+	entry := result.Entries[0]
+	if entry.AgentProvider != "opencode" || entry.Status != StatusSuccess {
+		t.Fatalf("unexpected provider/status: %#v", entry)
+	}
+	if entry.SessionID != "session-opencode" || entry.ToolUseID != "call-opencode" || entry.AgentVersion != "1.18.29" {
+		t.Fatalf("OpenCode IDs/version were not normalized: %#v", entry)
+	}
+	if entry.ToolKind != "mcp" || entry.MCPServerHint != "github" || entry.MCPToolName != "search" {
+		t.Fatalf("OpenCode MCP classification failed: %#v", entry)
+	}
+}
+
+func TestProcessOpenCodeUsesStructuredMCPHintForAmbiguousNames(t *testing.T) {
+	payload := []byte(`{
+		"session_id": "session-opencode-ambiguous",
+		"call_id": "call-opencode-ambiguous",
+		"tool_name": "mcp__github__enterprise__search",
+		"mcp_server": "github__enterprise",
+		"mcp_tool": "search",
+		"tool_input": {"query": "obot"},
+		"tool_response": {"ok": true}
+	}`)
+	result, err := Process(payload, ProcessOptions{
+		Agent:      localagent.OpenCode,
+		Phase:      PhasePostTool,
+		Now:        fixedNow,
+		Enrichment: &Enrichment{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Entries) != 1 || len(result.Warnings) != 0 {
+		t.Fatalf("expected one OpenCode entry without warnings, got entries=%d warnings=%v", len(result.Entries), result.Warnings)
+	}
+	entry := result.Entries[0]
+	if entry.ToolKind != "mcp" || entry.MCPServerHint != "github__enterprise" || entry.MCPToolName != "search" {
+		t.Fatalf("structured OpenCode MCP hint was not used: %#v", entry)
+	}
+}
+
 func TestProcessFailureHooks(t *testing.T) {
 	claudePayload := []byte(`{
 		"session_id": "session-claude",
@@ -309,6 +410,36 @@ func TestProcessFailureHooks(t *testing.T) {
 	}
 	if got := result.Entries[0]; got.Status != StatusFailure || got.Error == "" || got.DurationMs != 4187 || got.PermissionMode != "default" {
 		t.Fatalf("claude failure not normalized correctly: %#v", got)
+	}
+
+	workBuddyPayload := []byte(`{
+		"session_id": "session-workbuddy-failure",
+		"transcript_path": "C:/Users/dev/.workbuddy/transcript.jsonl",
+		"cwd": "C:/project",
+		"permission_mode": "default",
+		"hook_event_name": "PostToolUseFailure",
+		"tool_name": "Bash",
+		"tool_input": {"command": "npm test"},
+		"tool_use_id": "tool-workbuddy-failure",
+		"tool_error_code": "tool_failed",
+		"tool_error_name": "CommandExecutionError",
+		"is_interrupt": true,
+		"duration_ms": 4187
+	}`)
+	result, err = Process(workBuddyPayload, ProcessOptions{
+		Agent:      localagent.WorkBuddy,
+		Phase:      PhaseFailure,
+		Now:        fixedNow,
+		Enrichment: &Enrichment{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Entries) != 1 {
+		t.Fatalf("expected one WorkBuddy failure entry, got %d", len(result.Entries))
+	}
+	if got := result.Entries[0]; got.AgentProvider != "workbuddy" || got.Status != StatusFailure || got.FailureType != "tool_failed" || got.Error != "CommandExecutionError" || got.DurationMs != 4187 {
+		t.Fatalf("WorkBuddy failure not normalized correctly: %#v", got)
 	}
 
 	cursorPayload := []byte(`{

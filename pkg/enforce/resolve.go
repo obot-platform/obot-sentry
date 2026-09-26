@@ -17,6 +17,9 @@ type mcpEntry struct {
 	Command     string            `json:"command" toml:"command"`
 	Args        []string          `json:"args" toml:"args"`
 	Environment map[string]string `json:"env" toml:"env"`
+	// Connector is a stable synthetic identity for a bundled plugin server
+	// whose command arguments must not cross the device boundary.
+	Connector string `json:"-" toml:"-"`
 
 	// Disabled and ConfigError are resolver metadata, not MCP wire fields. A
 	// disabled entry remains in the scope table so it can mask a lower-priority
@@ -139,8 +142,12 @@ func resolve(ctx context.Context, loader *configLoader, env Env, req ResolveRequ
 		res = resolveCodex(ctx, loader, env, serverName, tr)
 	case localagent.Cursor:
 		res = resolveCursor(ctx, loader, env, req, serverName, tr)
-		case localagent.OpenCode:
+	case localagent.OpenCode:
 		res = resolveOpenCode(ctx, loader, env, req, serverName, tr)
+	case localagent.WorkBuddy:
+		res = resolveWorkBuddy(ctx, loader, env, req, serverName, tr)
+	case localagent.ZCode:
+		res = resolveZCode(ctx, loader, env, req, serverName, tr)
 	default:
 		return unresolved(serverName, fmt.Sprintf("unsupported agent %q", req.Agent))
 	}
@@ -166,6 +173,12 @@ func resolved(env Env, matchedKey string, entry mcpEntry) Resolution {
 	}
 	if entry.ConfigError != "" {
 		return unresolved(matchedKey, entry.ConfigError)
+	}
+	if entry.Connector != "" {
+		return Resolution{
+			ServerName: matchedKey,
+			Identity:   types.EnforcementDecisionServer{Connector: entry.Connector},
+		}
 	}
 	if rawURL := strings.TrimSpace(entry.URL); rawURL != "" {
 		safeURL, ok := enforcementURL(rawURL)
@@ -275,7 +288,7 @@ func agentNamespaceForm(agent localagent.Agent) namespaceForm {
 	switch agent {
 	case localagent.ClaudeCode:
 		return formClaudeCode
-		case localagent.Codex:
+	case localagent.Codex:
 		return formCodex
 	case localagent.OpenCode:
 		return formOpenCode

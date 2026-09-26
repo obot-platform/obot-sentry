@@ -77,6 +77,38 @@ const claudeWindowsGolden = `{
 }
 `
 
+const workBuddyWindowsGolden = `{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"C:/Program Files/Obot/obot-sentry/obot-sentry.exe\" audit submit --agent workbuddy --phase post-tool --managed-by obot-sentry",
+            "timeout": 30,
+            "statusMessage": "Submitting Obot audit log"
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"C:/Program Files/Obot/obot-sentry/obot-sentry.exe\" audit submit --agent workbuddy --phase failure --managed-by obot-sentry",
+            "timeout": 30,
+            "statusMessage": "Submitting Obot audit failure"
+          }
+        ]
+      }
+    ]
+  }
+}
+`
+
 const cursorDarwinGolden = `{
   "version": 1,
   "hooks": {
@@ -159,6 +191,8 @@ func TestDesiredJSONDocumentsGolden(t *testing.T) {
 	}{
 		{"claude darwin", desiredClaude(macExe, "darwin", false), claudeDarwinGolden},
 		{"claude windows", desiredClaude(winExe, "windows", false), claudeWindowsGolden},
+		{"workbuddy darwin", desiredWorkBuddy(macExe, "darwin", false), strings.ReplaceAll(claudeDarwinGolden, "--agent claude-code", "--agent workbuddy")},
+		{"workbuddy windows", desiredWorkBuddy(winExe, "windows", false), workBuddyWindowsGolden},
 		{"cursor darwin", desiredCursor(macExe, "darwin", false), cursorDarwinGolden},
 		{"cursor windows", desiredCursor(winExe, "windows", false), cursorWindowsGolden},
 		{"vscode darwin", desiredVSCode(macExe, "darwin"), vscodeDarwinGolden},
@@ -177,15 +211,25 @@ func TestDesiredJSONDocumentsGolden(t *testing.T) {
 	}
 }
 
-func TestDesiredClaudeWindowsHooksUsePowerShell(t *testing.T) {
-	got := desiredClaude(winExe, "windows", true)
-	groups := append(append(got.Hooks.PostToolUse, got.Hooks.PostToolUseFailure...), got.Hooks.PreToolUse...)
-	for _, group := range groups {
-		for _, hook := range group.Hooks {
-			if hook.Shell != "powershell" {
-				t.Errorf("Claude Code Windows hook shell = %q, want powershell: %#v", hook.Shell, hook)
+func TestDesiredWindowsHookShell(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		doc       claudeDocument
+		wantShell string
+	}{
+		{"Claude Code", desiredClaude(winExe, "windows", true), "powershell"},
+		{"WorkBuddy", desiredWorkBuddy(winExe, "windows", true), ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			groups := append(append(tc.doc.Hooks.PostToolUse, tc.doc.Hooks.PostToolUseFailure...), tc.doc.Hooks.PreToolUse...)
+			for _, group := range groups {
+				for _, hook := range group.Hooks {
+					if hook.Shell != tc.wantShell {
+						t.Errorf("%s Windows hook shell = %q, want %q: %#v", tc.name, hook.Shell, tc.wantShell, hook)
+					}
+				}
 			}
-		}
+		})
 	}
 }
 

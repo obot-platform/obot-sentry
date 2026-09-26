@@ -10,9 +10,12 @@ func TestClassifyTool(t *testing.T) {
 		server  string
 		mcpTool string
 	}{
-		// mcp__<server>__<tool>: only Claude Code and Codex yield a server hint.
+		// mcp__<server>__<tool>: Claude Code, Codex, WorkBuddy, and OpenCode yield a server hint.
 		{AgentClaudeCode, "mcp__linear__search_issues", "mcp", "linear", "search_issues"},
 		{AgentCodex, "mcp__linear__search_issues", "mcp", "linear", "search_issues"},
+		{AgentWorkBuddy, "mcp__linear__search_issues", "mcp", "linear", "search_issues"},
+		{AgentOpenCode, "mcp__linear__search_issues", "mcp", "linear", "search_issues"},
+		{AgentZCode, "mcp__linear__search_issues", "mcp", "linear", "search_issues"},
 		{AgentVSCode, "mcp__linear__search_issues", "mcp", "", "search_issues"},
 		{AgentCursor, "mcp__linear__search_issues", "mcp", "", "search_issues"},
 

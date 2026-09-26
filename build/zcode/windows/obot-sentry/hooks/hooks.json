@@ -1,0 +1,42 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"C:\\Program Files\\Obot\\obot-sentry\\obot-sentry.exe\" enforce --agent zcode --event PreToolUse --input - --managed-by obot-sentry || exit /b 2",
+            "timeoutMs": 6000,
+            "statusMessage": "Checking Obot policy…"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "process",
+            "command": "C:\\Program Files\\Obot\\obot-sentry\\obot-sentry.exe",
+            "args": ["audit", "submit", "--agent", "zcode", "--phase", "post-tool", "--input", "-", "--managed-by", "obot-sentry", "--defer"],
+            "timeoutMs": 6000,
+            "statusMessage": "Recording Obot audit…"
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "hooks": [
+          {
+            "type": "process",
+            "command": "C:\\Program Files\\Obot\\obot-sentry\\obot-sentry.exe",
+            "args": ["audit", "submit", "--agent", "zcode", "--phase", "failure", "--input", "-", "--managed-by", "obot-sentry", "--defer"],
+            "timeoutMs": 6000,
+            "statusMessage": "Recording Obot failure…"
+          }
+        ]
+      }
+    ]
+  }
+}

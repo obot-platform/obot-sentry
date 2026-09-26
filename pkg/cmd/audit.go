@@ -47,12 +47,13 @@ func (a *Audit) Run(c *cobra.Command, _ []string) error {
 
 type AuditSubmit struct {
 	ConfigFlags
-	Agent           string `usage:"local agent provider: claude-code, codex, vscode, cursor"`
+	Agent           string `usage:"local agent provider: claude-code, codex, vscode, cursor, workbuddy, zcode, opencode"`
 	Phase           string `usage:"hook phase: post-tool or failure"`
 	Input           string `usage:"hook payload input path, or - for stdin" default:"-"`
 	ManagedBy       string `usage:"managed hook marker" name:"managed-by" hidden:"true"`
 	DryRun          bool   `usage:"write normalized audit logs to the user cache without submitting" name:"dry-run"`
 	PrintNormalized bool   `usage:"print normalized debug JSON to stdout" name:"print-normalized"`
+	Defer           bool   `usage:"queue the normalized audit event for the next background drain" name:"defer" hidden:"true"`
 }
 
 func (s *AuditSubmit) Customize(cmd *cobra.Command) {
@@ -95,6 +96,23 @@ func (s *AuditSubmit) Run(cmd *cobra.Command, _ []string) error {
 		if err := enc.Encode(events); err != nil {
 			return err
 		}
+	}
+
+	if s.Defer {
+		if len(events) == 0 {
+			return nil
+		}
+		spool, spoolErr := audit.DefaultSpool()
+		if spoolErr != nil {
+			auditWarn(cmd, "obot-sentry audit: deferred audit spool is unavailable: %v", spoolErr)
+			return nil
+		}
+		if spoolErr := spool.Enqueue(events); spoolErr != nil {
+			auditWarn(cmd, "obot-sentry audit: deferred audit enqueue failed: %v", spoolErr)
+			return nil
+		}
+		auditWarn(cmd, "obot-sentry audit: deferred audit event queued for the next background drain")
+		return nil
 	}
 
 	if s.DryRun {
@@ -186,6 +204,16 @@ func (s *AuditSubmit) drainSpool(cmd *cobra.Command, a *agent.Agent) {
 	spool, err := audit.DefaultSpool()
 	if err != nil {
 		auditWarn(cmd, "obot-sentry audit: spool unavailable after successful submit: %v", err)
+		return
+	}
+	queued, err := os.ReadDir(spool.Dir)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			auditWarn(cmd, "obot-sentry audit: cannot inspect audit spool: %v", err)
+		}
+		return
+	}
+	if len(queued) == 0 {
 		return
 	}
 	ctx, cancel := context.WithTimeout(cmd.Context(), auditDrainTimeout)

@@ -212,6 +212,9 @@ func normalizeCallContext(ctx context.Context, env Env, agent localagent.Agent, 
 	if agent == localagent.OpenCode && event == EventOpenCodePermission {
 		return normalizeOpenCodePermission(ctx, env, raw)
 	}
+	if agent == localagent.ZCode && event == EventPreToolUse {
+		return normalizeZCodePreTool(ctx, env, raw)
+	}
 	if agent == localagent.Cursor && event == EventCursorBeforeMCPExecution {
 		return normalizeCursorMCP(ctx, env, raw)
 	}

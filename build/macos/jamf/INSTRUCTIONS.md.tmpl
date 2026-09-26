@@ -4,6 +4,11 @@ This install package contains:
 
 - `obot-sentry-{{.obotSentryVersion}}.pkg` — the obot-sentry device agent,
   signed and notarized. Installs the agent and its two launchd jobs.
+- `opencode/obot-sentry-audit.js` and `opencode/README.md` — optional
+  OpenCode audit/enforcement adapter and installation notes; distribute and install it
+  separately when OpenCode auditing or V2 enforcement is required.
+- `obot-sentry-zcode-macos.zip` — optional ZCode personal marketplace
+  archive containing the ZCode audit and `PreToolUse` enforcement plugin.
 - `ai.obot.obot-sentry.mobileconfig` — the deployment configuration. The server
   URL and scan interval are already filled in; you supply the enrollment key.
 - `ai.obot.obot-sentry.pppc.mobileconfig` — the file access the agent's
@@ -130,7 +135,7 @@ Level**, scoped to the same targets.
 {{if .enforcementEnabled}}
 ## Tool-call enforcement
 
-Each tool call in Claude Code, Codex, and Cursor is checked against Obot's
+Each tool call in Claude Code, Codex, Cursor, and WorkBuddy is checked against Obot's
 allowlist before it runs. The check is a single request to Obot, and it is
 **fail-closed**: if Obot cannot be reached, the computer is not enrolled, or the
 hook cannot tell which MCP server a call targets, the call is blocked.
@@ -165,6 +170,23 @@ Once the rollout completes, the old release's package can be deleted from
 The profiles are separate. If the new download contains changed `.mobileconfig`
 files, re-upload them to the same profiles.
 
+## Install the ZCode plugin (optional)
+
+The `obot-sentry-zcode-macos.zip` asset is a local ZCode personal marketplace
+archive. It is not written into the user's ZCode configuration by the Jamf package.
+
+1. Extract `obot-sentry-zcode-macos.zip` so the directory containing
+   `marketplace.json` is available on the device.
+2. In ZCode open **Settings → Plugins → Create → Add marketplace**.
+3. Select the extracted directory containing `marketplace.json`.
+4. Install and enable **obot-sentry**, then start a new ZCode session.
+5. Confirm the plugin's `PreToolUse`, `PostToolUse`, and
+   `PostToolUseFailure` hooks appear in **Settings → Hooks**.
+
+The archive's platform hook invokes the installed Sentry executable directly. If
+Sentry is installed elsewhere, use a platform archive with its command path
+adjusted before distribution.
+
 ## Uninstall
 
 1. Remove the computers, users, or groups you are removing Obot Sentry from
@@ -185,4 +207,4 @@ files, re-upload them to the same profiles.
 The script needs none of the settings removed in step 1, so it removes the
 agent, both launchd jobs, and the hooks whenever it lands.
 
-Restart Claude Code, Codex, VS Code, and Cursor afterward to drop the hooks.
+Restart Claude Code, Codex, VS Code, Cursor, and WorkBuddy afterward to drop the hooks.

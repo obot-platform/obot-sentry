@@ -1,0 +1,14 @@
+{
+  "session_id": "54e6b176-2282-4891-9518-a4fc86f45d0a",
+  "transcript_path": "C:/Users/dev/.workbuddy/projects/probe/54e6b176-2282-4891-9518-a4fc86f45d0a.jsonl",
+  "cwd": "C:/Users/dev/probe-workspace",
+  "permission_mode": "default",
+  "hook_event_name": "PreToolUse",
+  "tool_name": "mcp__probe-npx-stdio__echo",
+  "tool_input": {
+    "message": "hello-stdio-npx"
+  },
+  "tool_use_id": "toolu_017UE58dV3jsqUc41AJq65MR",
+  "agent_id": "agent-1",
+  "agent_type": "general-purpose"
+}

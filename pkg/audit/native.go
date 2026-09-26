@@ -12,25 +12,33 @@ type sharedToolHookCommon struct {
 	HookEventName  string `json:"hook_event_name,omitempty"`
 	Model          string `json:"model,omitempty"`
 	PermissionMode string `json:"permission_mode,omitempty"`
+	GenerationID   string `json:"generation_id,omitempty"`
+	Version        string `json:"version,omitempty"`
 }
 
 // sharedSingleToolHook is a superset of the similar-but-not-identical
-// single-tool hook envelopes used by VS Code, Codex, and Claude Code. The
-// common core is tool_name/tool_input/tool_use_id plus tool_response on
-// post-success; product-specific fields such as VS Code timestamp, Codex
-// turn_id/model, and Claude duration_ms/error remain optional.
+// single-tool hook envelopes used by VS Code, Codex, Claude Code, WorkBuddy,
+// OpenCode, and ZCode.
+// The common core is tool_name/tool_input plus a tool-use or call ID and
+// tool_response on post-success; product-specific fields such as VS Code
+// timestamp, Codex turn_id/model, and WorkBuddy generation_id/version/error
+// details remain optional.
 type sharedSingleToolHook struct {
 	sharedToolHookCommon
 
-	TurnID       string          `json:"turn_id,omitempty"`
-	ToolName     string          `json:"tool_name"`
-	ToolUseID    string          `json:"tool_use_id,omitempty"`
-	ToolInput    json.RawMessage `json:"tool_input"`
-	ToolResponse json.RawMessage `json:"tool_response,omitempty"`
-	DurationMs   int64           `json:"duration_ms,omitempty"`
-	Error        string          `json:"error,omitempty"`
-	Timestamp    string          `json:"timestamp,omitempty"`
-	AgentVersion string          `json:"agent_version,omitempty"`
+	TurnID        string          `json:"turn_id,omitempty"`
+	ToolName      string          `json:"tool_name"`
+	ToolUseID     string          `json:"tool_use_id,omitempty"`
+	CallID        string          `json:"call_id,omitempty"`
+	ToolInput     json.RawMessage `json:"tool_input"`
+	ToolResponse  json.RawMessage `json:"tool_response,omitempty"`
+	DurationMs    int64           `json:"duration_ms,omitempty"`
+	Error         string          `json:"error,omitempty"`
+	ToolErrorCode string          `json:"tool_error_code,omitempty"`
+	ToolErrorName string          `json:"tool_error_name,omitempty"`
+	IsInterrupt   bool            `json:"is_interrupt,omitempty"`
+	Timestamp     string          `json:"timestamp,omitempty"`
+	AgentVersion  string          `json:"agent_version,omitempty"`
 }
 
 // cursorToolHook covers Cursor's generic terminal tool hooks: postToolUse and
@@ -93,20 +101,28 @@ func (e sharedSingleToolHook) toolOutput(phase Phase) (json.RawMessage, bool) {
 	}
 	return cloneRaw(e.ToolResponse), true
 }
-func (e sharedSingleToolHook) toolUseID() string         { return e.ToolUseID }
+func (e sharedSingleToolHook) toolUseID() string         { return firstNonEmpty(e.ToolUseID, e.CallID) }
 func (e sharedSingleToolHook) sessionID() string         { return e.SessionID }
-func (e sharedSingleToolHook) turnID() string            { return e.TurnID }
+func (e sharedSingleToolHook) turnID() string            { return firstNonEmpty(e.TurnID, e.GenerationID) }
 func (e sharedSingleToolHook) model() string             { return e.Model }
 func (e sharedSingleToolHook) modelID() string           { return "" }
 func (e sharedSingleToolHook) permissionMode() string    { return e.PermissionMode }
 func (e sharedSingleToolHook) reportedUserEmail() string { return "" }
 func (e sharedSingleToolHook) cwd() string               { return e.CWD }
 func (e sharedSingleToolHook) transcriptPath() string    { return e.TranscriptPath }
-func (e sharedSingleToolHook) agentVersion() string      { return e.AgentVersion }
+func (e sharedSingleToolHook) agentVersion() string      { return firstNonEmpty(e.AgentVersion, e.Version) }
 func (e sharedSingleToolHook) durationMs() int64         { return e.DurationMs }
-func (e sharedSingleToolHook) errorText() string         { return e.Error }
-func (e sharedSingleToolHook) failureType() string       { return "" }
-func (e sharedSingleToolHook) timestamp() string         { return e.Timestamp }
+func (e sharedSingleToolHook) errorText() string         { return firstNonEmpty(e.Error, e.ToolErrorName) }
+func (e sharedSingleToolHook) failureType() string {
+	if code := firstNonEmpty(e.ToolErrorCode); code != "" {
+		return code
+	}
+	if e.IsInterrupt {
+		return "interrupt"
+	}
+	return ""
+}
+func (e sharedSingleToolHook) timestamp() string { return e.Timestamp }
 
 func (e cursorToolHook) toolName() string           { return e.ToolName }
 func (e cursorToolHook) toolInput() json.RawMessage { return e.ToolInput }

@@ -111,7 +111,11 @@ func evaluate(ctx context.Context, opts Options) Result {
 
 	event, err := ParseEvent(agent, opts.Event)
 	if err != nil {
-		return deny(agent, Events(agent)[0], Result{}, err.Error(), InfrastructureDenial())
+		events := Events(agent)
+		if len(events) == 0 {
+			return Result{Denied: true, Reason: err.Error(), Unusable: true}
+		}
+		return deny(agent, events[0], Result{}, err.Error(), InfrastructureDenial())
 	}
 
 	raw, err := readPayload(opts.Input)
@@ -152,15 +156,15 @@ func evaluate(ctx context.Context, opts Options) Result {
 		return infrastructureDeny(agent, event, result, err.Error())
 	}
 
-		switch resp.Decision {
+	switch resp.Decision {
 	case types.EnforcementDecisionAllow:
 		// The OpenCode plugin is a real enforcement boundary, not an observer, and
 		// a disabled fleet policy answers allow unconditionally. A call whose MCP
 		// target was never resolved must still be refused here rather than rely on
 		// the server having been configured to refuse it.
-		if agent == localagent.OpenCode && call.Request.Unresolved {
+		if (agent == localagent.OpenCode || agent == localagent.ZCode) && call.Request.Unresolved {
 			return infrastructureDeny(agent, event, result,
-				"the OpenCode tool target could not be resolved")
+				fmt.Sprintf("the %s tool target could not be resolved", agent.DisplayName()))
 		}
 		result.Response = Allow(agent)
 		return result

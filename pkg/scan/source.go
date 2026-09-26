@@ -3,6 +3,9 @@ package scan
 import (
 	"path"
 	"strings"
+
+	workbuddy "github.com/obot-platform/obot-sentry/pkg/workbuddy"
+	zcode "github.com/obot-platform/obot-sentry/pkg/zcode"
 )
 
 // Source is something the scan reads: a config file a client writes, or
@@ -16,18 +19,31 @@ import (
 // found. It may emit servers, plugins and skills together: Claude
 // Desktop's extension registry yields all three from one file.
 //
-// Sources have a single reader today, so there is no Readers field:
-// every config file here is written by exactly one client. When a
-// vendor-neutral path grows several (`.mcp.json` is already a generic
-// name), this gains Readers and build's per-reader fan-out generalizes
-// from skills to servers.
+// A Source normally has one reader, but Readers allows a vendor-neutral
+// path (for example `.mcp.json`) to be decoded for more than one client.
+// Readers are invoked in declaration order after Read, and every reader
+// receives the same source path and project scope.
 type Source struct {
 	// Path is root-relative. At Project scope it is a suffix matched
 	// anywhere in the walk: ".cursor/mcp.json" matches any
 	// */.cursor/mcp.json.
-	Path  string
-	Scope Scope
-	Read  func(s *state, rel, projectPath string) observations
+	Path    string
+	Scope   Scope
+	Read    func(s *state, rel, projectPath string) observations
+	Readers []func(s *state, rel, projectPath string) observations
+}
+
+func (src Source) read(s *state, rel, projectPath string) observations {
+	var out observations
+	if src.Read != nil {
+		out.add(src.Read(s, rel, projectPath))
+	}
+	for _, reader := range src.Readers {
+		if reader != nil {
+			out.add(reader(s, rel, projectPath))
+		}
+	}
+	return out
 }
 
 // projectOf returns the absolute path of the project enclosing a
@@ -76,8 +92,10 @@ func sources(platform string) []Source {
 			Path:  ".mcp.json",
 			Scope: Project,
 			Read:  claudeCodeProjectServers,
+			Readers: []func(s *state, rel, projectPath string) observations{
+				workBuddyProjectServers,
+			},
 		},
-
 		Source{
 			Path:  codexGlobalConfigRel,
 			Scope: Home | Project,
@@ -146,6 +164,48 @@ func sources(platform string) []Source {
 			Path:  ".vscode/mcp.json",
 			Scope: Project,
 			Read:  vscodeServers,
+		},
+
+		Source{
+			Path:  workbuddy.DefaultUserMCPPathRel,
+			Scope: Home,
+			Read:  workBuddyServers,
+		},
+
+		Source{
+			Path:  zcode.UserConfigRel,
+			Scope: Home,
+			Read:  zcodeServers,
+		},
+		Source{
+			Path:  zcode.UserCompatRel,
+			Scope: Home,
+			Read:  zcodeCompatServers,
+		},
+		Source{
+			Path:  ".zcode",
+			Scope: Home,
+			Read:  zcodePlugins,
+		},
+		Source{
+			Path:  zcode.ProjectConfigRel,
+			Scope: Project,
+			Read:  zcodeServers,
+		},
+		Source{
+			Path:  zcode.ProjectAliasRel,
+			Scope: Project,
+			Read:  zcodeServers,
+		},
+		Source{
+			Path:  zcode.ProjectCompatRel,
+			Scope: Project,
+			Read:  zcodeCompatServers,
+		},
+		Source{
+			Path:  ".zcode/plugins",
+			Scope: Project,
+			Read:  zcodePlugins,
 		},
 
 		Source{

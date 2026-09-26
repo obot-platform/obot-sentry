@@ -26,7 +26,7 @@ func preToolEvents(agent localagent.Agent, enforcing bool) []string {
 	return out
 }
 
-// --- Claude Code: nested JSON (matcher group -> inner command hooks) ---
+// --- Claude Code and WorkBuddy: nested JSON (matcher group -> inner hooks) ---
 
 type claudeInnerHook struct {
 	Type          string `json:"type"`
@@ -53,9 +53,20 @@ type claudeDocument struct {
 }
 
 func desiredClaude(exe, goos string, enforcing bool) claudeDocument {
+	return desiredClaudeStyle(exe, goos, enforcing, localagent.ClaudeCode)
+}
+
+// WorkBuddy uses the same matcher-group JSON schema and lifecycle names as Claude
+// Code. Its provider, settings destination, and portable Windows command form
+// differ.
+func desiredWorkBuddy(exe, goos string, enforcing bool) claudeDocument {
+	return desiredClaudeStyle(exe, goos, enforcing, localagent.WorkBuddy)
+}
+
+func desiredClaudeStyle(exe, goos string, enforcing bool, agent localagent.Agent) claudeDocument {
 	matcherGroup := func(command, status string) claudeMatcherGroup {
 		shell := ""
-		if goos == "windows" {
+		if goos == "windows" && agent != localagent.WorkBuddy {
 			shell = "powershell"
 		}
 		return claudeMatcherGroup{
@@ -71,16 +82,16 @@ func desiredClaude(exe, goos string, enforcing bool) claudeDocument {
 	}
 	audit := func(p phase, status string) []claudeMatcherGroup {
 		return []claudeMatcherGroup{
-			matcherGroup(hookCommand(exe, goos, localagent.ClaudeCode, commandArgs(localagent.ClaudeCode, p)), status),
+			matcherGroup(hookCommand(exe, goos, agent, commandArgs(agent, p)), status),
 		}
 	}
 	doc := claudeDocument{Hooks: claudeHooks{
 		PostToolUse:        audit(phasePostTool, statusMessagePostTool),
 		PostToolUseFailure: audit(phaseFailure, claudeStatusFailure),
 	}}
-	for _, event := range preToolEvents(localagent.ClaudeCode, enforcing) {
+	for _, event := range preToolEvents(agent, enforcing) {
 		doc.Hooks.PreToolUse = append(doc.Hooks.PreToolUse, matcherGroup(
-			hookCommand(exe, goos, localagent.ClaudeCode, enforceCommandArgs(localagent.ClaudeCode, event)),
+			hookCommand(exe, goos, agent, enforceCommandArgs(agent, event)),
 			statusMessagePreTool))
 	}
 	return doc

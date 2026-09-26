@@ -98,6 +98,12 @@ func normalizeAgent(agent Agent) (Agent, error) {
 		return AgentVSCode, nil
 	case AgentCursor:
 		return AgentCursor, nil
+	case AgentWorkBuddy:
+		return AgentWorkBuddy, nil
+	case AgentOpenCode:
+		return AgentOpenCode, nil
+	case AgentZCode:
+		return AgentZCode, nil
 	default:
 		return "", ErrUnsupportedAgent
 	}
@@ -168,6 +174,9 @@ func normalizeEvent(agent Agent, phase Phase, event nativeEvent, payload []byte,
 	}
 
 	entry.ToolKind, entry.MCPServerHint, entry.MCPToolName = classifyTool(agent, toolName)
+	if agent == AgentOpenCode {
+		applyStructuredMCPHint(&entry, payload, toolName)
+	}
 	entry.IdempotencyKey = idempotencyKey(entry, payload)
 	return entry, nil
 }
@@ -216,6 +225,32 @@ func occurredAt(event nativeEvent, now func() time.Time) time.Time {
 	return now().UTC()
 }
 
+// applyStructuredMCPHint consumes the structured fields emitted by the OpenCode
+// adapter. The canonical mcp__server__tool string remains the wire/tool name,
+// but the explicit fields preserve server names that themselves contain "__".
+// The fields are accepted only when they reconstruct the canonical name, so a
+// malformed or mismatched hint cannot silently rewrite attribution.
+func applyStructuredMCPHint(entry *Entry, payload []byte, toolName string) {
+	var hint struct {
+		Server string `json:"mcp_server"`
+		Tool   string `json:"mcp_tool"`
+	}
+	if err := json.Unmarshal(payload, &hint); err != nil {
+		return
+	}
+	server := strings.TrimSpace(hint.Server)
+	tool := strings.TrimSpace(hint.Tool)
+	if server == "" || tool == "" || len(server) > 4096 || len(tool) > 4096 {
+		return
+	}
+	if "mcp__"+server+"__"+tool != toolName {
+		return
+	}
+	entry.ToolKind = toolkind.KindMCP
+	entry.MCPServerHint = server
+	entry.MCPToolName = tool
+}
+
 // classifyTool derives the audit entry's tool kind, MCP server hint, and MCP
 // tool name from a runtime tool name. The kind heuristics are shared with
 // pkg/enforce via pkg/toolkind; the server-hint rules below are audit's own and
@@ -227,10 +262,10 @@ func classifyTool(agent Agent, name string) (kind, server, tool string) {
 		return kind, "", ""
 	}
 
-	// MCP tool names are agent-specific. Claude Code and Codex document the
-	// mcp__<server>__<tool> convention, so only those providers yield a server
-	// hint. Cursor and VS Code do not expose a reliable server name in their
-	// generic tool-hook names.
+	// MCP tool names are agent-specific. Claude Code, Codex, WorkBuddy, and
+	// OpenCode use namespaced names that can retain a server hint. Cursor and
+	// VS Code do not expose a reliable server name in their generic tool-hook
+	// names.
 	lower := strings.ToLower(name)
 	switch {
 	case strings.HasPrefix(lower, "mcp__"):
@@ -238,7 +273,7 @@ func classifyTool(agent Agent, name string) (kind, server, tool string) {
 		if len(parts) != 2 {
 			return kind, "", ""
 		}
-		if agent == AgentClaudeCode || agent == AgentCodex {
+		if agent == AgentClaudeCode || agent == AgentCodex || agent == AgentWorkBuddy || agent == AgentOpenCode || agent == AgentZCode {
 			return kind, parts[0], parts[1]
 		}
 		return kind, "", parts[1]

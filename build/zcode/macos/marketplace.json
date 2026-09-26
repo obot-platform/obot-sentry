@@ -1,0 +1,16 @@
+{
+  "name": "obot-sentry-zcode-macos",
+  "description": "Obot Sentry integration plugins for ZCode on macOS",
+  "pluginRoot": ".",
+  "plugins": [
+    {
+      "name": "obot-sentry",
+      "source": "./obot-sentry",
+      "description": "Obot Sentry audit and fail-closed tool enforcement for ZCode",
+      "version": "0.1.0",
+      "category": "Developer Tools",
+      "tags": ["audit", "enforcement", "obot"],
+      "strict": true
+    }
+  ]
+}

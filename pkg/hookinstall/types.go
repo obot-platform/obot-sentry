@@ -1,6 +1,6 @@
 // Package hookinstall converges the native audit-hook configuration for the
-// supported local coding agents (Claude Code, Codex, Visual Studio Code, and
-// Cursor) onto the hidden `obot-sentry audit submit` command.
+// supported local coding agents (Claude Code, Codex, Visual Studio Code,
+// Cursor, and WorkBuddy) onto the hidden `obot-sentry audit submit` command.
 //
 // The package reads as a pipeline, one stage per file, so the same primitives can
 // back the hook-install and hook-uninstall commands.
@@ -28,6 +28,7 @@ const (
 	AgentCodex      = localagent.Codex
 	AgentVSCode     = localagent.VSCode
 	AgentCursor     = localagent.Cursor
+	AgentWorkBuddy  = localagent.WorkBuddy
 )
 
 // Agents returns the fixed, ordered set of agents hook-install manages.

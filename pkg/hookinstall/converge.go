@@ -51,8 +51,8 @@ func mergeConfig(d Destination, existing []byte, exe, goos string, enforcing boo
 	switch {
 	case d.Format == FormatTOML:
 		return mergeCodex(existing, exe, goos, enforcing)
-	case d.Agent == localagent.ClaudeCode:
-		return mergeClaude(existing, exe, goos, enforcing)
+	case d.Agent == localagent.ClaudeCode || d.Agent == localagent.WorkBuddy:
+		return mergeClaudeStyle(existing, exe, goos, enforcing, d.Agent)
 	case d.Agent == localagent.Cursor:
 		return mergeCursor(existing, exe, goos, enforcing)
 	case d.Agent == localagent.VSCode && d.Format == FormatJSONC:
@@ -71,7 +71,7 @@ func removeConfig(d Destination, existing []byte) (mergeOutcome, error) {
 		return mergeOutcome{data: existing, status: StatusUnchanged}, nil
 	case d.Format == FormatTOML:
 		return removeCodexHooks(existing)
-	case d.Agent == localagent.ClaudeCode:
+	case d.Agent == localagent.ClaudeCode || d.Agent == localagent.WorkBuddy:
 		return removeJSONHooks(existing, true)
 	case d.Agent == localagent.Cursor || d.Agent == localagent.VSCode:
 		return removeJSONHooks(existing, false)
@@ -185,7 +185,7 @@ func mergeJSONHook(existing []byte, newDoc any, mutate func(*hujson.Object) (dup
 // appends the single desired entry, returning the duplicates collapsed (owned
 // entries removed beyond the one we re-add) and whether any owned entry existed.
 // filter is the layout-specific remover: filterDirectOwned for Cursor/VS Code,
-// filterNestedOwned for Claude's matcher groups.
+// filterNestedOwned for Claude Code and WorkBuddy matcher groups.
 func mergeEventArray(hooks *hujson.Object, event string, desired any, filter func(*hujson.Array) int) (dupes int, hadOwned bool, err error) {
 	arr, err := getOrCreateArrayMember(hooks, event)
 	if err != nil {
@@ -203,7 +203,18 @@ func mergeEventArray(hooks *hujson.Object, event string, desired any, filter fun
 // mergeClaude converges Claude Code's nested settings.json: one matcher-group
 // entry per event, each carrying the obot-sentry command as an inner hook.
 func mergeClaude(existing []byte, exe, goos string, enforcing bool) (mergeOutcome, error) {
-	desired := desiredClaude(exe, goos, enforcing)
+	return mergeClaudeStyle(existing, exe, goos, enforcing, localagent.ClaudeCode)
+}
+
+// mergeClaudeStyle also handles WorkBuddy, whose settings use the same nested
+// hook schema under ~/.workbuddy/settings.json.
+func mergeClaudeStyle(existing []byte, exe, goos string, enforcing bool, agent localagent.Agent) (mergeOutcome, error) {
+	var desired claudeDocument
+	if agent == localagent.WorkBuddy {
+		desired = desiredWorkBuddy(exe, goos, enforcing)
+	} else {
+		desired = desiredClaude(exe, goos, enforcing)
+	}
 	removedHooks := 0
 	out, err := mergeJSONHook(existing, desired, func(obj *hujson.Object) (int, bool, error) {
 		hooks, err := getOrCreateObjectMember(obj, "hooks")
@@ -223,7 +234,7 @@ func mergeClaude(existing []byte, exe, goos string, enforcing bool) (mergeOutcom
 			{"PostToolUse", desired.Hooks.PostToolUse[0]},
 			{"PostToolUseFailure", desired.Hooks.PostToolUseFailure[0]},
 		}
-		for i, event := range preToolEvents(localagent.ClaudeCode, enforcing) {
+		for i, event := range preToolEvents(agent, enforcing) {
 			events = append(events, struct {
 				key   string
 				group claudeMatcherGroup

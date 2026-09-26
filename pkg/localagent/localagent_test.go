@@ -2,18 +2,24 @@ package localagent
 
 import "testing"
 
-// OpenCode is enforced by an external plugin rather than by a managed native
-// hook, so it must stay out of All(): hook installation has no OpenCode
-// destination to write, and a missing destination would be reported as a
-// failure on every install.
-func TestOpenCodeIsExcludedFromManagedAgents(t *testing.T) {
+func TestZCodeIsExternalPluginAgent(t *testing.T) {
+	if got := ZCode.DisplayName(); got != "ZCode" {
+		t.Fatalf("ZCode display name = %q, want ZCode", got)
+	}
 	for _, agent := range All() {
-		if agent == OpenCode {
-			t.Fatal("OpenCode must not appear in All()")
+		if agent == ZCode {
+			t.Fatal("ZCode must not be included in native hook-install agents")
 		}
 	}
+}
 
+func TestOpenCodeIsExternalPluginAgent(t *testing.T) {
 	if got := OpenCode.DisplayName(); got != "OpenCode" {
-		t.Fatalf("OpenCode.DisplayName() = %q", got)
+		t.Fatalf("OpenCode display name = %q, want OpenCode", got)
+	}
+	for _, agent := range All() {
+		if agent == OpenCode {
+			t.Fatal("OpenCode must not be included in native hook-install agents")
+		}
 	}
 }
