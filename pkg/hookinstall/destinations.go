@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/obot-platform/obot-sentry/pkg/localagent"
+	workbuddy "github.com/obot-platform/obot-sentry/pkg/workbuddy"
 )
 
 type Destination struct {
@@ -48,7 +49,7 @@ func winJoin(base string, parts ...string) string {
 }
 
 // Destinations returns the full, ordered set of managed destinations for goos:
-// the four agent hook files plus the VS Code user-settings file. Only the
+// the supported agent hook files plus the VS Code user-settings file. Only the
 // darwin and windows layouts are defined; other platforms return nil and are
 // rejected earlier by the platform check.
 func Destinations(goos string) []Destination {
@@ -56,6 +57,7 @@ func Destinations(goos string) []Destination {
 	case "darwin":
 		return []Destination{
 			{Agent: localagent.ClaudeCode, Label: localagent.ClaudeCode.DisplayName(), Scope: ScopeUser, Format: FormatJSON, Rel: ".claude/settings.json"},
+			{Agent: localagent.WorkBuddy, Label: localagent.WorkBuddy.DisplayName(), Scope: ScopeUser, Format: FormatJSON, Rel: workbuddy.DefaultSettingsPathRel},
 			{Agent: localagent.Codex, Label: localagent.Codex.DisplayName(), Scope: ScopeMachine, Format: FormatTOML, Abs: "/etc/codex/requirements.toml"},
 			{Agent: localagent.VSCode, Label: localagent.VSCode.DisplayName(), Scope: ScopeUser, Format: FormatJSON, Rel: ".copilot/hooks/obot-sentry.json"},
 			{Agent: localagent.Cursor, Label: localagent.Cursor.DisplayName(), Scope: ScopeMachine, Format: FormatJSON, Abs: "/Library/Application Support/Cursor/hooks.json"},
@@ -65,6 +67,7 @@ func Destinations(goos string) []Destination {
 		pd := windowsProgramData()
 		return []Destination{
 			{Agent: localagent.ClaudeCode, Label: localagent.ClaudeCode.DisplayName(), Scope: ScopeUser, Format: FormatJSON, Rel: ".claude/settings.json"},
+			{Agent: localagent.WorkBuddy, Label: localagent.WorkBuddy.DisplayName(), Scope: ScopeUser, Format: FormatJSON, Rel: workbuddy.DefaultSettingsPathRel},
 			{Agent: localagent.Codex, Label: localagent.Codex.DisplayName(), Scope: ScopeMachine, Format: FormatTOML, Abs: winJoin(pd, "OpenAI", "Codex", "requirements.toml")},
 			{Agent: localagent.VSCode, Label: localagent.VSCode.DisplayName(), Scope: ScopeUser, Format: FormatJSON, Rel: ".copilot/hooks/obot-sentry.json"},
 			{Agent: localagent.Cursor, Label: localagent.Cursor.DisplayName(), Scope: ScopeMachine, Format: FormatJSON, Abs: winJoin(pd, "Cursor", "hooks.json")},

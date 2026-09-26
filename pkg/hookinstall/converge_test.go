@@ -41,6 +41,7 @@ func TestMergeNewFileMatchesGolden(t *testing.T) {
 		golden string
 	}{
 		{"claude", localagent.ClaudeCode, FormatJSON, claudeDarwinGolden},
+		{"workbuddy", localagent.WorkBuddy, FormatJSON, strings.ReplaceAll(claudeDarwinGolden, "--agent claude-code", "--agent workbuddy")},
 		{"cursor", localagent.Cursor, FormatJSON, cursorDarwinGolden},
 		{"vscode hook", localagent.VSCode, FormatJSON, vscodeDarwinGolden},
 	}
@@ -62,6 +63,7 @@ func TestMergeNewFileMatchesGolden(t *testing.T) {
 func TestMergeIdempotentAcrossAgents(t *testing.T) {
 	dests := []Destination{
 		destFor(t, localagent.ClaudeCode, FormatJSON),
+		destFor(t, localagent.WorkBuddy, FormatJSON),
 		destFor(t, localagent.Cursor, FormatJSON),
 		destFor(t, localagent.VSCode, FormatJSON),
 		destFor(t, localagent.VSCode, FormatJSONC),
@@ -238,6 +240,18 @@ func TestMergeWindowsCommandsSurvive(t *testing.T) {
 	}
 	if !strings.Contains(string(vs.data), `& \"C:\\Program Files\\Obot\\obot-sentry\\obot-sentry.exe\"`) {
 		t.Fatalf("vscode windows call operator not preserved:\n%s", vs.data)
+	}
+	// WorkBuddy uses its default Git Bash runner: direct quoted executable,
+	// forward-slash path, and no PowerShell-specific shell override.
+	workBuddy, err := mergeConfig(find(localagent.WorkBuddy, FormatJSON), nil, winExe, "windows", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(workBuddy.data), `\"C:/Program Files/Obot/obot-sentry/obot-sentry.exe\"`) {
+		t.Fatalf("workbuddy windows Git Bash command not preserved:\n%s", workBuddy.data)
+	}
+	if strings.Contains(string(workBuddy.data), "& \\\"") || strings.Contains(string(workBuddy.data), `"shell": "powershell"`) {
+		t.Fatalf("workbuddy windows command contains PowerShell-only syntax:\n%s", workBuddy.data)
 	}
 	// Cursor uses a directly quoted executable, no call operator.
 	cur, err := mergeConfig(find(localagent.Cursor, FormatJSON), nil, winExe, "windows", false)

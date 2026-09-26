@@ -4,6 +4,11 @@ This install package contains:
 
 - `obot-sentry.intunewin` — the obot-sentry device agent (version
   {{.obotSentryVersion}}), packaged as an Intune **Windows app (Win32)**.
+- `opencode/obot-sentry-audit.js` and `opencode/README.md` — optional
+  OpenCode audit/enforcement adapter and installation notes; distribute and install it
+  separately when OpenCode auditing or V2 enforcement is required.
+- `obot-sentry-zcode-windows.zip` — optional ZCode personal marketplace
+  archive containing the ZCode audit and `PreToolUse` enforcement plugin.
 
 ## 1. Add the app
 
@@ -109,7 +114,7 @@ This install package contains:
 {{if .enforcementEnabled}}
 ## Tool-call enforcement
 
-Each tool call in Claude Code, Codex, and Cursor is checked against Obot's
+Each tool call in Claude Code, Codex, Cursor, and WorkBuddy is checked against Obot's
 allowlist before it runs. The check is a single request to Obot, and it is
 **fail-closed**: if Obot cannot be reached, the device is not enrolled, or the
 hook cannot tell which MCP server a call targets, the call is blocked.
@@ -128,6 +133,23 @@ hook cannot tell which MCP server a call targets, the call is blocked.
 
 To upgrade to a new version of Obot Sentry, upload the new `obot-sentry.intunewin`
 file to the existing app and save. This will perform an in-place upgrade.
+
+## Install the ZCode plugin (optional)
+
+The `obot-sentry-zcode-windows.zip` asset is a local ZCode personal marketplace
+archive. It is not written into the user's ZCode configuration by the Intune app.
+
+1. Extract `obot-sentry-zcode-windows.zip` so the directory containing
+   `marketplace.json` is available on the device.
+2. In ZCode open **Settings → Plugins → Create → Add marketplace**.
+3. Select the extracted directory containing `marketplace.json`.
+4. Install and enable **obot-sentry**, then start a new ZCode session.
+5. Confirm the plugin's `PreToolUse`, `PostToolUse`, and
+   `PostToolUseFailure` hooks appear in **Settings → Hooks**.
+
+The archive's platform hook invokes the installed Sentry executable directly. If
+Sentry is installed elsewhere, use a platform archive with its command path
+adjusted before distribution.
 
 ## Uninstall
 
@@ -153,4 +175,4 @@ The per-device state under `%ProgramData%\obot\obot-sentry` and
 `%LOCALAPPDATA%\obot\obot-sentry` is left behind. Delete it with a remediation
 script if you want the device identity and scan state gone too.
 
-Restart Claude Code, Codex, VS Code, and Cursor afterward to drop the hooks.
+Restart Claude Code, Codex, VS Code, Cursor, and WorkBuddy afterward to drop the hooks.

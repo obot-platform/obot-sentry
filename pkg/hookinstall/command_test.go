@@ -66,6 +66,8 @@ func TestHookCommandGolden(t *testing.T) {
 			"/usr/local/bin/obot-sentry audit submit --agent claude-code --phase post-tool --managed-by obot-sentry"},
 		{"darwin claude failure", macExe, "darwin", localagent.ClaudeCode, phaseFailure,
 			"/usr/local/bin/obot-sentry audit submit --agent claude-code --phase failure --managed-by obot-sentry"},
+		{"darwin workbuddy post", macExe, "darwin", localagent.WorkBuddy, phasePostTool,
+			"/usr/local/bin/obot-sentry audit submit --agent workbuddy --phase post-tool --managed-by obot-sentry"},
 		{"darwin codex post", macExe, "darwin", localagent.Codex, phasePostTool,
 			"/usr/local/bin/obot-sentry audit submit --agent codex --phase post-tool --managed-by obot-sentry"},
 		{"darwin vscode post", macExe, "darwin", localagent.VSCode, phasePostTool,
@@ -76,6 +78,8 @@ func TestHookCommandGolden(t *testing.T) {
 		// Windows Claude Code: PowerShell call operator prefix.
 		{"windows claude post", winExe, "windows", localagent.ClaudeCode, phasePostTool,
 			`& "C:\Program Files\Obot\obot-sentry\obot-sentry.exe" audit submit --agent claude-code --phase post-tool --managed-by obot-sentry`},
+		{"windows workbuddy post", winExe, "windows", localagent.WorkBuddy, phasePostTool,
+			`"C:/Program Files/Obot/obot-sentry/obot-sentry.exe" audit submit --agent workbuddy --phase post-tool --managed-by obot-sentry`},
 		// Windows Cursor: directly quoted executable, no operator.
 		{"windows cursor failure", winExe, "windows", localagent.Cursor, phaseFailure,
 			`"C:\Program Files\Obot\obot-sentry\obot-sentry.exe" audit submit --agent cursor --phase failure --managed-by obot-sentry`},

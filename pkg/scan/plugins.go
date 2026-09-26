@@ -18,6 +18,7 @@ var pluginExtensions = map[string]bool{
 	".sh":    true,
 	".py":    true,
 	".js":    true,
+	".mjs":   true,
 	".ts":    true,
 	".json":  true,
 	".jsonc": true,
@@ -171,6 +172,9 @@ func decodeMCPServerSpec(raw any) (mcpServerSpec, bool) {
 	}
 	if e, ok := m["enabled"].(bool); ok {
 		out.Enabled = &e
+	}
+	if e, ok := m["enable"].(bool); ok {
+		out.Enable = &e
 	}
 	return out, true
 }

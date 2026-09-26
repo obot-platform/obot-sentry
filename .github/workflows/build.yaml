@@ -175,8 +175,56 @@ jobs:
         with:
           name: installers-macos
           path: dist
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24.15.0"
+      - name: Test OpenCode adapter
+        run: node --test build/opencode/obot-sentry-audit.test.mjs
       - name: Assemble MDM assets
         run: ./build/mdm-assets.sh "${VERSION}"
+      - name: Test ZCode marketplace archives
+        run: |
+          python3 - <<'PY'
+          import json
+          import zipfile
+
+          # The audit hooks are process hooks on both platforms. PreToolUse needs
+          # a shell so a missing helper maps to exit 2, but which executor can
+          # carry that differs: Windows must use "command", because "process"
+          # re-quotes argv for the C runtime and that strips the quoting
+          # cmd.exe needs around a path under Program Files. macOS keeps
+          # "process" with /bin/sh -c, where argv passes through verbatim.
+          EXPECTED_PRE = {"windows": "command", "macos": "process"}
+
+          for platform in ("windows", "macos"):
+              archive = f"dist/mdm-assets/zcode/obot-sentry-zcode-{platform}.zip"
+              with zipfile.ZipFile(archive) as bundle:
+                  names = set(bundle.namelist())
+                  assert {"marketplace.json", "obot-sentry/.zcode-plugin/plugin.json", "obot-sentry/hooks/hooks.json"} <= names
+                  manifest = json.loads(bundle.read("obot-sentry/.zcode-plugin/plugin.json"))
+                  assert "hooks" not in manifest
+                  hooks = json.loads(bundle.read("obot-sentry/hooks/hooks.json"))["hooks"]
+                  for event, groups in hooks.items():
+                      for group in groups:
+                          assert "matcher" not in group
+                          for hook in group["hooks"]:
+                              assert hook["timeoutMs"] > 5000
+                              assert hook["type"] in {"process", "command"}
+                              if event == "PreToolUse":
+                                  assert hook["type"] == EXPECTED_PRE[platform], (
+                                      f"{platform} PreToolUse must be a "
+                                      f"{EXPECTED_PRE[platform]} hook, got {hook['type']}"
+                                  )
+                                  if hook["type"] == "process":
+                                      assert hook["command"] in {"cmd.exe", "/bin/sh"}
+                                      assert any("|| exit" in arg for arg in hook["args"])
+                                  else:
+                                      assert "|| exit" in hook["command"]
+                              else:
+                                  assert hook["type"] == "process"
+                                  assert "--defer" in hook["args"]
+          PY
       - name: Upload MDM assets
         uses: actions/upload-artifact@v7
         with:

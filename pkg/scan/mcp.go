@@ -24,11 +24,12 @@ type mcpServerSpec struct {
 	Env       map[string]any `json:"env"`
 	Headers   map[string]any `json:"headers"`
 	Enabled   *bool          `json:"enabled"` // pointer: absence ≠ false
+	Enable    *bool          `json:"enable"`  // ZCode's native spelling
 }
 
 // disabled reports whether the entry is explicitly switched off.
 func (e mcpServerSpec) disabled() bool {
-	return e.Enabled != nil && !*e.Enabled
+	return (e.Enabled != nil && !*e.Enabled) || (e.Enable != nil && !*e.Enable)
 }
 
 // toServer converts a parsed entry into a wire DeviceScanMCPServer with

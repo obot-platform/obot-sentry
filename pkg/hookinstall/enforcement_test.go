@@ -119,6 +119,7 @@ func TestDesiredEnforceDocumentsGolden(t *testing.T) {
 		want string
 	}{
 		{"claude darwin", desiredClaude(macExe, "darwin", true), claudeEnforceDarwinGolden},
+		{"workbuddy darwin", desiredWorkBuddy(macExe, "darwin", true), strings.ReplaceAll(claudeEnforceDarwinGolden, "--agent claude-code", "--agent workbuddy")},
 		{"cursor darwin", desiredCursor(macExe, "darwin", true), cursorEnforceDarwinGolden},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -141,6 +142,8 @@ func TestAuditOnlyDocumentsCarryNoPreToolKey(t *testing.T) {
 	}{
 		{"claude darwin", desiredClaude(macExe, "darwin", false), []string{"PreToolUse"}},
 		{"claude windows", desiredClaude(winExe, "windows", false), []string{"PreToolUse"}},
+		{"workbuddy darwin", desiredWorkBuddy(macExe, "darwin", false), []string{"PreToolUse"}},
+		{"workbuddy windows", desiredWorkBuddy(winExe, "windows", false), []string{"PreToolUse"}},
 		{"cursor darwin", desiredCursor(macExe, "darwin", false), []string{"beforeMCPExecution", "preToolUse"}},
 		{"cursor windows", desiredCursor(winExe, "windows", false), []string{"beforeMCPExecution", "preToolUse"}},
 	} {
@@ -290,6 +293,12 @@ func TestAuditOnlyRunRemovesManagedEnforcementHooks(t *testing.T) {
 			removed: 1,
 		},
 		{
+			name:    "workbuddy",
+			agent:   localagent.WorkBuddy,
+			format:  FormatJSON,
+			removed: 1,
+		},
+		{
 			name:    "cursor",
 			agent:   localagent.Cursor,
 			format:  FormatJSON,
@@ -423,6 +432,8 @@ func TestEnforceCommandQuoting(t *testing.T) {
 	}{
 		{localagent.ClaudeCode, "darwin", macExe, []string{
 			"/usr/local/bin/obot-sentry enforce --agent claude-code --event PreToolUse --managed-by obot-sentry"}},
+		{localagent.WorkBuddy, "darwin", macExe, []string{
+			"/usr/local/bin/obot-sentry enforce --agent workbuddy --event PreToolUse --managed-by obot-sentry"}},
 		{localagent.Codex, "darwin", macExe, []string{
 			"/usr/local/bin/obot-sentry enforce --agent codex --event PreToolUse --managed-by obot-sentry"}},
 		{localagent.Cursor, "darwin", macExe, []string{
@@ -430,6 +441,8 @@ func TestEnforceCommandQuoting(t *testing.T) {
 			"/usr/local/bin/obot-sentry enforce --agent cursor --event preToolUse --managed-by obot-sentry"}},
 		{localagent.ClaudeCode, "windows", winExe, []string{
 			`& "C:\Program Files\Obot\obot-sentry\obot-sentry.exe" enforce --agent claude-code --event PreToolUse --managed-by obot-sentry`}},
+		{localagent.WorkBuddy, "windows", winExe, []string{
+			`"C:/Program Files/Obot/obot-sentry/obot-sentry.exe" enforce --agent workbuddy --event PreToolUse --managed-by obot-sentry`}},
 		{localagent.Codex, "windows", winExe, []string{
 			`& "C:\Program Files\Obot\obot-sentry\obot-sentry.exe" enforce --agent codex --event PreToolUse --managed-by obot-sentry`}},
 		{localagent.Cursor, "windows", winExe, []string{
@@ -470,6 +483,7 @@ func TestRunEnforceEndToEnd(t *testing.T) {
 	}
 
 	claudeFile := filepath.Join(home, ".claude/settings.json")
+	workBuddyFile := filepath.Join(home, ".workbuddy/settings.json")
 	codexFile := filepath.Join(machineRoot, "etc/codex/requirements.toml")
 	cursorFile := filepath.Join(machineRoot, "Cursor/hooks.json")
 	vscodeFile := filepath.Join(home, ".copilot/hooks/obot-sentry.json")
@@ -489,6 +503,13 @@ func TestRunEnforceEndToEnd(t *testing.T) {
 			want: []string{
 				`"PreToolUse"`,
 				"enforce --agent claude-code --event PreToolUse --managed-by obot-sentry",
+			},
+		},
+		{
+			path: workBuddyFile,
+			want: []string{
+				`"PreToolUse"`,
+				"enforce --agent workbuddy --event PreToolUse --managed-by obot-sentry",
 			},
 		},
 		{
@@ -569,7 +590,7 @@ func TestRunEnforceEndToEnd(t *testing.T) {
 	if !strings.Contains(auditOnly.String(), "hook removed") {
 		t.Errorf("audit-only summary did not report removals:\n%s", auditOnly.String())
 	}
-	for _, p := range []string{claudeFile, codexFile, cursorFile, vscodeFile} {
+	for _, p := range []string{claudeFile, workBuddyFile, codexFile, cursorFile, vscodeFile} {
 		got, err := os.ReadFile(p)
 		if err != nil {
 			t.Fatal(err)

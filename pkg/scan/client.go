@@ -6,6 +6,8 @@ import (
 	"path"
 	"path/filepath"
 
+	workbuddy "github.com/obot-platform/obot-sentry/pkg/workbuddy"
+	zcode "github.com/obot-platform/obot-sentry/pkg/zcode"
 	"github.com/obot-platform/obot/apiclient/types"
 )
 
@@ -165,6 +167,32 @@ func clients(platform string) []Client {
 				path.Join(path.Dir(vscodeUserDir(platform)), "logs"),
 			},
 			Config: []string{".vscode", path.Dir(vscodeUserDir(platform))},
+		},
+		{
+			// WorkBuddy keeps its runtime state under ~/.workbuddy. Do not use
+			// the settings.json file here as evidence: obot-sentry's managed
+			// hook installer writes that file even on a machine where the
+			// WorkBuddy app itself was never installed.
+			Name: "workbuddy",
+			Installed: []string{
+				path.Join(workbuddy.DefaultConfigDirRel, "app"),
+				path.Join(workbuddy.DefaultConfigDirRel, "sessions"),
+				path.Join(workbuddy.DefaultConfigDirRel, "projects"),
+				path.Join(workbuddy.DefaultConfigDirRel, "device-id"),
+			},
+			Config: []string{workbuddy.DefaultConfigDirRel},
+		},
+		{
+			Name: "zcode",
+			Installed: []string{
+				"/Applications/ZCode.app",
+				"Applications/ZCode.app",
+				`C:\Program Files\ZCode`,
+				"AppData/Local/Programs/ZCode",
+				".zcode/v2/credentials.json",
+				".zcode/v2/telemetry-state.json",
+			},
+			Config: []string{zcode.UserConfigRel, ".zcode"},
 		},
 		{
 			Name: "zed",

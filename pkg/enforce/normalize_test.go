@@ -486,6 +486,7 @@ func TestNormalizeNeverCarriesToolInput(t *testing.T) {
 	}{
 		{localagent.ClaudeCode, EventPreToolUse, "claude-code-pretooluse-mcp.json"},
 		{localagent.ClaudeCode, EventPreToolUse, "claude-code-pretooluse-read.json"},
+		{localagent.WorkBuddy, EventPreToolUse, "workbuddy-pretooluse-mcp.json"},
 		{localagent.Codex, EventPreToolUse, "codex-pretooluse-mcp.json"},
 		{localagent.Codex, EventPreToolUse, "codex-pretooluse-bash.json"},
 		{localagent.Cursor, EventCursorBeforeMCPExecution, "cursor-beforemcpexecution.json"},

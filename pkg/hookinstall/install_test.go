@@ -179,6 +179,7 @@ func tempDestinations(machineRoot string) func(string) []Destination {
 	return func(string) []Destination {
 		return []Destination{
 			{Agent: localagent.ClaudeCode, Label: "Claude Code", Scope: ScopeUser, Format: FormatJSON, Rel: ".claude/settings.json"},
+			{Agent: localagent.WorkBuddy, Label: "WorkBuddy", Scope: ScopeUser, Format: FormatJSON, Rel: ".workbuddy/settings.json"},
 			{Agent: localagent.Codex, Label: "Codex", Scope: ScopeMachine, Format: FormatTOML, Abs: filepath.Join(machineRoot, "etc/codex/requirements.toml")},
 			{Agent: localagent.VSCode, Label: "Visual Studio Code", Scope: ScopeUser, Format: FormatJSON, Rel: ".copilot/hooks/obot-sentry.json"},
 			{Agent: localagent.Cursor, Label: "Cursor", Scope: ScopeMachine, Format: FormatJSON, Abs: filepath.Join(machineRoot, "Cursor/hooks.json")},
@@ -214,7 +215,7 @@ func TestRunConvergesAndIsIdempotent(t *testing.T) {
 		macExe,
 		"alice",
 		"/Library/Application Support/obot/obot-sentry",
-		"Claude Code", "Codex", "Visual Studio Code", "Cursor", "VS Code settings",
+		"Claude Code", "WorkBuddy", "Codex", "Visual Studio Code", "Cursor", "VS Code settings",
 		"installed",
 		restartReminder,
 	}
@@ -230,6 +231,7 @@ func TestRunConvergesAndIsIdempotent(t *testing.T) {
 
 	files := []string{
 		filepath.Join(home, ".claude/settings.json"),
+		filepath.Join(home, ".workbuddy/settings.json"),
 		filepath.Join(machineRoot, "etc/codex/requirements.toml"),
 		filepath.Join(home, ".copilot/hooks/obot-sentry.json"),
 		filepath.Join(machineRoot, "Cursor/hooks.json"),

@@ -1,0 +1,9 @@
+{
+  "name": "obot-sentry",
+  "version": "0.1.0",
+  "description": "Obot Sentry audit and fail-closed tool enforcement for ZCode",
+  "author": {
+    "name": "Obot"
+  },
+  "license": "MIT"
+}

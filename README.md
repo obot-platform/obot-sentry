@@ -2,15 +2,15 @@
 
 `obot-sentry` is a command-line tool designed to be used by MDMs for device scanning and agent hook configuration.
 
-It enrolls each machine with an [Obot](https://github.com/obot-platform/obot) server as a single device shared by all of the machine's users, submits device scan manifests attributed per user, and provides managed local-agent audit hooks. Inventory collection (MCP servers, skills, plugins) is currently stubbed out — scans ship an empty manifest so the enrollment and submission flow works end to end while the scan engine lands separately.
+It enrolls each machine with an [Obot](https://github.com/obot-platform/obot) server as a single device shared by all of the machine's users, submits device scan manifests attributed per user, and provides managed local-agent audit hooks. The scan engine inventories supported MCP servers, skills, plugins, and client configuration; unavailable or malformed individual files are skipped without aborting the scan.
 
 ## How it works
 
 - **Machine-wide scheduler entries.** The MDM installer registers a scan task that the OS runs *as each signed-in user*: on Windows it uses a `BUILTIN\Users` group principal (logon + a 10-minute poll). Each run is a plain `obot-sentry scan --submit --quiet` in the user's own session, so attribution, paths, and permissions are native — no privileged fan-out and no MDM per-user scheduling. The poll is cheap: obot-sentry throttles real submissions to the MDM-configured `ScanIntervalMinutes` (default 60, clamped to 15–1440) against its per-user scan state, so admins retune the cadence from the MDM alone (`scan --submit --force` bypasses the throttle for a one-off manual submission). Users who aren't signed in aren't scanned; their inventory can't change while they're signed out, so nothing is missed beyond first-report latency for accounts that haven't signed in since install. The installer also registers an elevated SYSTEM task that runs `obot-sentry hook-install` at logon and hourly. Because `hook-install` targets only the active console user, it converges at each sign-in (after a one-minute settle) plus the install kick, with the hourly run picking up later drift and console-user switches.
 - **Enrollment.** Configuration (server URL + an `ode1-...` enrollment credential) is pushed by the MDM — via registry values on Windows, a managed-preferences profile on macOS. On the machine's first scan — by whichever user runs first — obot-sentry generates a shared Ed25519 identity key in the machine-scoped data dir (`%PROGRAMDATA%\obot\obot-sentry` on Windows, `/Library/Application Support/obot/obot-sentry` on macOS; both are prepared user-writable by the installer, with a per-user fallback when unavailable) and enrolls the public key via `POST /api/mdm/enroll` (trust-on-first-use). The device ID derives from the machine ID + key fingerprint, so all users present one device — and a lost key simply mints a fresh device ID instead of a TOFU conflict. Each user's first scan re-enrolls the same identity, which is an idempotent update server-side.
 - **Submission.** Every submission is authenticated with a short-lived self-signed JWT (`aud=obot/device`) verified server-side against the enrolled key; scans land via `POST /api/devices/scans`, attributed to the submitting user by the manifest's `username`. Local-agent audit logs land via `POST /api/local-agent-audit-logs`, with the server stamping authoritative device attribution from the JWT.
-- **Local-agent audit hooks.** Managed hook configuration invokes the hidden `obot-sentry audit submit` command for supported local agents. The hook parser normalizes terminal tool-call events, submits them fail-open, and writes only warnings to stderr when enrollment or submission is unavailable so agent execution is not blocked.
-- **Tool-call enforcement hooks.** With enforcement enabled in Obot, managed pre-tool hook configuration invokes the hidden `obot-sentry enforce` command for Claude Code, Codex, and Cursor. It is the opposite of the audit hook in every important way: synchronous, fail-**closed**, and stdout is the hook protocol channel rather than something that must stay empty. See [Tool-call enforcement](#tool-call-enforcement).
+- **Local-agent audit hooks.** Managed hook configuration invokes the hidden `obot-sentry audit submit` command for supported local agents. The hook parser normalizes terminal tool-call events, submits them fail-open, and writes only warnings to stderr when enrollment or submission is unavailable so agent execution is not blocked. OpenCode is supported through the companion plugin in [`build/opencode`](build/opencode), including opt-in V2 enforcement; ZCode is supported through the platform-specific marketplace archives in [`build/zcode`](build/zcode).
+- **Tool-call enforcement hooks.** With enforcement enabled in Obot, managed pre-tool hook configuration invokes the hidden `obot-sentry enforce` command for Claude Code, Codex, Cursor, and WorkBuddy. OpenCode V2 enforcement is opt-in through its companion plugin, and ZCode uses its standard Plugin `PreToolUse` hook. All enforcement paths are synchronous, fail-**closed**, and use the agent's hook protocol as their output channel. See [Tool-call enforcement](#tool-call-enforcement).
 - **Audit spool.** Transient audit-log submission failures are stored in an encrypted per-user spool under the obot-sentry cache directory and replayed after a later successful live submit. Server-side client errors are discarded instead of retried.
 - **Scan state + logs.** Every scan run updates `scan.json` (last scan/submit times, status, last error) and appends a JSON record to `scan-logs/` — timestamp-sortable filenames, pruned by age and size — in obot-sentry's per-user cache dir (`%LOCALAPPDATA%\obot\obot-sentry` on Windows, `~/Library/Caches/obot/obot-sentry` on macOS). Support and MDM freshness checks read these; recording problems never fail a scan.
 
@@ -61,18 +61,37 @@ that location.
 
 ## Tool-call enforcement
 
-`hook-install --enforce` adds a **pre-tool** hook to Claude Code, Codex, and
-Cursor, on top of the post-tool audit hooks. Before each tool call runs, the hook
+`hook-install --enforce` adds a **pre-tool** hook to Claude Code, Codex, Cursor,
+and WorkBuddy, on top of the post-tool audit hooks. Before each tool call runs, the hook
 resolves what the call targets, asks obot for a verdict, and blocks the call
 unless the answer is an explicit allow.
 
 | Agent | File | Events added |
 |---|---|---|
 | Claude Code | `~/.claude/settings.json` | `PreToolUse` |
+| WorkBuddy | `~/.workbuddy/settings.json` | `PreToolUse` |
 | Codex | `/etc/codex/requirements.toml` (macOS), `%ProgramData%\OpenAI\Codex\requirements.toml` | `PreToolUse` |
 | Cursor | `/Library/Application Support/Cursor/hooks.json` (macOS), `%ProgramData%\Cursor\hooks.json` | `beforeMCPExecution`, `preToolUse` |
+| OpenCode V2 | User-installed OpenCode plugin | `permission.evaluate` (opt-in) |
+| ZCode 3.14+ | User-installed ZCode Plugin `hooks/hooks.json` | `PreToolUse` |
 
 > Visual Studio Code is not supported for enforcement.
+>
+> WorkBuddy hooks are written to its default `~/.workbuddy/settings.json`. On
+> Windows, commands use a directly quoted, forward-slash executable path and omit
+> a shell override so they remain compatible with WorkBuddy's Git Bash runner;
+> Git for Windows must therefore be available on the device. File-backed
+> user/project MCP configuration is resolved for enforcement; SDK-, plugin-, or
+> dynamically injected servers without a file entry remain unresolved and fail
+> closed.
+>
+> WorkBuddy inventory reads the user-level `~/.workbuddy/.mcp.json`,
+> `~/.workbuddy/mcp.json`, and legacy `~/.workbuddy.json` files, including
+> project-local entries stored under `projects.<path>.mcpServers`, plus the
+> standard project `.mcp.json` file. The standard project `.mcp.json` is decoded
+> for both Claude Code and WorkBuddy; the scanner keeps the client attribution
+> on each observation. The deprecated bare `mcp.json` project fallback remains
+> resolver-only because that filename is shared by unrelated clients.
 
 ### It fails closed
 
@@ -80,7 +99,7 @@ Anything other than an explicit allow blocks the call: obot unreachable, slow
 (the whole check is budgeted at 5 seconds), or returning something unparseable; a
 device that is not enrolled or has no server configured; a payload the hook cannot
 read; an MCP server it cannot identify. **A device whose enrollment never
-completed blocks every tool call in all three agents until enrollment succeeds.**
+completed blocks every tool call in every enabled enforcement agent until enrollment succeeds.**
 `hook-install` provisions the machine identity before writing any hook file, so
 the normal MDM path cannot land there — but a wiped identity directory or a
 revoked enrollment key can, and it will be loud.
@@ -91,15 +110,16 @@ server allows every call when enforcement is disabled, and logs nothing.
 ### It never grants permission
 
 A permitted call is answered by *withholding* the denial, not by approving the
-call — zero bytes for Claude Code and Codex, and Cursor's `{"permission":"allow"}`,
+call — zero bytes for Claude Code, Codex, WorkBuddy, and ZCode, and Cursor's `{"permission":"allow"}`,
 which means "this hook does not object". Your agents' own approval prompts still
 apply to everything enforcement allows. The allowlist and an agent's permission
 model are separate controls and this deliberately does not collapse them.
 
 ### What can and cannot be allowlisted
 
-An MCP server can be allowlisted by **URL**, by its **`npx`/`uvx` package**, or —
-for a claude.ai account connector — by **display name**.
+An MCP server can be allowlisted by **URL**, by its **`npx`/`uvx` package**, by
+its **connector identity** (including a ZCode Plugin MCP server), or — for a
+claude.ai account connector — by **display name**.
 
 A stdio server started from a **local executable path** (`/opt/homebrew/bin/thing`,
 `./node_modules/.bin/thing`) presents none of those: no URL, no registry package,
@@ -192,10 +212,11 @@ unresolved: stdio command "/opt/homebrew/bin/some-server" is a path, not a bare 
 ### Tamper resistance, stated plainly
 
 The Codex and Cursor hook files are machine-scoped and administrator-owned. The
-Claude Code hook file is **user-scoped** (`~/.claude/settings.json`), so the user
-whose calls are being enforced can delete it. The hourly `hook-install` task
-re-converges it, so the bypass window is bounded by that interval rather than
-permanent. We intend to find a machine-scoped solution for Claude Code in the future.
+Claude Code and WorkBuddy hook files are **user-scoped**
+(`~/.claude/settings.json` and `~/.workbuddy/settings.json`), so the user whose
+calls are being enforced can delete them. The hourly `hook-install` task
+re-converges them, so the bypass window is bounded by that interval rather than
+permanent. We intend to find machine-scoped solutions for these clients in the future.
 
 ### Turning it off
 
@@ -215,10 +236,13 @@ sudo obot-sentry hook-uninstall
 
 On Windows, run the equivalent command in an elevated PowerShell. The command
 removes all hook entries whose command contains `--managed-by obot-sentry` from
-Claude Code, Codex, VS Code, and Cursor while preserving third-party
+Claude Code, Codex, VS Code, Cursor, and WorkBuddy while preserving third-party
 hooks. It targets machine-wide files and the active console user's files, so
 repeat it for each user on a shared machine. Stop the scheduled hook task or
 uninstall the package afterward so a later convergence does not reinstall them.
+OpenCode and ZCode use external Plugin hooks; remove or disable those plugins
+from their respective plugin managers. `hook-uninstall` intentionally does not
+modify their marketplaces, caches, or user configuration.
 
 Every entry Obot Sentry writes carries the `--managed-by obot-sentry` marker
 — the same signal `hook-install` uses to recognize and replace its own entries
@@ -228,6 +252,7 @@ are:
 | Agent | macOS | Windows |
 |---|---|---|
 | Claude Code | `~/.claude/settings.json` | `%USERPROFILE%\.claude\settings.json` |
+| WorkBuddy | `~/.workbuddy/settings.json` | `%USERPROFILE%\.workbuddy\settings.json` |
 | Codex | `/etc/codex/requirements.toml` | `%ProgramData%\OpenAI\Codex\requirements.toml` |
 | Copilot (VS Code) hook | `~/.copilot/hooks/obot-sentry.json` | `%USERPROFILE%\.copilot\hooks\obot-sentry.json` |
 | Cursor | `/Library/Application Support/Cursor/hooks.json` | `%ProgramData%\Cursor\hooks.json` |
@@ -267,7 +292,16 @@ build/
       INSTRUCTIONS.md.tmpl
     manual/              # manual channel: instructions for the pkg + bare binary
       INSTRUCTIONS.md.tmpl
+  zcode/                 # platform-specific ZCode marketplace sources
+    windows/             # Windows archive source (fail-closed shell + process hooks)
+    macos/               # macOS archive source (fail-closed shell + process hooks)
 ```
+
+`build/mdm-assets.sh` creates `obot-sentry-zcode-windows.zip` and
+`obot-sentry-zcode-macos.zip` with Python's standard library and validates the
+preserved marketplace/plugin directory structure before staging them. Deploy
+the server/API version that accepts the `zcode` provider before distributing
+this plugin to devices.
 
 The installers are tenant-agnostic; per-tenant configuration (server URL
 + an enrollment key created in obot) is applied at deploy time — as MSI

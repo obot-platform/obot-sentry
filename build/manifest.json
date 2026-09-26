@@ -49,7 +49,10 @@
       "instructions": "windows/intune/INSTRUCTIONS.md.tmpl",
       "assets": [
         "windows/intune/obot-sentry.intunewin",
-        "windows/intune/INSTRUCTIONS.md.tmpl"
+        "windows/intune/INSTRUCTIONS.md.tmpl",
+        "opencode/obot-sentry-audit.js",
+        "opencode/README.md",
+        "zcode/obot-sentry-zcode-windows.zip"
       ]
     },
     {
@@ -64,7 +67,10 @@
         "macos/ai.obot.obot-sentry.mobileconfig.tmpl",
         "macos/ai.obot.obot-sentry.pppc.mobileconfig",
         "macos/uninstall.sh",
-        "macos/intune/INSTRUCTIONS.md.tmpl"
+        "macos/intune/INSTRUCTIONS.md.tmpl",
+        "opencode/obot-sentry-audit.js",
+        "opencode/README.md",
+        "zcode/obot-sentry-zcode-macos.zip"
       ]
     },
     {
@@ -79,7 +85,10 @@
         "macos/ai.obot.obot-sentry.mobileconfig.tmpl",
         "macos/ai.obot.obot-sentry.pppc.mobileconfig",
         "macos/uninstall.sh",
-        "macos/jamf/INSTRUCTIONS.md.tmpl"
+        "macos/jamf/INSTRUCTIONS.md.tmpl",
+        "opencode/obot-sentry-audit.js",
+        "opencode/README.md",
+        "zcode/obot-sentry-zcode-macos.zip"
       ]
     },
     {
@@ -92,7 +101,10 @@
       "assets": [
         "windows/manual/obot-sentry.msi",
         "windows/manual/obot-sentry.exe",
-        "windows/manual/INSTRUCTIONS.md.tmpl"
+        "windows/manual/INSTRUCTIONS.md.tmpl",
+        "opencode/obot-sentry-audit.js",
+        "opencode/README.md",
+        "zcode/obot-sentry-zcode-windows.zip"
       ]
     },
     {
@@ -106,7 +118,10 @@
         "macos/obot-sentry-${VERSION}.pkg",
         "macos/manual/obot-sentry",
         "macos/uninstall.sh",
-        "macos/manual/INSTRUCTIONS.md.tmpl"
+        "macos/manual/INSTRUCTIONS.md.tmpl",
+        "opencode/obot-sentry-audit.js",
+        "opencode/README.md",
+        "zcode/obot-sentry-zcode-macos.zip"
       ]
     }
   ]

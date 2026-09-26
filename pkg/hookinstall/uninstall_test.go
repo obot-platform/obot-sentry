@@ -25,6 +25,14 @@ func TestRemoveConfigRemovesOwnedHooksAcrossAllEvents(t *testing.T) {
 			data: `{"hooks":{"LegacyEvent":[{"matcher":"*","hooks":[{"command":"/third/party keep"},{"command":"/old/obot-sentry audit submit --managed-by obot-sentry"}]}]}}`,
 		},
 		{
+			name: "workbuddy nested legacy event",
+			dest: Destination{
+				Agent:  localagent.WorkBuddy,
+				Format: FormatJSON,
+			},
+			data: `{"hooks":{"LegacyEvent":[{"matcher":"*","hooks":[{"command":"/third/party keep"},{"command":"/old/obot-sentry audit submit --managed-by obot-sentry"}]}]}}`,
+		},
+		{
 			name: "cursor direct legacy event",
 			dest: Destination{
 				Agent:  localagent.Cursor,
@@ -96,6 +104,14 @@ func TestAuditOnlyRemovesEnforcementFromUnexpectedEvents(t *testing.T) {
 				Format: FormatJSON,
 			},
 			data: `{"hooks":{"LegacyPreTool":[{"matcher":"*","hooks":[{"command":"/old/obot-sentry enforce --agent claude-code --event LegacyPreTool --managed-by obot-sentry"},{"command":"/old/obot-sentry audit submit --agent claude-code --phase post-tool --managed-by obot-sentry"},{"command":"/third/party keep"}]}]}}`,
+		},
+		{
+			name: "workbuddy",
+			dest: Destination{
+				Agent:  localagent.WorkBuddy,
+				Format: FormatJSON,
+			},
+			data: `{"hooks":{"LegacyPreTool":[{"matcher":"*","hooks":[{"command":"/old/obot-sentry enforce --agent workbuddy --event LegacyPreTool --managed-by obot-sentry"},{"command":"/old/obot-sentry audit submit --agent workbuddy --phase post-tool --managed-by obot-sentry"},{"command":"/third/party keep"}]}]}}`,
 		},
 		{
 			name: "cursor",
@@ -184,6 +200,7 @@ func TestRunUninstallEndToEnd(t *testing.T) {
 
 	for _, path := range []string{
 		filepath.Join(home, ".claude/settings.json"),
+		filepath.Join(home, ".workbuddy/settings.json"),
 		filepath.Join(machineRoot, "etc/codex/requirements.toml"),
 		filepath.Join(home, ".copilot/hooks/obot-sentry.json"),
 		filepath.Join(machineRoot, "Cursor/hooks.json"),
@@ -238,6 +255,7 @@ func TestRunUninstallDoesNotCreateMissingFiles(t *testing.T) {
 	}
 	for _, path := range []string{
 		filepath.Join(home, ".claude/settings.json"),
+		filepath.Join(home, ".workbuddy/settings.json"),
 		filepath.Join(machineRoot, "etc/codex/requirements.toml"),
 		filepath.Join(home, ".copilot/hooks/obot-sentry.json"),
 		filepath.Join(machineRoot, "Cursor/hooks.json"),

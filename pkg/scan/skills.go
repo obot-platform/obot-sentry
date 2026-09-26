@@ -35,6 +35,7 @@ var skillExtensions = map[string]bool{
 	".sh":  true,
 	".py":  true,
 	".js":  true,
+	".mjs": true,
 	".ts":  true,
 }
 
@@ -80,8 +81,8 @@ var skillDirs = []Location{
 	// Legacy Antigravity layout.
 	{".agent/skills", Project, []string{"antigravity"}},
 	// Antigravity reads .agents/skills in a project but not at home.
-	{".agents/skills", Home, []string{"codex", "cursor", "opencode", "vscode"}},
-	{".agents/skills", Project, []string{"antigravity", "codex", "cursor", "opencode", "vscode"}},
+	{".agents/skills", Home, []string{"codex", "cursor", "opencode", "vscode", "zcode"}},
+	{".agents/skills", Project, []string{"antigravity", "codex", "cursor", "opencode", "vscode", "zcode"}},
 	{".claude/skills", Home | Project, []string{"claude_code", "cursor", "opencode", "vscode"}},
 	// Cursor compatibility path; current Codex reads .agents/skills.
 	{".codex/skills", Home | Project, []string{"cursor"}},
@@ -94,6 +95,7 @@ var skillDirs = []Location{
 	{antigravityBuiltinSkills, Home, []string{"antigravity"}},
 	{".github/skills", Project, []string{"vscode"}},
 	{".opencode/skills", Project, []string{"opencode"}},
+	{".zcode/skills", Home | Project, []string{"zcode"}},
 }
 
 // skillTrees are directories where a SKILL.md *anywhere* below counts,

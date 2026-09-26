@@ -11,7 +11,7 @@ import (
 )
 
 // hookTimeout is the per-hook timeout, in seconds, written into every managed
-// entry. It is the same for all four agents.
+// entry. It is the same for all supported agents.
 const hookTimeout = 30
 
 // These are the final executable locations owned by the MDM packages. Hook
@@ -84,7 +84,8 @@ func enforceCommandArgs(agent localagent.Agent, event string) []string {
 
 // windowsUsesCallOperator reports whether an agent's Windows command runner
 // requires the PowerShell call operator (`& "..."`) prefix. Claude Code, Codex,
-// and VS Code do; Cursor invokes the double-quoted executable directly.
+// and VS Code do. Cursor and WorkBuddy invoke a double-quoted executable
+// directly; WorkBuddy's default runner is Git Bash rather than PowerShell.
 func windowsUsesCallOperator(agent localagent.Agent) bool {
 	return agent == localagent.ClaudeCode || agent == localagent.Codex || agent == localagent.VSCode
 }
@@ -97,11 +98,16 @@ func windowsUsesCallOperator(agent localagent.Agent) bool {
 //     spaces, apostrophes, or other unsafe characters), so any path stays one
 //     token.
 //   - Windows Cursor: a double-quoted executable, invoked directly.
-//   - Windows Claude Code / Codex / VS Code: the same double-quoted executable
-//     prefixed with the PowerShell call operator `& `.
+//   - Windows WorkBuddy: the same directly invoked executable with forward-slash
+//     separators, which is the portable form for its default Git Bash runner.
+//   - Windows Claude Code / Codex / VS Code: a double-quoted executable prefixed
+//     with the PowerShell call operator `& `.
 func hookCommand(exe, goos string, agent localagent.Agent, argv []string) string {
 	args := strings.Join(argv, " ")
 	if goos == "windows" {
+		if agent == localagent.WorkBuddy {
+			return quoteWindows(strings.ReplaceAll(exe, `\`, "/")) + " " + args
+		}
 		quoted := quoteWindows(exe)
 		if windowsUsesCallOperator(agent) {
 			return "& " + quoted + " " + args

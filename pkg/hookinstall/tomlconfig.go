@@ -3,6 +3,7 @@ package hookinstall
 import (
 	"bytes"
 	"fmt"
+	"time"
 
 	"github.com/BurntSushi/toml"
 )
@@ -38,7 +39,48 @@ func parseCodexTOML(data []byte) (codexTOMLDoc, error) {
 	if _, err := toml.Decode(string(data), &m); err != nil {
 		return nil, fmt.Errorf("parsing Codex requirements.toml: %w", err)
 	}
+	normalizeCodexLocalDates(m)
 	return m, nil
+}
+
+// normalizeCodexLocalDates removes a BurntSushi decoding quirk that otherwise
+// makes a TOML local date shift by one day when encoded on a non-UTC host.
+// BurntSushi represents that value as a time.Time in a synthetic location
+// named "date-local"; the date fields are the authoritative value, so retain
+// them in a UTC midnight time before the normal encoder sees the value.
+func normalizeCodexLocalDates(value any) any {
+	switch v := value.(type) {
+	case time.Time:
+		if v.Location().String() == "date-local" {
+			// Keep the marker location (the TOML encoder identifies local
+			// dates by that location) while moving the instant to UTC midnight;
+			// the encoder's own In(UTC) conversion then keeps the date stable.
+			return time.Date(v.Year(), v.Month(), v.Day(), 0, 0, 0, 0, time.UTC).In(v.Location())
+		}
+		return v
+	case codexTOMLDoc:
+		for key, child := range v {
+			v[key] = normalizeCodexLocalDates(child)
+		}
+		return v
+	case map[string]any:
+		for key, child := range v {
+			v[key] = normalizeCodexLocalDates(child)
+		}
+		return v
+	case []map[string]any:
+		for i, child := range v {
+			v[i] = normalizeCodexLocalDates(child).(map[string]any)
+		}
+		return v
+	case []any:
+		for i, child := range v {
+			v[i] = normalizeCodexLocalDates(child)
+		}
+		return v
+	default:
+		return value
+	}
 }
 
 // encodeCodexTOML re-encodes the document. BurntSushi's encoder sorts keys and is

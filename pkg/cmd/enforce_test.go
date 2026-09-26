@@ -292,10 +292,10 @@ func TestEnforceProtocolFlagsIgnoreEnvironment(t *testing.T) {
 func TestEnforceInputIgnoresEnvironment(t *testing.T) {
 	home := homeFixture(t)
 	root := enforceRoot(t, mdmconfig.Config{})
-	fake := writeTempFile(t, `{"tool_name":"Read","cwd":"`+home+`"}`)
+	fake := writeTempFile(t, hookPayload(t, "Read", home))
 	t.Setenv("ENFORCE_INPUT", fake)
 
-	stdinPath := writeTempFile(t, `{"tool_name":"Bash","cwd":"`+home+`"}`)
+	stdinPath := writeTempFile(t, hookPayload(t, "Bash", home))
 	stdin, err := os.Open(stdinPath)
 	if err != nil {
 		t.Fatal(err)

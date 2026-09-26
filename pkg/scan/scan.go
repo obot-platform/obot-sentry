@@ -11,8 +11,8 @@
 // none:
 //
 //   - sources (source.go): places the scan reads, each with the decoder
-//     for its format. One client file per format (claudecode.go,
-//     codex.go, …) holds the decoders and nothing else.
+//     for its format. Client-specific decoders live beside the other
+//     scanners, and a vendor-neutral path may invoke more than one decoder.
 //   - skillDirs and skillTrees (skills.go): where skills live and which
 //     clients read them.
 //   - clients (client.go): identity plus how to tell a client is on the
@@ -113,7 +113,7 @@ func scanRoot(ctx context.Context, s *state) (observations, error) {
 	var (
 		obs       observations
 		skipPaths = map[string]bool{}
-		srcs = sources(s.platform)
+		srcs      = sources(s.platform)
 	)
 	for _, src := range srcs {
 		if err := ctx.Err(); err != nil {
@@ -122,7 +122,7 @@ func scanRoot(ctx context.Context, s *state) (observations, error) {
 		if !src.Scope.has(Home) {
 			continue
 		}
-		obs.add(src.Read(s, src.Path, ""))
+		obs.add(src.read(s, src.Path, ""))
 		// A home config can also match its own project-scope suffix
 		// (~/.cursor/mcp.json is both); suppress the redundant walk hit.
 		skipPaths[src.Path] = true
@@ -136,7 +136,7 @@ func scanRoot(ctx context.Context, s *state) (observations, error) {
 		if s.claimedUnder(h.path) {
 			continue
 		}
-		obs.add(h.source.Read(s, h.path, h.source.projectOf(s, h.path)))
+		obs.add(h.source.read(s, h.path, h.source.projectOf(s, h.path)))
 	}
 
 	if err := ctx.Err(); err != nil {
