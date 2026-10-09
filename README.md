@@ -109,7 +109,7 @@ nothing an allowlist entry can name. Such a call is reported as unidentified and
 this is why, and the fix is to run those servers from a package or a URL rather
 than to look for an allowlist entry that can match them.
 
-Two naming caveats that change what an allowlist entry has to say:
+Naming caveats that change what an allowlist entry has to say:
 
 - **Codex reports server names with punctuation folded to underscores.** A config
   key of `probe-npx-stdio` arrives as `probe_npx_stdio`. The device matches it back
@@ -118,15 +118,11 @@ Two naming caveats that change what an allowlist entry has to say:
 - **Cursor display names may carry a scope prefix** (`user-probe-uvx-stdio`), and a
   name declared in more than one Cursor scope is reported as unidentified — the
   payload cannot say which one ran. Rename one of them.
-- **Kiro tool names are lossy.** Kiro names an MCP tool
-  `mcp_<server>_<tool>`, lowercased with punctuation dropped, so the device finds
-  the server by matching configured names against that prefix and reports the
-  configuration key. The tool half is Kiro's lowercased form (`createissue` for
-  `createIssue`), so a tool-scoped allowlist entry has to use that spelling.
-  Servers whose names produce the same prefix (`github` and `github_enterprise`),
-  or a name a custom agent profile defines differently from `mcp.json`, are
-  reported as unidentified. Tools that run through a Power are identified by the
-  Power's server, named `power-<power>-<server>`, with their real tool names.
+- **Kiro tool names are lowercased** (`mcp_<server>_<tool>`). The device matches
+  the server back to its configuration key, but the tool half stays lowercased
+  (`createissue`), so copy tool names from the decision log. Server names that
+  produce the same prefix (`github`, `github_enterprise`) are reported as
+  unidentified.
 
 ### `npx` / `uvx` package resolution
 
@@ -208,19 +204,10 @@ delete them. The hourly `hook-install` task re-converges them, so the bypass
 window is bounded by that interval rather than permanent. We intend to find a
 machine-scoped solution for Claude Code in the future.
 
-Kiro has three gaps of its own:
-
-- **Untrusted workspaces run no hooks.** Kiro skips every hook, including
-  `~/.kiro/hooks`, in a workspace the user has not trusted, and asks the user to
-  approve each tool call instead. A window with no folder open runs none either.
-  A call made there is neither enforced nor audited.
-- **A hook that can't run doesn't block.** Kiro blocks only on exit code 2; a
-  timeout or a hook that fails to launch lets the call through. `obot-sentry
-  enforce` exits 2 on every failure of its own, so this only matters when the
-  binary itself is missing.
-- **Only the first workspace root is known.** Kiro passes one root as the hook's
-  working directory, so in a multi-root workspace a server declared only in
-  another root's `.kiro/settings/mcp.json` is reported as unidentified.
+Kiro runs no hooks in a workspace the user hasn't trusted, or in a window with
+no folder open, so calls made there are neither enforced nor audited. A folder
+trusted after Kiro starts stays unhooked until Kiro restarts
+([kirodotdev/Kiro#11884](https://github.com/kirodotdev/Kiro/issues/11884)).
 
 ### Turning it off
 
