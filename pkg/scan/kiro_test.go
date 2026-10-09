@@ -1,6 +1,7 @@
 package scan
 
 import (
+	"fmt"
 	"path/filepath"
 	"slices"
 	"testing"
@@ -239,5 +240,68 @@ func TestDetectKiro(t *testing.T) {
 	})
 	if c := findClient(manifest, "kiro"); c != nil {
 		t.Errorf("config alone reported kiro: %+v", c)
+	}
+}
+
+// TestScanKiro_ProjectAgents: agent profiles in a workspace's .kiro/agents
+// are inventoried with their project, like the home ones, and the walk hands
+// the directory over instead of descending into it.
+func TestScanKiro_ProjectAgents(t *testing.T) {
+	manifest := runScan(t, map[string]string{
+		".kiro/agents/home.json": `{"name": "home", "mcpServers": {"home-git": {"command": "uvx", "args": ["mcp-server-git"]}}}`,
+		"work/api/.kiro/agents/reviewer.json": `{"name": "reviewer",
+			"mcpServers": {"proj-docs": {"url": "https://docs.example.com/mcp"}}}`,
+		"work/api/.kiro/agents/team/writer.md": "---\nname: writer\nmcpServers:\n  proj-search:\n    url: https://search.example.com/mcp\n---\nYou write.\n",
+	})
+
+	home := findServer(manifest, "kiro", "home-git")
+	if home == nil || home.ProjectPath != "" {
+		t.Fatalf("home agent server = %+v, want it with no project", home)
+	}
+	project := filepath.Join("/home/test", "work/api")
+	for _, name := range []string{"proj-docs", "proj-search"} {
+		s := findServer(manifest, "kiro", name)
+		if s == nil {
+			t.Fatalf("%s not inventoried: %+v", name, manifest.MCPServers)
+		}
+		if s.ProjectPath != project {
+			t.Errorf("%s ProjectPath = %q, want %q", name, s.ProjectPath, project)
+		}
+	}
+
+	counts := map[string]int{}
+	for _, s := range manifest.MCPServers {
+		counts[s.Name]++
+	}
+	for name, n := range counts {
+		if n != 1 {
+			t.Errorf("%s reported %d times, want once", name, n)
+		}
+	}
+}
+
+// TestScanKiro_AgentsWalkBounded (review t8): the agents reader keeps the
+// scanner's guards, since it now runs in every workspace.
+func TestScanKiro_AgentsWalkBounded(t *testing.T) {
+	files := map[string]string{
+		"proj/.kiro/agents/ok.json":                     `{"mcpServers": {"kept": {"url": "https://kept.example.com/mcp"}}}`,
+		"proj/.kiro/agents/node_modules/pkg/agent.json": `{"mcpServers": {"vendored": {"url": "https://v.example.com/mcp"}}}`,
+		"proj/.kiro/agents/a/b/c/d/deep.json":           `{"mcpServers": {"too-deep": {"url": "https://d.example.com/mcp"}}}`,
+		"proj/.kiro/agents/a/b/c/shallow-enough.json":   `{"mcpServers": {"three-down": {"url": "https://s.example.com/mcp"}}}`,
+	}
+	manifest := runScan(t, files)
+	for name, want := range map[string]bool{"kept": true, "three-down": true, "vendored": false, "too-deep": false} {
+		if got := findServer(manifest, "kiro", name) != nil; got != want {
+			t.Errorf("%s reported = %v, want %v", name, got, want)
+		}
+	}
+
+	// Past the file cap the reader stops rather than reading everything.
+	many := map[string]string{}
+	for i := 0; i < kiroAgentsMaxFiles+10; i++ {
+		many[fmt.Sprintf("proj/.kiro/agents/a%04d.json", i)] = fmt.Sprintf(`{"mcpServers": {"s%04d": {"url": "https://x.example.com/%d"}}}`, i, i)
+	}
+	if n := len(runScan(t, many).MCPServers); n != kiroAgentsMaxFiles {
+		t.Errorf("servers from %d profiles = %d, want the cap %d", kiroAgentsMaxFiles+10, n, kiroAgentsMaxFiles)
 	}
 }

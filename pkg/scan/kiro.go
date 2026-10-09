@@ -214,16 +214,40 @@ func kiroPlainSegment(name string) bool {
 		(len(name) < 2 || name[1] != ':')
 }
 
-// kiroAgents reads the custom agent profiles under ~/.kiro/agents,
-// recursively: .json files, and .md files whose YAML frontmatter holds
-// the same fields. Either may declare its own mcpServers, which Kiro
-// starts when that agent is in use.
-func kiroAgents(s *state, dirRel, _ string) observations {
+// kiroAgentsMaxDepth and kiroAgentsMaxFiles bound one agents directory, so a
+// vendored or generated tree under a workspace's .kiro/agents can't stall the
+// scan. The file cap counts every file visited, which is what bounds the work.
+const (
+	kiroAgentsMaxDepth = 4
+	kiroAgentsMaxFiles = 256
+)
+
+// kiroAgents reads the custom agent profiles under ~/.kiro/agents, or a
+// workspace's .kiro/agents, recursively: .json files, and .md files whose
+// YAML frontmatter holds the same fields. Either may declare its own
+// mcpServers, which Kiro starts when that agent is in use.
+func kiroAgents(s *state, dirRel, projectPath string) observations {
 	var obs observations
+	files := 0
 	_ = fs.WalkDir(s.fsys, dirRel, func(rel string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
+		if err != nil {
 			return nil
 		}
+		if d.IsDir() {
+			// The scanner's own guards: no dependency or build trees, and
+			// a bounded depth, since this now runs in every workspace.
+			if rel != dirRel && walkSkipDirs[d.Name()] {
+				return fs.SkipDir
+			}
+			if strings.Count(strings.TrimPrefix(rel, dirRel), "/") >= kiroAgentsMaxDepth {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if files >= kiroAgentsMaxFiles {
+			return fs.SkipAll
+		}
+		files++
 		var servers map[string]json.RawMessage
 		switch path.Ext(rel) {
 		case ".json":
@@ -242,7 +266,7 @@ func kiroAgents(s *state, dirRel, _ string) observations {
 		if len(servers) == 0 {
 			return nil
 		}
-		obs.servers = append(obs.servers, kiroEmitServers(servers, s.addFileOrAbs(rel), "")...)
+		obs.servers = append(obs.servers, kiroEmitServers(servers, s.addFileOrAbs(rel), projectPath)...)
 		return nil
 	})
 	return obs
