@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -271,4 +274,119 @@ func TestKiroMalformedPayloadBlocks(t *testing.T) {
 	if json.Unmarshal(stderr.Bytes(), &probe) == nil {
 		t.Fatalf("Kiro deny should be plain text, got JSON: %s", stderr.String())
 	}
+}
+
+// kiroCallInSession is kiroCall with a session id, whose session record lists
+// the workspace roots.
+func kiroCallInSession(t *testing.T, f *fixture, toolName, cwd, sessionID string) Call {
+	t.Helper()
+	p := map[string]any{"session_id": sessionID, "hook_event_name": "PreToolUse", "cwd": cwd, "tool_name": toolName}
+	call, err := normalizeCall(f.Env, localagent.Kiro, EventPreToolUse, mustJSON(p))
+	if err != nil {
+		t.Fatalf("normalizeCall: %v", err)
+	}
+	return call
+}
+
+// TestKiroSecondWorkspaceRoot (review t1): the payload's cwd is only the first
+// root, but Kiro merges every root's mcp.json, so a server declared by another
+// root must not be resolved from the user file's allowlisted entry instead.
+func TestKiroSecondWorkspaceRoot(t *testing.T) {
+	f := newFixture(t, "darwin")
+	first := f.mkdir(f.path("proj-a"))
+	second := f.mkdir(f.path("proj-b"))
+	f.write(f.homePath(".kiro", "settings", "mcp.json"), `{"mcpServers": {"docs": {"url": "https://allowed.example.com/mcp"}}}`)
+	f.write(filepath.Join(second, ".kiro", "settings", "mcp.json"), `{"mcpServers": {"docs": {"url": "https://other.example.com/mcp"}}}`)
+	f.write(f.homePath(".kiro", "sessions", "abc123", "sess_1111-2222", "session.json"),
+		`{"schemaVersion": "1.0.0", "workspacePaths": ["`+first+`", "`+second+`"]}`)
+
+	// With the session record, the second root's definition wins over the user file.
+	assertURL(t, callResolution(kiroCallInSession(t, f, "mcp_docs_search", first, "sess_1111-2222")), "https://other.example.com/mcp")
+
+	// Two roots that disagree are ambiguous: nothing says which root wins.
+	f.write(filepath.Join(first, ".kiro", "settings", "mcp.json"), `{"mcpServers": {"docs": {"url": "https://third.example.com/mcp"}}}`)
+	assertUnresolved(t, callResolution(kiroCallInSession(t, f, "mcp_docs_search", first, "sess_1111-2222")), "conflicting definitions")
+
+	// A session id that is not one of Kiro's can't name a path.
+	call := kiroCallInSession(t, f, "mcp_docs_search", first, "../../etc")
+	assertURL(t, callResolution(call), "https://third.example.com/mcp")
+}
+
+// TestKiroAgentProfilesIncomplete (review t2): profiles that can't all be read
+// are a reason to refuse, not to resolve without them.
+func TestKiroAgentProfilesIncomplete(t *testing.T) {
+	f := newFixture(t, "darwin")
+	f.write(f.homePath(".kiro", "settings", "mcp.json"), `{"mcpServers": {"docs": {"url": "https://allowed.example.com/mcp"}}}`)
+	for i := 0; i <= kiroMaxAgentFiles; i++ {
+		f.write(f.homePath(".kiro", "agents", fmt.Sprintf("a%04d.json", i)), `{"name": "x"}`)
+	}
+	assertUnresolved(t, callResolution(kiroCall(t, f, "mcp_docs_search", f.Home, nil)), "more than 256")
+}
+
+func TestKiroAgentDirUnreadable(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads any directory")
+	}
+	f := newFixture(t, "darwin")
+	f.write(f.homePath(".kiro", "settings", "mcp.json"), `{"mcpServers": {"docs": {"url": "https://allowed.example.com/mcp"}}}`)
+	locked := f.mkdir(f.homePath(".kiro", "agents", "team"))
+	if err := os.Chmod(locked, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o755) })
+	assertUnresolved(t, callResolution(kiroCall(t, f, "mcp_docs_search", f.Home, nil)), "could not all be read")
+}
+
+// TestKiroSanitizeUnicodeWhitespace (review t3): Kiro's /[\s-]/g is
+// JavaScript's \s, which includes no-break and other Unicode spaces.
+func TestKiroSanitizeUnicodeWhitespace(t *testing.T) {
+	for in, want := range map[string]string{
+		"my\u00a0srv":            "my_srv",
+		"my\u2003srv":            "my_srv",
+		"my\ufeffsrv":            "my_srv",
+		"my\u0085srv":            "mysrv", // NEL is not JavaScript whitespace
+		"\u00dcn\u00efcode-Name": "ncode_name",
+	} {
+		if got := kiroSanitize(in); got != want {
+			t.Errorf("kiroSanitize(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// TestKiroPowerKeyShadowed (review t4): a same-named entry in mcp.json must not
+// answer for a Power's own server; they are peers, and disagreeing is ambiguous.
+func TestKiroPowerKeyShadowed(t *testing.T) {
+	f := newFixture(t, "darwin")
+	f.write(f.homePath(".kiro", "powers", "installed.json"), `{"version": "1.0.0", "installedPowers": [{"name": "stripe", "registryId": "kiro-recommended"}]}`)
+	f.write(f.homePath(".kiro", "powers", "installed", "stripe", "plugin.json"), `{"name": "stripe"}`)
+	f.write(f.homePath(".kiro", "powers", "installed", "stripe", "mcp.json"),
+		`{"mcpServers": {"stripe": {"type": "streamable-http", "url": "https://mcp.stripe.com"}}}`)
+	f.write(f.homePath(".kiro", "settings", "mcp.json"), `{"mcpServers": {"power-stripe-stripe": {"url": "https://allowed.example.com/mcp"}}}`)
+
+	use := map[string]any{"action": "use", "powerName": "stripe", "serverName": "stripe", "toolName": "create_payment_link"}
+	assertUnresolved(t, callResolution(kiroCall(t, f, "kiro_powers", f.Home, use)), "conflicting definitions")
+	assertUnresolved(t, callResolution(kiroCall(t, f, "mcp_power_stripe_stripe_create_payment_link", f.Home, nil)), "conflicting definitions")
+}
+
+// TestKiroSessionRecordIncomplete (review t1, round 2): a session record that
+// exists but can't be read, or names more roots than are checked, refuses the
+// call; a missing record falls back to cwd.
+func TestKiroSessionRecordIncomplete(t *testing.T) {
+	f := newFixture(t, "darwin")
+	proj := f.mkdir(f.path("proj"))
+	f.write(f.homePath(".kiro", "settings", "mcp.json"), `{"mcpServers": {"docs": {"url": "https://allowed.example.com/mcp"}}}`)
+
+	// No record for this session: cwd alone, as before.
+	assertURL(t, callResolution(kiroCallInSession(t, f, "mcp_docs_search", proj, "sess_missing")), "https://allowed.example.com/mcp")
+
+	record := f.homePath(".kiro", "sessions", "h", "sess_broken", "session.json")
+	f.write(record, `{"workspacePaths": [`)
+	assertUnresolved(t, callResolution(kiroCallInSession(t, f, "mcp_docs_search", proj, "sess_broken")), "could not be read")
+
+	paths := make([]string, 0, kiroMaxWorkspaceRoots+1)
+	for i := 0; i <= kiroMaxWorkspaceRoots; i++ {
+		paths = append(paths, f.path(fmt.Sprintf("root%03d", i)))
+	}
+	f.write(f.homePath(".kiro", "sessions", "h", "sess_many", "session.json"), string(mustJSON(map[string]any{"workspacePaths": paths})))
+	assertUnresolved(t, callResolution(kiroCallInSession(t, f, "mcp_docs_search", proj, "sess_many")), "more than 64 workspace roots")
 }

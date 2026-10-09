@@ -45,7 +45,17 @@ const (
 // kiroToolIDMax is Kiro's cap on an MCP tool id; longer ids are truncated.
 const kiroToolIDMax = 64
 
-var kiroIDUnsafe = regexp.MustCompile(`[^a-zA-Z0-9_]`)
+// kiroJSWhitespace is the set JavaScript's \s matches, which is what Kiro's
+// /[\s-]/g replaces. It is wider than Go's \s (no-break and Unicode spaces) and
+// not the same as unicode.IsSpace (it includes U+FEFF and excludes U+0085), so
+// it is spelled out rather than borrowed.
+func kiroJSWhitespace(r rune) bool {
+	switch r {
+	case '\t', '\n', '\v', '\f', '\r', ' ', '\u00a0', '\u1680', '\u2028', '\u2029', '\u202f', '\u205f', '\u3000', '\ufeff':
+		return true
+	}
+	return r >= '\u2000' && r <= '\u200a'
+}
 
 // kiroSanitize is the transform Kiro applies to "<server>_<tool>" when it builds
 // an MCP tool id (v3u in the extension): whitespace and hyphens become
@@ -53,8 +63,18 @@ var kiroIDUnsafe = regexp.MustCompile(`[^a-zA-Z0-9_]`)
 // is lowercased. It is applied character by character, so it distributes over
 // the join and a server's contribution can be computed on its own.
 func kiroSanitize(s string) string {
-	s = strings.NewReplacer(" ", "_", "\t", "_", "\n", "_", "\r", "_", "-", "_").Replace(s)
-	return strings.ToLower(kiroIDUnsafe.ReplaceAllString(s, ""))
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case r == '-' || kiroJSWhitespace(r):
+			b.WriteByte('_')
+		case r == '_', r >= '0' && r <= '9', r >= 'a' && r <= 'z':
+			b.WriteRune(r)
+		case r >= 'A' && r <= 'Z':
+			b.WriteRune(r + ('a' - 'A'))
+		}
+	}
+	return b.String()
 }
 
 // kiroServerPrefix is the part of a tool id contributed by a server key.
@@ -77,6 +97,9 @@ func normalizeKiroPreTool(ctx context.Context, env Env, raw []byte) (Call, error
 	if err := boundedField("cwd", hook.CWD, maxWorkingDirBytes); err != nil {
 		return Call{}, err
 	}
+	if err := boundedField("session_id", hook.SessionID, maxServerNameBytes); err != nil {
+		return Call{}, err
+	}
 
 	call := Call{Request: types.EnforcementDecisionRequest{Agent: wireAgentKiro, Tool: toolName}}
 	target, ok := kiroMCPTarget(toolName, hook.ToolInput)
@@ -87,8 +110,10 @@ func normalizeKiroPreTool(ctx context.Context, env Env, raw []byte) (Call, error
 	call.Request.Kind = toolkind.KindMCP
 
 	loader := newConfigLoader()
+	roots, rootsIncomplete := kiroWorkspaceRoots(ctx, loader, env, hook.SessionID, hook.CWD)
+	cfg := newKiroConfig(ctx, loader, env, roots, rootsIncomplete)
 	tr := &tracer{}
-	res, tool := resolveKiro(ctx, loader, env, hook.CWD, target, tr)
+	res, tool := resolveKiro(ctx, cfg, env, target, tr)
 	res.Trace = tr.steps
 	call.Trace = res.Trace
 	call.Request.Tool = tool
@@ -159,13 +184,44 @@ func kiroPowerServerKey(power, server string) string {
 	return "power-" + power + "-" + server
 }
 
+// kiroConfig is every place Kiro can declare an MCP server for one call,
+// gathered once.
+type kiroConfig struct {
+	// files are the mcp.json scopes, ranked (see kiroScopes).
+	files []scope
+	// agents are the custom agent profiles' own mcpServers tables, all peers.
+	agents []scope
+	// incomplete names why some workspace root or agent profile could not be
+	// read. Anything left out could redefine a server, so an MCP call can't be
+	// resolved without it.
+	incomplete string
+}
+
+// newKiroConfig gathers every scope for the given roots. rootsIncomplete is
+// kiroWorkspaceRoots' report of roots it could not establish.
+func newKiroConfig(ctx context.Context, loader *configLoader, env Env, roots []string, rootsIncomplete string) kiroConfig {
+	agents, agentsIncomplete := kiroAgentScopes(loader, env, roots)
+	return kiroConfig{
+		files:      kiroScopes(ctx, loader, env, roots),
+		agents:     agents,
+		incomplete: kiroFirstNonEmpty(rootsIncomplete, agentsIncomplete),
+	}
+}
+
+func (c kiroConfig) all() []scope {
+	return append(slices.Clone(c.files), c.agents...)
+}
+
 // resolveKiro resolves a Kiro MCP call and returns the tool name to report.
-func resolveKiro(ctx context.Context, loader *configLoader, env Env, cwd string, target kiroTarget, tr *tracer) (Resolution, string) {
+func resolveKiro(ctx context.Context, cfg kiroConfig, env Env, target kiroTarget, tr *tracer) (Resolution, string) {
 	if target.invalid != "" {
 		return unresolved("", target.invalid), ""
 	}
+	if cfg.incomplete != "" {
+		return unresolved(target.key, cfg.incomplete), kiroFirstNonEmpty(target.tool, target.id)
+	}
 	if target.key != "" {
-		return resolveKiroKey(ctx, loader, env, cwd, target.key, tr), target.tool
+		return resolveKiroKey(ctx, cfg, env, target.key, tr), target.tool
 	}
 
 	// The id is mcp_<sanitized server>_<sanitized tool>, so it names no server by
@@ -173,14 +229,17 @@ func resolveKiro(ctx context.Context, loader *configLoader, env Env, cwd string,
 	// of the id. More than one candidate is two readings of one name, and like an
 	// mcp__ name that splits two ways (resolveSplits), picking one could report
 	// an allowlisted server for a call that went to another.
-	keys := kiroCandidateKeys(ctx, loader, env, cwd, target.id)
+	keys := kiroCandidateKeys(ctx, cfg, target.id)
 	switch len(keys) {
 	case 0:
-		kiroTraceAll(ctx, loader, env, cwd, tr)
+		for _, s := range cfg.all() {
+			_, res := s.load(ctx)
+			tr.miss(s.path, s.traceKey(""), res)
+		}
 		return unresolved("", fmt.Sprintf(
 			"no Kiro MCP configuration declares a server whose tools are named %q", target.id)), target.id
 	case 1:
-		return resolveKiroKey(ctx, loader, env, cwd, keys[0], tr), kiroToolOf(target.id, keys[0])
+		return resolveKiroKey(ctx, cfg, env, keys[0], tr), kiroToolOf(target.id, keys[0])
 	default:
 		distinct := map[string]bool{}
 		for _, k := range keys {
@@ -189,12 +248,21 @@ func resolveKiro(ctx context.Context, loader *configLoader, env Env, cwd string,
 		if len(distinct) == 1 {
 			// Keys that sanitize alike ("my-server", "my_server") produce the same
 			// ids; they are one reading only if they define the same server.
-			if res, ok := kiroAgreeingKeys(ctx, loader, env, cwd, keys, tr); ok {
+			if res, ok := kiroAgreeingKeys(ctx, cfg, env, keys, tr); ok {
 				return res, kiroToolOf(target.id, keys[0])
 			}
 		}
 		return ambiguousToolName(localagent.Kiro, target.id, keys), target.id
 	}
+}
+
+func kiroFirstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // kiroToolOf is the tool half of id once key's prefix is removed. It is Kiro's
@@ -219,9 +287,9 @@ func kiroIDMatches(id, key string) bool {
 
 // kiroCandidateKeys returns every configured server key, across all of Kiro's
 // scopes, that the tool id can have come from.
-func kiroCandidateKeys(ctx context.Context, loader *configLoader, env Env, cwd, id string) []string {
+func kiroCandidateKeys(ctx context.Context, cfg kiroConfig, id string) []string {
 	seen := map[string]bool{}
-	for _, s := range append(kiroScopes(loader, env, cwd), kiroAgentScopes(loader, env, cwd)...) {
+	for _, s := range cfg.all() {
 		set, res := s.load(ctx)
 		if res != loadOK {
 			continue
@@ -242,10 +310,10 @@ func kiroCandidateKeys(ctx context.Context, loader *configLoader, env Env, cwd, 
 
 // kiroAgreeingKeys resolves several keys and succeeds only when they all
 // identify the same server.
-func kiroAgreeingKeys(ctx context.Context, loader *configLoader, env Env, cwd string, keys []string, tr *tracer) (Resolution, bool) {
+func kiroAgreeingKeys(ctx context.Context, cfg kiroConfig, env Env, keys []string, tr *tracer) (Resolution, bool) {
 	var first Resolution
 	for i, key := range keys {
-		res := resolveKiroKey(ctx, loader, env, cwd, key, tr)
+		res := resolveKiroKey(ctx, cfg, env, key, tr)
 		if res.Unresolved {
 			return Resolution{}, false
 		}
@@ -269,10 +337,34 @@ func kiroAgreeingKeys(ctx context.Context, loader *configLoader, env Env, cwd st
 // file is ambiguous. Letting the profile win would let an inactive profile's
 // allowlisted definition answer for the server that actually ran, and every
 // one of these files is the user's to edit.
-func resolveKiroKey(ctx context.Context, loader *configLoader, env Env, cwd, key string, tr *tracer) Resolution {
+//
+// A Power's server key (power-<power>-<server>) gets no precedence at all:
+// nothing documents whether a same-named entry in mcp.json shadows the
+// Power's own server, so every scope that declares the key is a peer and any
+// disagreement is ambiguous.
+func resolveKiroKey(ctx context.Context, cfg kiroConfig, env Env, key string, tr *tracer) Resolution {
+	if cfg.incomplete != "" {
+		return unresolved(key, cfg.incomplete)
+	}
 	names := lookup{names: []string{key}}
-	fileMatch, fileOut := resolveScopes(ctx, kiroScopes(loader, env, cwd), names, tr)
-	agentMatch, agentOut := resolveScopes(ctx, kiroAgentScopes(loader, env, cwd), names, tr)
+	if strings.HasPrefix(key, kiroPowerKeyPrefix) {
+		peers := cfg.all()
+		for i := range peers {
+			peers[i].rank = 0
+		}
+		m, out := resolveScopes(ctx, peers, names, tr)
+		switch out {
+		case outcomeFound:
+			return resolved(env, m.key, m.entry)
+		case outcomeAmbiguous:
+			return ambiguous(localagent.Kiro, key)
+		default:
+			return notFound(localagent.Kiro, key, fmt.Sprintf(
+				"MCP server %q was not found in any Kiro MCP configuration", key))
+		}
+	}
+	fileMatch, fileOut := resolveScopes(ctx, cfg.files, names, tr)
+	agentMatch, agentOut := resolveScopes(ctx, cfg.agents, names, tr)
 	if fileOut == outcomeAmbiguous || agentOut == outcomeAmbiguous {
 		return ambiguous(localagent.Kiro, key)
 	}
@@ -292,29 +384,79 @@ func resolveKiroKey(ctx context.Context, loader *configLoader, env Env, cwd, key
 	}
 }
 
-// kiroTraceAll records every scope as consulted, for a tool id no key matched.
-func kiroTraceAll(ctx context.Context, loader *configLoader, env Env, cwd string, tr *tracer) {
-	for _, s := range append(kiroScopes(loader, env, cwd), kiroAgentScopes(loader, env, cwd)...) {
-		_, res := s.load(ctx)
-		tr.miss(s.path, s.traceKey(""), res)
+// kiroPowerKeyPrefix starts every server key Kiro registers for a Power.
+const kiroPowerKeyPrefix = "power-"
+
+// kiroMaxWorkspaceRoots bounds how many roots a session file can add.
+const kiroMaxWorkspaceRoots = 64
+
+// kiroSessionID matches the ids Kiro gives sessions (sess_<uuid>), and so
+// keeps a hostile session_id from naming a path.
+var kiroSessionID = regexp.MustCompile(`^sess_[A-Za-z0-9-]{1,128}$`)
+
+// kiroWorkspaceRoots returns every workspace root of the session that made the
+// call. The payload's cwd is only the first root, but Kiro merges the MCP
+// configuration of all of them, so a server declared by another root has to be
+// seen too or it could shadow an allowlisted name undetected.
+//
+// The roots come from the session's own record,
+// ~/.kiro/sessions/<hash>/<session_id>/session.json, whose workspacePaths Kiro
+// writes for every IDE and CLI session (Kiro 1.2 and kiro-cli 2.26). That
+// file is Kiro's internal state rather than a documented interface. When no
+// record exists, only cwd is used, which is the payload's own claim. When a
+// record exists but can't be read, or lists more roots than
+// kiroMaxWorkspaceRoots, the second result says so and the call is refused:
+// carrying on with some roots would let a dropped one shadow a server.
+func kiroWorkspaceRoots(ctx context.Context, loader *configLoader, env Env, sessionID, cwd string) ([]string, string) {
+	var roots []string
+	add := func(root string) {
+		root = strings.TrimSpace(root)
+		if !filepath.IsAbs(root) {
+			return
+		}
+		root = filepath.Clean(root)
+		if !slices.Contains(roots, root) {
+			roots = append(roots, root)
+		}
 	}
+	add(cwd)
+	if !kiroSessionID.MatchString(sessionID) {
+		return roots, ""
+	}
+	matches, err := filepath.Glob(env.homePath(".kiro", "sessions", "*", sessionID, "session.json"))
+	if err != nil {
+		return roots, "the Kiro session record could not be searched for"
+	}
+	for _, path := range matches {
+		var doc struct {
+			WorkspacePaths []string `json:"workspacePaths"`
+		}
+		if res := loader.loadJSON(ctx, path, &doc); res != loadOK {
+			return roots, fmt.Sprintf("the Kiro session record %s could not be read", path)
+		}
+		for _, root := range doc.WorkspacePaths {
+			add(root)
+		}
+	}
+	if len(roots) > kiroMaxWorkspaceRoots {
+		return roots, fmt.Sprintf("the Kiro session has more than %d workspace roots to check", kiroMaxWorkspaceRoots)
+	}
+	return roots, ""
 }
 
 // kiroScopes returns Kiro's MCP configuration files in precedence order:
 //
-//  0. the workspace's .kiro/settings/mcp.json, from the payload's cwd;
+//  0. each workspace root's .kiro/settings/mcp.json, as peers: Kiro merges
+//     them all, and nothing says which root wins a name two of them define;
 //  1. the user's ~/.kiro/settings/mcp.json;
 //  2. the servers Powers contribute, as peers: the user file's powers section,
 //     where legacy (POWER.md) powers are registered, and each installed Agent
-//     Plugins power's own mcp.json. Both name their servers power-<power>-<server>.
-//
-// Kiro merges the mcp.json of every open workspace root, but the payload carries
-// only the first as cwd, so a server declared only by another root does not
-// resolve and the call is denied.
-func kiroScopes(loader *configLoader, env Env, cwd string) []scope {
+//     Plugins power's own mcp.json. Both name their servers power-<power>-<server>
+//     (and resolveKiroKey treats those keys without precedence anyway).
+func kiroScopes(ctx context.Context, loader *configLoader, env Env, roots []string) []scope {
 	var scopes []scope
-	if cwd = strings.TrimSpace(cwd); filepath.IsAbs(cwd) {
-		path := filepath.Join(filepath.Clean(cwd), ".kiro", "settings", "mcp.json")
+	for _, root := range roots {
+		path := filepath.Join(root, ".kiro", "settings", "mcp.json")
 		scopes = append(scopes, scope{path: path, key: mcpServersKey, rank: 0, load: jsonServers(loader, path)})
 	}
 	user := env.homePath(".kiro", "settings", "mcp.json")
@@ -322,7 +464,7 @@ func kiroScopes(loader *configLoader, env Env, cwd string) []scope {
 		scope{path: user, key: mcpServersKey, rank: 1, load: jsonServers(loader, user)},
 		scope{path: user, key: "powers.mcpServers", rank: 2, load: kiroPowersSectionServers(loader, user)},
 	)
-	for _, power := range kiroInstalledPowers(loader, env) {
+	for _, power := range kiroInstalledPowers(ctx, loader, env) {
 		path := env.homePath(".kiro", "powers", "installed", power, "mcp.json")
 		scopes = append(scopes, scope{path: path, key: mcpServersKey, rank: 2, load: kiroPluginPowerServers(loader, path, power)})
 	}
@@ -363,13 +505,13 @@ func kiroPluginPowerServers(loader *configLoader, path, power string) func(conte
 // kiroInstalledPowers lists the Agent Plugins powers Kiro loads: those named in
 // ~/.kiro/powers/installed.json whose directory has a plugin.json. A legacy
 // power's servers are already in the settings file's powers section.
-func kiroInstalledPowers(loader *configLoader, env Env) []string {
+func kiroInstalledPowers(ctx context.Context, loader *configLoader, env Env) []string {
 	var doc struct {
 		InstalledPowers []struct {
 			Name string `json:"name"`
 		} `json:"installedPowers"`
 	}
-	if loader.loadJSON(context.Background(), env.homePath(".kiro", "powers", "installed.json"), &doc) != loadOK {
+	if loader.loadJSON(ctx, env.homePath(".kiro", "powers", "installed.json"), &doc) != loadOK {
 		return nil
 	}
 	var out []string
@@ -387,40 +529,55 @@ func kiroInstalledPowers(loader *configLoader, env Env) []string {
 }
 
 // kiroMaxAgentFiles bounds how many custom agent profiles a hook reads, so a
-// huge agents tree can't stall a tool call past the hook's budget.
+// huge agents tree can't stall a tool call past the hook's budget. Past it, MCP
+// calls are unresolved rather than resolved without the rest.
 const kiroMaxAgentFiles = 256
 
 // kiroAgentScopes returns every custom agent profile's own mcpServers table,
-// all as peers: the user's ~/.kiro/agents and the workspace's .kiro/agents,
-// .json profiles and .md profiles with YAML frontmatter, searched recursively
-// the way Kiro loads them.
-func kiroAgentScopes(loader *configLoader, env Env, cwd string) []scope {
+// all as peers: the user's ~/.kiro/agents and each workspace root's
+// .kiro/agents, .json profiles and .md profiles with YAML frontmatter, searched
+// recursively the way Kiro loads them. The second result is non-empty when the
+// list is incomplete, because a directory could not be read or there were more
+// profiles than kiroMaxAgentFiles.
+func kiroAgentScopes(loader *configLoader, env Env, roots []string) ([]scope, string) {
 	dirs := []string{env.homePath(".kiro", "agents")}
-	if cwd = strings.TrimSpace(cwd); filepath.IsAbs(cwd) {
-		dirs = append(dirs, filepath.Join(filepath.Clean(cwd), ".kiro", "agents"))
+	for _, root := range roots {
+		dirs = append(dirs, filepath.Join(root, ".kiro", "agents"))
 	}
-	var scopes []scope
+	var (
+		scopes     []scope
+		incomplete string
+	)
 	for _, dir := range dirs {
 		_ = filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
-			if err != nil || len(scopes) >= kiroMaxAgentFiles {
-				if d != nil && d.IsDir() {
-					return fs.SkipDir
+			if err != nil {
+				if path == dir && errors.Is(err, fs.ErrNotExist) {
+					return nil // no agents directory here
 				}
-				return nil
+				incomplete = fmt.Sprintf("the Kiro agent profiles under %s could not all be read", dir)
+				return fs.SkipAll
 			}
 			if d.IsDir() {
 				return nil
 			}
+			var load func(context.Context) (serverSet, loadResult)
 			switch filepath.Ext(path) {
 			case ".json":
-				scopes = append(scopes, scope{path: path, key: mcpServersKey, load: jsonServers(loader, path)})
+				load = jsonServers(loader, path)
 			case ".md":
-				scopes = append(scopes, scope{path: path, key: mcpServersKey, load: kiroMarkdownAgentServers(loader, path)})
+				load = kiroMarkdownAgentServers(loader, path)
+			default:
+				return nil
 			}
+			if len(scopes) == kiroMaxAgentFiles {
+				incomplete = fmt.Sprintf("there are more than %d Kiro agent profiles to check", kiroMaxAgentFiles)
+				return fs.SkipAll
+			}
+			scopes = append(scopes, scope{path: path, key: mcpServersKey, load: load})
 			return nil
 		})
 	}
-	return scopes
+	return scopes, incomplete
 }
 
 // kiroMarkdownAgentServers loads the mcpServers table from a Markdown agent

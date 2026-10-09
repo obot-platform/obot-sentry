@@ -115,9 +115,10 @@ func (e *Enforce) Run(cmd *cobra.Command, _ []string) error {
 	if result.ResponseWriteErr != nil {
 		return &ExitCodeError{Code: 2, Err: result.ResponseWriteErr}
 	}
-	if result.BlockByExit {
+	if result.BlockByExit && !e.dryRun {
 		// Kiro blocks only on exit 2 and shows the model everything on stderr,
-		// where the denial already is, so nothing more may be printed there.
+		// where the denial already is, so nothing more may be printed there. A
+		// dry run promises no verdict, so it never takes this exit.
 		return &ExitCodeError{Code: 2, Err: errors.New("blocked"), Quiet: true}
 	}
 	return nil

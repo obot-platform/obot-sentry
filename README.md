@@ -120,9 +120,9 @@ Naming caveats that change what an allowlist entry has to say:
   payload cannot say which one ran. Rename one of them.
 - **Kiro tool names are lowercased** (`mcp_<server>_<tool>`). The device matches
   the server back to its configuration key, but the tool half stays lowercased
-  (`createissue`), so copy tool names from the decision log. Server names that
-  produce the same prefix (`github`, `github_enterprise`) are reported as
-  unidentified.
+  (`createissue`), so copy tool names from the decision log. A tool name that two
+  configured servers could both have produced (`mcp_github_enterprise_x` with
+  servers `github` and `github_enterprise`) is reported as unidentified.
 
 ### `npx` / `uvx` package resolution
 
