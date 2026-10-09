@@ -109,7 +109,7 @@ This install package contains:
 {{if .enforcementEnabled}}
 ## Tool-call enforcement
 
-Each tool call in Claude Code, Codex, and Cursor is checked against Obot's
+Each tool call in Claude Code, Codex, Cursor, and Kiro is checked against Obot's
 allowlist before it runs. The check is a single request to Obot, and it is
 **fail-closed**: if Obot cannot be reached, the device is not enrolled, or the
 hook cannot tell which MCP server a call targets, the call is blocked.
@@ -117,6 +117,13 @@ hook cannot tell which MCP server a call targets, the call is blocked.
 - Blocking a call never *approves* one. Your users' agent approval prompts still
   apply to everything that is allowed.
 - Visual Studio Code is not supported for enforcement. Its audit hook is unaffected.
+- Kiro runs hooks only in folders the user has trusted. Tool calls in an untrusted
+  folder, or a window with no folder open, are neither checked nor audited, and a
+  folder trusted after Kiro starts stays unchecked until Kiro restarts. See
+  [Tool call enforcement](https://docs.obot.ai/functionality/device-management/#tool-call-enforcement)
+  for what to cover with your MDM.
+- The Kiro CLI runs these hooks only on its v3 agent engine. Sessions on its
+  default v2 engine are neither checked nor audited.
 - An MCP server can be allowlisted by URL, by its `npx`/`uvx` package, or — for a
   claude.ai connector — by display name. A stdio server started from a local
   executable path presents none of those, so it cannot be allowlisted and is
@@ -153,4 +160,4 @@ The per-device state under `%ProgramData%\obot\obot-sentry` and
 `%LOCALAPPDATA%\obot\obot-sentry` is left behind. Delete it with a remediation
 script if you want the device identity and scan state gone too.
 
-Restart Claude Code, Codex, VS Code, and Cursor afterward to drop the hooks.
+Restart Claude Code, Codex, VS Code, Cursor, and Kiro afterward to drop the hooks.

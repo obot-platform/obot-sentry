@@ -27,7 +27,12 @@ type Source struct {
 	// */.cursor/mcp.json.
 	Path  string
 	Scope Scope
-	Read  func(s *state, rel, projectPath string) observations
+	// Dir marks a Path that names a directory, not a file. At Project
+	// scope the walk matches it against directories and hands the
+	// directory to Read without descending into it, for config that is a
+	// tree of arbitrarily named files (Kiro's .kiro/agents).
+	Dir  bool
+	Read func(s *state, rel, projectPath string) observations
 }
 
 // projectOf returns the absolute path of the project enclosing a
@@ -109,6 +114,23 @@ func sources(platform string) []Source {
 			Path:  hermesGlobalConfigRel,
 			Scope: Home,
 			Read:  hermesServers,
+		},
+
+		Source{
+			Path:  kiroMCPConfigRel,
+			Scope: Home | Project,
+			Read:  kiroServers,
+		},
+		Source{
+			Path:  kiroPowersRel,
+			Scope: Home,
+			Read:  kiroPowers,
+		},
+		Source{
+			Path:  kiroAgentsRel,
+			Scope: Home | Project,
+			Dir:   true,
+			Read:  kiroAgents,
 		},
 
 		Source{

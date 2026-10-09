@@ -136,6 +136,25 @@ func clients(platform string) []Client {
 			Config: []string{".hermes"},
 		},
 		{
+			// One client for the IDE and kiro-cli: both read and write the
+			// same ~/.kiro. The IDE writes powers/installed.json when its
+			// powers manager first loads.
+			Name: "kiro",
+			Installed: []string{
+				"/Applications/Kiro.app",
+				"Applications/Kiro.app",
+				"/Applications/Kiro CLI.app",
+				"Applications/Kiro CLI.app",
+				`C:\Program Files\Kiro`,
+				"AppData/Local/Programs/Kiro",
+				".local/bin/kiro-cli",
+				kiroAppDataDir(platform),
+				kiroCLIDataDir(platform),
+				kiroPowersRegistry,
+			},
+			Config: []string{".kiro"},
+		},
+		{
 			Name: "openclaw",
 			Installed: []string{
 				path.Join(openclawConfigDir(), "identity"),

@@ -51,7 +51,7 @@ func (e *Enforce) Customize(cmd *cobra.Command) {
 	cmd.Use = "enforce"
 	cmd.Short = "Decide a pre-tool hook payload against Obot's allowlist"
 	cmd.Hidden = true
-	cmd.Flags().StringVar(&e.agent, "agent", "", "local agent provider: claude-code, codex, cursor")
+	cmd.Flags().StringVar(&e.agent, "agent", "", "local agent provider: claude-code, codex, cursor, kiro")
 	cmd.Flags().StringVar(&e.event, "event", "", "the agent's own pre-tool event: PreToolUse, beforeMCPExecution, preToolUse")
 	cmd.Flags().StringVar(&e.managedBy, "managed-by", "", "managed hook marker")
 	if err := cmd.Flags().MarkHidden("managed-by"); err != nil {
@@ -115,6 +115,12 @@ func (e *Enforce) Run(cmd *cobra.Command, _ []string) error {
 	if result.ResponseWriteErr != nil {
 		return &ExitCodeError{Code: 2, Err: result.ResponseWriteErr}
 	}
+	if result.BlockByExit && !e.dryRun {
+		// Kiro blocks only on exit 2 and shows the model everything on stderr,
+		// where the denial already is, so nothing more may be printed there. A
+		// dry run promises no verdict, so it never takes this exit.
+		return &ExitCodeError{Code: 2, Err: errors.New("blocked"), Quiet: true}
+	}
 	return nil
 }
 
@@ -177,7 +183,7 @@ func (e *Enforce) decider(envErr error) enforce.DecideFunc {
 // hook uses rather than a reimplementation, so a trace that says FOUND is
 // evidence about production behavior.
 type EnforceResolve struct {
-	Agent  string `usage:"local agent provider: claude-code, codex, cursor"`
+	Agent  string `usage:"local agent provider: claude-code, codex, cursor, kiro"`
 	Server string `usage:"MCP server name, as the tool call reports it"`
 	CWD    string `usage:"working directory to resolve project configuration against (default: the current directory)" name:"cwd"`
 }

@@ -215,6 +215,9 @@ func normalizeCallContext(ctx context.Context, env Env, agent localagent.Agent, 
 	if agent == localagent.Cursor {
 		return normalizeCursorPreTool(ctx, env, raw)
 	}
+	if agent == localagent.Kiro {
+		return normalizeKiroPreTool(ctx, env, raw)
+	}
 	return normalizePreTool(ctx, env, agent, raw)
 }
 

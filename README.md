@@ -10,7 +10,7 @@ It enrolls each machine with an [Obot](https://github.com/obot-platform/obot) se
 - **Enrollment.** Configuration (server URL + an `ode1-...` enrollment credential) is pushed by the MDM — via registry values on Windows, a managed-preferences profile on macOS. On the machine's first scan — by whichever user runs first — obot-sentry generates a shared Ed25519 identity key in the machine-scoped data dir (`%PROGRAMDATA%\obot\obot-sentry` on Windows, `/Library/Application Support/obot/obot-sentry` on macOS; both are prepared user-writable by the installer, with a per-user fallback when unavailable) and enrolls the public key via `POST /api/mdm/enroll` (trust-on-first-use). The device ID derives from the machine ID + key fingerprint, so all users present one device — and a lost key simply mints a fresh device ID instead of a TOFU conflict. Each user's first scan re-enrolls the same identity, which is an idempotent update server-side.
 - **Submission.** Every submission is authenticated with a short-lived self-signed JWT (`aud=obot/device`) verified server-side against the enrolled key; scans land via `POST /api/devices/scans`, attributed to the submitting user by the manifest's `username`. Local-agent audit logs land via `POST /api/local-agent-audit-logs`, with the server stamping authoritative device attribution from the JWT.
 - **Local-agent audit hooks.** Managed hook configuration invokes the hidden `obot-sentry audit submit` command for supported local agents. The hook parser normalizes terminal tool-call events, submits them fail-open, and writes only warnings to stderr when enrollment or submission is unavailable so agent execution is not blocked.
-- **Tool-call enforcement hooks.** With enforcement enabled in Obot, managed pre-tool hook configuration invokes the hidden `obot-sentry enforce` command for Claude Code, Codex, and Cursor. It is the opposite of the audit hook in every important way: synchronous, fail-**closed**, and stdout is the hook protocol channel rather than something that must stay empty. See [Tool-call enforcement](#tool-call-enforcement).
+- **Tool-call enforcement hooks.** With enforcement enabled in Obot, managed pre-tool hook configuration invokes the hidden `obot-sentry enforce` command for Claude Code, Codex, Cursor, and Kiro. It is the opposite of the audit hook in every important way: synchronous, fail-**closed**, and stdout is the hook protocol channel rather than something that must stay empty. See [Tool-call enforcement](#tool-call-enforcement).
 - **Audit spool.** Transient audit-log submission failures are stored in an encrypted per-user spool under the obot-sentry cache directory and replayed after a later successful live submit. Server-side client errors are discarded instead of retried.
 - **Scan state + logs.** Every scan run updates `scan.json` (last scan/submit times, status, last error) and appends a JSON record to `scan-logs/` — timestamp-sortable filenames, pruned by age and size — in obot-sentry's per-user cache dir (`%LOCALAPPDATA%\obot\obot-sentry` on Windows, `~/Library/Caches/obot/obot-sentry` on macOS). Support and MDM freshness checks read these; recording problems never fail a scan.
 
@@ -61,8 +61,8 @@ that location.
 
 ## Tool-call enforcement
 
-`hook-install --enforce` adds a **pre-tool** hook to Claude Code, Codex, and
-Cursor, on top of the post-tool audit hooks. Before each tool call runs, the hook
+`hook-install --enforce` adds a **pre-tool** hook to Claude Code, Codex, Cursor,
+and Kiro, on top of the post-tool audit hooks. Before each tool call runs, the hook
 resolves what the call targets, asks obot for a verdict, and blocks the call
 unless the answer is an explicit allow.
 
@@ -71,6 +71,7 @@ unless the answer is an explicit allow.
 | Claude Code | `~/.claude/settings.json` | `PreToolUse` |
 | Codex | `/etc/codex/requirements.toml` (macOS), `%ProgramData%\OpenAI\Codex\requirements.toml` | `PreToolUse` |
 | Cursor | `/Library/Application Support/Cursor/hooks.json` (macOS), `%ProgramData%\Cursor\hooks.json` | `beforeMCPExecution`, `preToolUse` |
+| Kiro | `~/.kiro/hooks/obot-sentry.json` | `PreToolUse` |
 
 > Visual Studio Code is not supported for enforcement.
 
@@ -80,7 +81,7 @@ Anything other than an explicit allow blocks the call: obot unreachable, slow
 (the whole check is budgeted at 5 seconds), or returning something unparseable; a
 device that is not enrolled or has no server configured; a payload the hook cannot
 read; an MCP server it cannot identify. **A device whose enrollment never
-completed blocks every tool call in all three agents until enrollment succeeds.**
+completed blocks every tool call in every enforced agent until enrollment succeeds.**
 `hook-install` provisions the machine identity before writing any hook file, so
 the normal MDM path cannot land there — but a wiped identity directory or a
 revoked enrollment key can, and it will be loud.
@@ -91,8 +92,8 @@ server allows every call when enforcement is disabled, and logs nothing.
 ### It never grants permission
 
 A permitted call is answered by *withholding* the denial, not by approving the
-call — zero bytes for Claude Code and Codex, and Cursor's `{"permission":"allow"}`,
-which means "this hook does not object". Your agents' own approval prompts still
+call — zero bytes for Claude Code, Codex, and Kiro, and Cursor's
+`{"permission":"allow"}`, which means "this hook does not object". Your agents' own approval prompts still
 apply to everything enforcement allows. The allowlist and an agent's permission
 model are separate controls and this deliberately does not collapse them.
 
@@ -108,7 +109,7 @@ nothing an allowlist entry can name. Such a call is reported as unidentified and
 this is why, and the fix is to run those servers from a package or a URL rather
 than to look for an allowlist entry that can match them.
 
-Two naming caveats that change what an allowlist entry has to say:
+Naming caveats that change what an allowlist entry has to say:
 
 - **Codex reports server names with punctuation folded to underscores.** A config
   key of `probe-npx-stdio` arrives as `probe_npx_stdio`. The device matches it back
@@ -117,6 +118,11 @@ Two naming caveats that change what an allowlist entry has to say:
 - **Cursor display names may carry a scope prefix** (`user-probe-uvx-stdio`), and a
   name declared in more than one Cursor scope is reported as unidentified — the
   payload cannot say which one ran. Rename one of them.
+- **Kiro tool names are lowercased** (`mcp_<server>_<tool>`). The device matches
+  the server back to its configuration key, but the tool half stays lowercased
+  (`createissue`), so copy tool names from the decision log. A tool name that two
+  configured servers could both have produced (`mcp_github_enterprise_x` with
+  servers `github` and `github_enterprise`) is reported as unidentified.
 
 ### `npx` / `uvx` package resolution
 
@@ -192,10 +198,20 @@ unresolved: stdio command "/opt/homebrew/bin/some-server" is a path, not a bare 
 ### Tamper resistance, stated plainly
 
 The Codex and Cursor hook files are machine-scoped and administrator-owned. The
-Claude Code hook file is **user-scoped** (`~/.claude/settings.json`), so the user
-whose calls are being enforced can delete it. The hourly `hook-install` task
-re-converges it, so the bypass window is bounded by that interval rather than
-permanent. We intend to find a machine-scoped solution for Claude Code in the future.
+Claude Code and Kiro hook files are **user-scoped** (`~/.claude/settings.json`,
+`~/.kiro/hooks/obot-sentry.json`), so the user whose calls are being enforced can
+delete them. The hourly `hook-install` task re-converges them, so the bypass
+window is bounded by that interval rather than permanent. We intend to find a
+machine-scoped solution for Claude Code in the future.
+
+Kiro runs no hooks in a workspace the user hasn't trusted, or in a window with
+no folder open, so calls made there are neither enforced nor audited. A folder
+trusted after Kiro starts stays unhooked until Kiro restarts
+([kirodotdev/Kiro#11884](https://github.com/kirodotdev/Kiro/issues/11884)). The
+Kiro CLI runs these hooks only on its v3 agent engine (`kiro-cli chat --v3`, or
+`chat.agentEngine` set to `v3`). Its default v2 engine ignores `~/.kiro/hooks`,
+so CLI sessions on v2 are neither enforced nor audited. obot-sentry does not
+change the engine setting.
 
 ### Turning it off
 
@@ -215,7 +231,7 @@ sudo obot-sentry hook-uninstall
 
 On Windows, run the equivalent command in an elevated PowerShell. The command
 removes all hook entries whose command contains `--managed-by obot-sentry` from
-Claude Code, Codex, VS Code, and Cursor while preserving third-party
+Claude Code, Codex, VS Code, Cursor, and Kiro while preserving third-party
 hooks. It targets machine-wide files and the active console user's files, so
 repeat it for each user on a shared machine. Stop the scheduled hook task or
 uninstall the package afterward so a later convergence does not reinstall them.
@@ -232,6 +248,7 @@ are:
 | Copilot (VS Code) hook | `~/.copilot/hooks/obot-sentry.json` | `%USERPROFILE%\.copilot\hooks\obot-sentry.json` |
 | Cursor | `/Library/Application Support/Cursor/hooks.json` | `%ProgramData%\Cursor\hooks.json` |
 | VS Code settings | `~/Library/Application Support/Code/User/settings.json` | `%APPDATA%\Code\User\settings.json` |
+| Kiro | `~/.kiro/hooks/obot-sentry.json` | `%USERPROFILE%\.kiro\hooks\obot-sentry.json` |
 
 The uninstall command intentionally changes only marker-owned hooks. It does not
 delete files, remove Codex's unmarked `[features]` pins, or remove the unmarked

@@ -49,6 +49,11 @@ type Result struct {
 	// no response shape to emit, so the caller must fail closed by exiting
 	// non-zero instead of by writing bytes.
 	Unusable bool
+	// BlockByExit reports a denial the agent only honors as an exit status
+	// (Kiro's exit 2). Response has already gone to stderr; the caller must exit
+	// 2 without writing anything else there, because the agent shows stderr to
+	// the model verbatim.
+	BlockByExit bool
 }
 
 // Run is the whole pre-tool hook: read the payload, normalize it, ask Obot for a
@@ -69,11 +74,14 @@ func Run(ctx context.Context, opts Options) Result {
 		return result
 	}
 
-	if result.Denied {
+	out := opts.Stdout
+	if result.BlockByExit {
+		out = opts.Stderr
+	} else if result.Denied {
 		warn(opts.Stderr, "obot-sentry enforce: blocked")
 	}
 	if len(result.Response) > 0 {
-		n, err := opts.Stdout.Write(result.Response)
+		n, err := out.Write(result.Response)
 		if err == nil && n != len(result.Response) {
 			err = io.ErrShortWrite
 		}
@@ -183,6 +191,7 @@ func infrastructureDeny(agent localagent.Agent, event Event, result Result, reas
 // ordinary hook stderr renders it.
 func deny(agent localagent.Agent, event Event, result Result, reason string, denial Denial) Result {
 	result.Denied = true
+	result.BlockByExit = blocksByExit(agent)
 	result.Reason = compactReason(reason)
 	result.Response = Deny(agent, event, denial)
 	return result

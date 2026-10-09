@@ -11,7 +11,7 @@ import (
 )
 
 // hookTimeout is the per-hook timeout, in seconds, written into every managed
-// entry. It is the same for all four agents.
+// entry. It is the same for every agent.
 const hookTimeout = 30
 
 // These are the final executable locations owned by the MDM packages. Hook
@@ -84,7 +84,8 @@ func enforceCommandArgs(agent localagent.Agent, event string) []string {
 
 // windowsUsesCallOperator reports whether an agent's Windows command runner
 // requires the PowerShell call operator (`& "..."`) prefix. Claude Code, Codex,
-// and VS Code do; Cursor invokes the double-quoted executable directly.
+// and VS Code do; Cursor invokes the double-quoted executable directly, and so
+// does Kiro, which hands the command to cmd.exe (Node's spawn with shell: true).
 func windowsUsesCallOperator(agent localagent.Agent) bool {
 	return agent == localagent.ClaudeCode || agent == localagent.Codex || agent == localagent.VSCode
 }

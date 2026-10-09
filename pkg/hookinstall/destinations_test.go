@@ -42,6 +42,7 @@ func TestDestinationsModel(t *testing.T) {
 			{Agent: localagent.VSCode, Label: "Visual Studio Code", Scope: ScopeUser, Format: FormatJSON, Rel: ".copilot/hooks/obot-sentry.json"},
 			{Agent: localagent.Cursor, Label: "Cursor", Scope: ScopeMachine, Format: FormatJSON, Abs: "/Library/Application Support/Cursor/hooks.json"},
 			{Agent: localagent.VSCode, Label: "VS Code settings", Scope: ScopeUser, Format: FormatJSONC, Rel: "Library/Application Support/Code/User/settings.json"},
+			{Agent: localagent.Kiro, Label: "Kiro", Scope: ScopeUser, Format: FormatJSON, Rel: ".kiro/hooks/obot-sentry.json"},
 		}
 		assertDestinations(t, dests, want)
 	})
@@ -55,6 +56,7 @@ func TestDestinationsModel(t *testing.T) {
 			{Agent: localagent.VSCode, Label: "Visual Studio Code", Scope: ScopeUser, Format: FormatJSON, Rel: ".copilot/hooks/obot-sentry.json"},
 			{Agent: localagent.Cursor, Label: "Cursor", Scope: ScopeMachine, Format: FormatJSON, Abs: winJoin(programData, "Cursor", "hooks.json")},
 			{Agent: localagent.VSCode, Label: "VS Code settings", Scope: ScopeUser, Format: FormatJSONC, Rel: "AppData/Roaming/Code/User/settings.json"},
+			{Agent: localagent.Kiro, Label: "Kiro", Scope: ScopeUser, Format: FormatJSON, Rel: ".kiro/hooks/obot-sentry.json"},
 		}
 		assertDestinations(t, dests, want)
 	})

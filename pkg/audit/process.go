@@ -40,7 +40,7 @@ func Process(payload []byte, opts ProcessOptions) (Result, error) {
 		now = time.Now
 	}
 
-	if phase == PhaseFailure && (agent == AgentVSCode || agent == AgentCodex) {
+	if phase == PhaseFailure && (agent == AgentVSCode || agent == AgentCodex || agent == AgentKiro) {
 		return Result{Warnings: []string{
 			fmt.Sprintf("obot-sentry audit: %s failure hooks are not supported; no audit entry submitted", agent),
 		}}, nil
@@ -98,6 +98,8 @@ func normalizeAgent(agent Agent) (Agent, error) {
 		return AgentVSCode, nil
 	case AgentCursor:
 		return AgentCursor, nil
+	case AgentKiro:
+		return AgentKiro, nil
 	default:
 		return "", ErrUnsupportedAgent
 	}
@@ -168,6 +170,9 @@ func normalizeEvent(agent Agent, phase Phase, event nativeEvent, payload []byte,
 	}
 
 	entry.ToolKind, entry.MCPServerHint, entry.MCPToolName = classifyTool(agent, toolName)
+	if agent == AgentKiro {
+		entry.ToolKind, entry.MCPServerHint, entry.MCPToolName = classifyKiroTool(toolName, event.toolInput())
+	}
 	entry.IdempotencyKey = idempotencyKey(entry, payload)
 	return entry, nil
 }
@@ -283,4 +288,24 @@ func cloneRaw(payload []byte) json.RawMessage {
 	clone := make([]byte, len(payload))
 	copy(clone, payload)
 	return clone
+}
+
+// classifyKiroTool is classifyTool for Kiro, whose tool ids need their own
+// rules. Built-in ids are snake_case and classified exactly (toolkind.KiroKind).
+// An MCP id, mcp_<server>_<tool>, is sanitized and lowercased by Kiro and splits
+// at any underscore, so it yields no server hint. A Power's tool runs through
+// kiro_powers with the power, server, and tool named in its input, which does.
+func classifyKiroTool(name string, input json.RawMessage) (kind, server, tool string) {
+	if name == "kiro_powers" {
+		var in struct {
+			Action     string `json:"action"`
+			PowerName  string `json:"powerName"`
+			ServerName string `json:"serverName"`
+			ToolName   string `json:"toolName"`
+		}
+		if json.Unmarshal(input, &in) == nil && in.Action == "use" && in.PowerName != "" && in.ServerName != "" {
+			return toolkind.KindMCP, "power-" + in.PowerName + "-" + in.ServerName, in.ToolName
+		}
+	}
+	return toolkind.KiroKind(name), "", ""
 }

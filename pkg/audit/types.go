@@ -18,6 +18,7 @@ const (
 	AgentCodex      = localagent.Codex
 	AgentVSCode     = localagent.VSCode
 	AgentCursor     = localagent.Cursor
+	AgentKiro       = localagent.Kiro
 )
 
 type Phase string

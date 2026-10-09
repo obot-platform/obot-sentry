@@ -132,6 +132,10 @@ func resolve(ctx context.Context, loader *configLoader, env Env, req ResolveRequ
 		res = resolveCodex(ctx, loader, env, serverName, tr)
 	case localagent.Cursor:
 		res = resolveCursor(ctx, loader, env, req, serverName, tr)
+	case localagent.Kiro:
+		// The diagnostic has no session, so only the given directory is a root.
+		roots, rootsIncomplete := kiroWorkspaceRoots(ctx, loader, env, "", req.CWD)
+		res = resolveKiroKey(ctx, newKiroConfig(ctx, loader, env, roots, rootsIncomplete), env, serverName, tr)
 	default:
 		return unresolved(serverName, fmt.Sprintf("unsupported agent %q", req.Agent))
 	}

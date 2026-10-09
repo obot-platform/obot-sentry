@@ -177,6 +177,74 @@ func desiredVSCode(exe, goos string) vscodeDocument {
 	}}
 }
 
+// --- Kiro: dedicated ~/.kiro/hooks/obot-sentry.json, a flat v1 hooks array ---
+//
+// Kiro's hook file is not keyed by event: it is one array of named hooks, each
+// carrying its own trigger, a matcher regex over the tool id, and an action. The
+// shape is Kiro's v1 schema (Kiro 1.2 agent extension): version "v1", hooks
+// non-empty, and per hook a name, trigger, optional matcher, action {type,
+// command}, and timeout in seconds. Kiro reads the file with a strict
+// JSON.parse, so it must stay plain JSON: a comment makes Kiro skip the file.
+//
+// Kiro only blocks a PreToolUse call on exit code 2. A timeout, a launch failure,
+// or any other exit lets the call run, so unlike Cursor there is no failClosed to
+// set here: the enforce command fails closed by exiting 2 itself.
+
+const (
+	kiroHookVersion = "v1"
+	// kiroMatchAll is the matcher for every tool. Kiro compiles matchers as a
+	// JavaScript RegExp and skips a hook whose matcher does not compile, so the
+	// glob-like "*" other agents accept would silently match nothing.
+	kiroMatchAll = ".*"
+
+	kiroAuditHookName   = "Obot audit"
+	kiroEnforceHookName = "Obot tool policy"
+)
+
+type kiroAction struct {
+	Type    string `json:"type"`
+	Command string `json:"command"`
+}
+
+type kiroHook struct {
+	Name    string     `json:"name"`
+	Trigger string     `json:"trigger"`
+	Matcher string     `json:"matcher"`
+	Action  kiroAction `json:"action"`
+	Timeout int        `json:"timeout"`
+}
+
+type kiroDocument struct {
+	Version string     `json:"version"`
+	Hooks   []kiroHook `json:"hooks"`
+}
+
+// kiroPostToolUse is Kiro's post-tool trigger. Kiro has no failure trigger, so
+// a failed tool call is audited through PostToolUse along with every other.
+const kiroPostToolUse = "PostToolUse"
+
+func desiredKiro(exe, goos string, enforcing bool) kiroDocument {
+	hook := func(name, trigger string, argv []string) kiroHook {
+		return kiroHook{
+			Name:    name,
+			Trigger: trigger,
+			Matcher: kiroMatchAll,
+			Action:  kiroAction{Type: "command", Command: hookCommand(exe, goos, localagent.Kiro, argv)},
+			Timeout: hookTimeout,
+		}
+	}
+	doc := kiroDocument{
+		Version: kiroHookVersion,
+		Hooks: []kiroHook{
+			hook(kiroAuditHookName, kiroPostToolUse, commandArgs(localagent.Kiro, phasePostTool)),
+		},
+	}
+	for _, event := range preToolEvents(localagent.Kiro, enforcing) {
+		doc.Hooks = append(doc.Hooks, hook(kiroEnforceHookName, event, enforceCommandArgs(localagent.Kiro, event)))
+	}
+	return doc
+}
+
 // --- Codex: pinned [features] values plus a nested array-of-tables group ---
 //
 // The Codex desired state is modeled as a typed structure rather than a

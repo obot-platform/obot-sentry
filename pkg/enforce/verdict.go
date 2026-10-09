@@ -137,7 +137,14 @@ func Allow(agent localagent.Agent) []byte {
 }
 
 // Deny renders the response that blocks a tool call.
+//
+// Kiro's is not a JSON document: Kiro blocks only on exit code 2 and hands the
+// hook's stderr to the model as the reason, so its response is the agent-facing
+// text itself, and blocksByExit routes it to stderr (see Run).
 func Deny(agent localagent.Agent, event Event, denial Denial) []byte {
+	if agent == localagent.Kiro {
+		return []byte(denial.AgentMessage)
+	}
 	if agent == localagent.Cursor {
 		return marshal(cursorHookOutput{
 			Permission:  "deny",
@@ -161,4 +168,11 @@ func marshal(out any) []byte {
 		panic("enforce: hook protocol response failed to marshal: " + err.Error())
 	}
 	return data
+}
+
+// blocksByExit reports whether agent's protocol blocks a call by exit status
+// rather than by a response document. For such an agent a denial is written to
+// stderr and the command exits 2; stdout carries nothing.
+func blocksByExit(agent localagent.Agent) bool {
+	return agent == localagent.Kiro
 }

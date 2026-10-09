@@ -47,8 +47,13 @@ func winJoin(base string, parts ...string) string {
 	return out
 }
 
+// kiroHookRel is the dedicated Kiro hook file. Kiro loads every *.json under
+// ~/.kiro/hooks for every workspace, on both platforms, so one owned file there
+// covers the user without touching hooks they wrote themselves.
+const kiroHookRel = ".kiro/hooks/obot-sentry.json"
+
 // Destinations returns the full, ordered set of managed destinations for goos:
-// the four agent hook files plus the VS Code user-settings file. Only the
+// the five agent hook files plus the VS Code user-settings file. Only the
 // darwin and windows layouts are defined; other platforms return nil and are
 // rejected earlier by the platform check.
 func Destinations(goos string) []Destination {
@@ -60,6 +65,7 @@ func Destinations(goos string) []Destination {
 			{Agent: localagent.VSCode, Label: localagent.VSCode.DisplayName(), Scope: ScopeUser, Format: FormatJSON, Rel: ".copilot/hooks/obot-sentry.json"},
 			{Agent: localagent.Cursor, Label: localagent.Cursor.DisplayName(), Scope: ScopeMachine, Format: FormatJSON, Abs: "/Library/Application Support/Cursor/hooks.json"},
 			{Agent: localagent.VSCode, Label: "VS Code settings", Scope: ScopeUser, Format: FormatJSONC, Rel: "Library/Application Support/Code/User/settings.json"},
+			{Agent: localagent.Kiro, Label: localagent.Kiro.DisplayName(), Scope: ScopeUser, Format: FormatJSON, Rel: kiroHookRel},
 		}
 	case "windows":
 		pd := windowsProgramData()
@@ -69,6 +75,7 @@ func Destinations(goos string) []Destination {
 			{Agent: localagent.VSCode, Label: localagent.VSCode.DisplayName(), Scope: ScopeUser, Format: FormatJSON, Rel: ".copilot/hooks/obot-sentry.json"},
 			{Agent: localagent.Cursor, Label: localagent.Cursor.DisplayName(), Scope: ScopeMachine, Format: FormatJSON, Abs: winJoin(pd, "Cursor", "hooks.json")},
 			{Agent: localagent.VSCode, Label: "VS Code settings", Scope: ScopeUser, Format: FormatJSONC, Rel: "AppData/Roaming/Code/User/settings.json"},
+			{Agent: localagent.Kiro, Label: localagent.Kiro.DisplayName(), Scope: ScopeUser, Format: FormatJSON, Rel: kiroHookRel},
 		}
 	default:
 		return nil

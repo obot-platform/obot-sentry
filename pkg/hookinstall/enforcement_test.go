@@ -402,6 +402,19 @@ func writtenPreToolKeys(t *testing.T, agent localagent.Agent) map[string]bool {
 			}
 			continue
 		}
+		if d.Agent == localagent.Kiro {
+			// Kiro's hooks are one array, each entry naming its own trigger.
+			var kiro kiroDocument
+			if err := json.Unmarshal(out.data, &kiro); err != nil {
+				t.Fatalf("%s: %v", d.Label, err)
+			}
+			for _, hook := range kiro.Hooks {
+				if strings.Contains(hook.Action.Command, "enforce --agent") {
+					keys[hook.Trigger] = true
+				}
+			}
+			continue
+		}
 		if err := json.Unmarshal(out.data, &doc); err != nil {
 			t.Fatalf("%s: %v", d.Label, err)
 		}

@@ -24,6 +24,7 @@ const (
 	wireAgentClaudeCode = "claude_code"
 	wireAgentCodex      = "codex"
 	wireAgentCursor     = "cursor"
+	wireAgentKiro       = "kiro"
 )
 
 // ParseAgent maps a CLI --agent value to a supported agent.
@@ -35,6 +36,8 @@ func ParseAgent(value string) (localagent.Agent, error) {
 		return localagent.Codex, nil
 	case localagent.Cursor:
 		return localagent.Cursor, nil
+	case localagent.Kiro:
+		return localagent.Kiro, nil
 	default:
 		return "", fmt.Errorf("unsupported enforcement agent %q", value)
 	}
@@ -42,10 +45,10 @@ func ParseAgent(value string) (localagent.Agent, error) {
 
 // ParseEvent maps a CLI --event value to one of agent's own pre-tool events.
 // Events are not interchangeable across agents: Cursor's preToolUse is a
-// different event from the PreToolUse the other two fire.
+// different event from the PreToolUse the others fire.
 func ParseEvent(agent localagent.Agent, value string) (Event, error) {
 	switch agent {
-	case localagent.ClaudeCode, localagent.Codex:
+	case localagent.ClaudeCode, localagent.Codex, localagent.Kiro:
 		if Event(value) == EventPreToolUse {
 			return EventPreToolUse, nil
 		}
@@ -69,6 +72,8 @@ func wireAgent(agent localagent.Agent) string {
 		return wireAgentCodex
 	case localagent.Cursor:
 		return wireAgentCursor
+	case localagent.Kiro:
+		return wireAgentKiro
 	default:
 		return ""
 	}
@@ -79,7 +84,7 @@ func wireAgent(agent localagent.Agent) string {
 // fires none, so that installing enforcement hooks cannot write an entry for one.
 func Events(agent localagent.Agent) []Event {
 	switch agent {
-	case localagent.ClaudeCode, localagent.Codex:
+	case localagent.ClaudeCode, localagent.Codex, localagent.Kiro:
 		return []Event{EventPreToolUse}
 	case localagent.Cursor:
 		return []Event{EventCursorBeforeMCPExecution, EventCursorPreToolUse}

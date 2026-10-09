@@ -47,7 +47,7 @@ func (a *Audit) Run(c *cobra.Command, _ []string) error {
 
 type AuditSubmit struct {
 	ConfigFlags
-	Agent           string `usage:"local agent provider: claude-code, codex, vscode, cursor"`
+	Agent           string `usage:"local agent provider: claude-code, codex, vscode, cursor, kiro"`
 	Phase           string `usage:"hook phase: post-tool or failure"`
 	Input           string `usage:"hook payload input path, or - for stdin" default:"-"`
 	ManagedBy       string `usage:"managed hook marker" name:"managed-by" hidden:"true"`

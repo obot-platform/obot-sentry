@@ -463,3 +463,34 @@ func TestEnforceResolveRejectsUnsupportedAgent(t *testing.T) {
 		t.Fatal("enforce resolve accepted an empty --server")
 	}
 }
+
+// TestEnforceKiroDenyExitsTwoQuietly: Kiro blocks only on exit 2 and shows
+// stderr to the model, so a Kiro denial is the agent message on stderr, nothing
+// on stdout, and a quiet exit 2 that main does not log over.
+func TestEnforceKiroDenyExitsTwoQuietly(t *testing.T) {
+	home := homeFixture(t)
+	input := writeTempFile(t, `{"session_id":"sess_x","hook_event_name":"PreToolUse","cwd":"`+home+`","tool_name":"execute_bash","tool_input":{"command":"ls"}}`)
+
+	stdout, stderr, err := runCommand(t, enforceRoot(t, mdmconfig.Config{}),
+		"enforce", "--agent", "kiro", "--event", "PreToolUse", "--input", input)
+	var exitErr *ExitCodeError
+	if !errors.As(err, &exitErr) || exitErr.Code != 2 || !exitErr.Quiet {
+		t.Fatalf("err = %#v, want a quiet exit 2", err)
+	}
+	if stdout != "" {
+		t.Errorf("stdout = %q, want nothing", stdout)
+	}
+	if !strings.Contains(stderr, "Obot blocked this call") || strings.Contains(stderr, "obot-sentry enforce: blocked") {
+		t.Errorf("stderr = %q, want only the agent-facing denial", stderr)
+	}
+}
+
+// TestEnforceKiroDryRunNeverBlocks: a dry run promises no verdict, so even a
+// payload that can't be read must not take Kiro's blocking exit.
+func TestEnforceKiroDryRunNeverBlocks(t *testing.T) {
+	input := writeTempFile(t, "{")
+	if _, _, err := runCommand(t, enforceRoot(t, mdmconfig.Config{}),
+		"enforce", "--agent", "kiro", "--event", "PreToolUse", "--input", input, "--dry-run"); err != nil {
+		t.Fatalf("enforce --dry-run exited non-zero: %v", err)
+	}
+}

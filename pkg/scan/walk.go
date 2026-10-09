@@ -63,9 +63,13 @@ func walk(ctx context.Context, s *state, srcs []Source, skipPaths map[string]boo
 		return nil, nil
 	}
 
-	var matchers []Source
+	var matchers, dirMatchers []Source
 	for _, src := range srcs {
-		if src.Scope.has(Project) {
+		switch {
+		case !src.Scope.has(Project):
+		case src.Dir:
+			dirMatchers = append(dirMatchers, src)
+		default:
 			matchers = append(matchers, src)
 		}
 	}
@@ -93,6 +97,17 @@ func walk(ctx context.Context, s *state, srcs []Source, skipPaths map[string]boo
 			// match at depths 1…maxDepth (inclusive).
 			if depth := strings.Count(rel, "/") + 1; depth >= s.maxDepth {
 				return fs.SkipDir
+			}
+			// A directory source reads its own tree, so the walk hands
+			// it over and doesn't descend: nothing inside is matched
+			// twice.
+			for _, m := range dirMatchers {
+				if rel == m.Path || strings.HasSuffix(rel, "/"+m.Path) {
+					if !skipPaths[rel] {
+						hits = append(hits, projectHit{path: rel, source: m})
+					}
+					return fs.SkipDir
+				}
 			}
 			return nil
 		}

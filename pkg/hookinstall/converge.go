@@ -59,6 +59,8 @@ func mergeConfig(d Destination, existing []byte, exe, goos string, enforcing boo
 		return mergeVSCodeSettings(existing)
 	case d.Agent == localagent.VSCode:
 		return mergeVSCodeHook(existing, exe, goos)
+	case d.Agent == localagent.Kiro:
+		return mergeKiro(existing, exe, goos, enforcing)
 	default:
 		return mergeOutcome{}, fmt.Errorf("no merge writer for destination %q", d.Label)
 	}
@@ -75,6 +77,8 @@ func removeConfig(d Destination, existing []byte) (mergeOutcome, error) {
 		return removeJSONHooks(existing, true)
 	case d.Agent == localagent.Cursor || d.Agent == localagent.VSCode:
 		return removeJSONHooks(existing, false)
+	case d.Agent == localagent.Kiro:
+		return removeKiroHooks(existing)
 	default:
 		return mergeOutcome{}, fmt.Errorf("no uninstall writer for destination %q", d.Label)
 	}
@@ -306,6 +310,121 @@ func mergeVSCodeHook(existing []byte, exe, goos string) (mergeOutcome, error) {
 		}
 		return mergeEventArray(hooks, "PostToolUse", desired.Hooks.PostToolUse[0], filterDirectOwned)
 	})
+}
+
+// mergeKiro converges the dedicated Kiro obot-sentry.json: the schema version
+// forced to v1, and one owned entry per trigger in the flat hooks array.
+func mergeKiro(existing []byte, exe, goos string, enforcing bool) (mergeOutcome, error) {
+	desired := desiredKiro(exe, goos, enforcing)
+	removedHooks := 0
+	out, err := mergeJSONHook(existing, desired, func(obj *hujson.Object) (int, bool, error) {
+		objectSet(obj, "version", hujson.Value{Value: hujson.String(kiroHookVersion)})
+		hooks, err := getOrCreateArrayMember(obj, "hooks")
+		if err != nil {
+			return 0, false, err
+		}
+		// Every owned entry comes out, and the desired ones go back in, so a
+		// stale path, a duplicate, and an enforcement hook left over from an
+		// --enforce run that this run doesn't repeat all converge in one pass.
+		owned := filterKiro(hooks, isOwnedCommand)
+		enforcementOwned := 0
+		if !enforcing {
+			enforcementOwned = countKiroEnforcement(existing)
+		}
+		for _, hook := range desired.Hooks {
+			entry, err := jsonValueFromGo(hook)
+			if err != nil {
+				return 0, false, err
+			}
+			arrayAppend(hooks, entry)
+		}
+		removedHooks = enforcementOwned
+		return max(0, owned-len(desired.Hooks)-enforcementOwned), owned > 0, nil
+	})
+	out.removed = removedHooks
+	return out, err
+}
+
+// removeKiroHooks removes every owned entry from the Kiro hook file. The file
+// is left in place even when that empties it: Kiro rejects an empty hooks
+// array as invalid and loads nothing from it, which is the intended result.
+func removeKiroHooks(existing []byte) (mergeOutcome, error) {
+	if isEmptyConfig(existing) {
+		return mergeOutcome{data: existing, status: StatusUnchanged}, nil
+	}
+	cfg, err := parseJSONConfig(existing)
+	if err != nil {
+		return mergeOutcome{}, err
+	}
+	obj, err := cfg.object()
+	if err != nil {
+		return mergeOutcome{}, err
+	}
+	hooksValue := objectMember(obj, "hooks")
+	if hooksValue == nil {
+		return mergeOutcome{data: existing, status: StatusUnchanged}, nil
+	}
+	hooks, ok := asArray(hooksValue)
+	if !ok {
+		return mergeOutcome{}, fmt.Errorf("config member %q is %s, want a JSON array", "hooks", kindName(hooksValue.Value))
+	}
+	removed := filterKiro(hooks, isOwnedCommand)
+	if removed == 0 {
+		return mergeOutcome{data: existing, status: StatusUnchanged}, nil
+	}
+	return mergeOutcome{data: cfg.pack(), status: StatusRemoved, removed: removed, write: true}, nil
+}
+
+// filterKiro removes the hooks whose action.command matches owned, returning
+// the count removed. Entries that aren't objects, or whose action isn't a
+// command, are someone else's and stay.
+func filterKiro(arr *hujson.Array, owned func(string) bool) int {
+	removed := 0
+	kept := arr.Elements[:0]
+	for i := range arr.Elements {
+		if cmd, ok := kiroEntryCommand(&arr.Elements[i]); ok && owned(cmd) {
+			removed++
+			continue
+		}
+		kept = append(kept, arr.Elements[i])
+	}
+	arr.Elements = kept
+	return removed
+}
+
+// kiroEntryCommand returns a Kiro hook's action.command.
+func kiroEntryCommand(entry *hujson.Value) (string, bool) {
+	obj, ok := asObject(entry)
+	if !ok {
+		return "", false
+	}
+	action := objectMember(obj, "action")
+	if action == nil {
+		return "", false
+	}
+	return entryCommand(action)
+}
+
+// countKiroEnforcement counts the owned enforcement hooks in an existing Kiro
+// file, for reporting how many a non-enforcing run removes.
+func countKiroEnforcement(existing []byte) int {
+	cfg, err := parseJSONConfig(existing)
+	if err != nil {
+		return 0
+	}
+	obj, err := cfg.object()
+	if err != nil {
+		return 0
+	}
+	hooksValue := objectMember(obj, "hooks")
+	if hooksValue == nil {
+		return 0
+	}
+	hooks, ok := asArray(hooksValue)
+	if !ok {
+		return 0
+	}
+	return filterKiro(hooks, isOwnedEnforcementCommand)
 }
 
 // mergeVSCodeSettings converges the JSONC VS Code user settings: it merges the

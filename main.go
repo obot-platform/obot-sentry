@@ -22,7 +22,9 @@ func main() {
 		// missing/invalid deployment config from a runtime failure.
 		var exitErr *obotsentry.ExitCodeError
 		if errors.As(err, &exitErr) {
-			log.Print(err)
+			if !exitErr.Quiet {
+				log.Print(err)
+			}
 			os.Exit(exitErr.Code)
 		}
 		log.Fatal(err)

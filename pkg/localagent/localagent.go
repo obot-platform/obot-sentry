@@ -12,12 +12,13 @@ const (
 	Codex      Agent = "codex"
 	VSCode     Agent = "vscode"
 	Cursor     Agent = "cursor"
+	Kiro       Agent = "kiro"
 )
 
 // All returns the fixed, ordered set of supported agents. Order is deterministic
 // so preflight, plans, and summaries are stable across runs.
 func All() []Agent {
-	return []Agent{ClaudeCode, Codex, VSCode, Cursor}
+	return []Agent{ClaudeCode, Codex, VSCode, Cursor, Kiro}
 }
 
 // DisplayName is the human-readable agent name used in operator-facing output.
@@ -31,6 +32,8 @@ func (a Agent) DisplayName() string {
 		return "Visual Studio Code"
 	case Cursor:
 		return "Cursor"
+	case Kiro:
+		return "Kiro"
 	default:
 		return string(a)
 	}

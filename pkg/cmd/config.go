@@ -44,6 +44,9 @@ func (f ConfigFlags) resolve() (mdmconfig.Config, error) {
 type ExitCodeError struct {
 	Code int
 	Err  error
+	// Quiet suppresses the error line main would otherwise log to stderr, for a
+	// command whose stderr is a protocol channel that already carries its answer.
+	Quiet bool
 }
 
 func (e *ExitCodeError) Error() string { return e.Err.Error() }

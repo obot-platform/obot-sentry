@@ -76,6 +76,7 @@ type Location struct {
 //   - OpenCode: https://opencode.ai/docs/skills/
 //   - VS Code / Copilot: https://code.visualstudio.com/docs/agent-customization/agent-skills
 //   - Antigravity: https://antigravity.google/docs/skills
+//   - Kiro: https://kiro.dev/docs/skills/
 var skillDirs = []Location{
 	// Legacy Antigravity layout.
 	{".agent/skills", Project, []string{"antigravity"}},
@@ -93,6 +94,7 @@ var skillDirs = []Location{
 	// with the plugin that owns them.
 	{antigravityBuiltinSkills, Home, []string{"antigravity"}},
 	{".github/skills", Project, []string{"vscode"}},
+	{".kiro/skills", Home | Project, []string{"kiro"}},
 	{".opencode/skills", Project, []string{"opencode"}},
 }
 

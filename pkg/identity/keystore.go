@@ -22,12 +22,17 @@ const keyFile = "device_key.pem"
 // loadOrCreateKey returns the shared Ed25519 identity key from dir,
 // generating and persisting one on the machine's first run. Creation
 // uses O_EXCL so concurrent first runs by different users converge on
-// a single key: the losers re-read the winner's file.
+// a single key: the losers re-read the winner's file, waiting briefly
+// if the winner has created it but not yet finished writing it.
 func loadOrCreateKey(dir string) (ed25519.PrivateKey, error) {
 	p := filepath.Join(dir, keyFile)
 
 	if b, err := os.ReadFile(p); err == nil {
-		return parseKeyPEM(b)
+		if key, err := parseKeyPEM(b); err == nil {
+			return key, nil
+		}
+		// Present but not parseable: another first run may be mid-write.
+		return awaitKey(p)
 	} else if !os.IsNotExist(err) {
 		return nil, err
 	}
@@ -44,17 +49,8 @@ func loadOrCreateKey(dir string) (ed25519.PrivateKey, error) {
 
 	f, err := os.OpenFile(p, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 	if os.IsExist(err) {
-		// Another user's first run won the race; use their key. Retry
-		// briefly in case the winner is mid-write.
-		for range 5 {
-			if b, err := os.ReadFile(p); err == nil {
-				if key, err := parseKeyPEM(b); err == nil {
-					return key, nil
-				}
-			}
-			time.Sleep(100 * time.Millisecond)
-		}
-		return nil, fmt.Errorf("device key %s exists but is unreadable", p)
+		// Another user's first run won the race; use their key.
+		return awaitKey(p)
 	} else if err != nil {
 		return nil, err
 	}
@@ -67,6 +63,25 @@ func loadOrCreateKey(dir string) (ed25519.PrivateKey, error) {
 		return nil, err
 	}
 	return key, nil
+}
+
+// awaitKey re-reads the key file at p, which is known to exist, retrying
+// briefly in case the first run that created it is still writing it.
+func awaitKey(p string) (ed25519.PrivateKey, error) {
+	var lastErr error
+	for range 5 {
+		time.Sleep(100 * time.Millisecond)
+		b, err := os.ReadFile(p)
+		if err == nil {
+			key, perr := parseKeyPEM(b)
+			if perr == nil {
+				return key, nil
+			}
+			err = perr
+		}
+		lastErr = err
+	}
+	return nil, fmt.Errorf("device key %s exists but is unreadable: %w", p, lastErr)
 }
 
 func parseKeyPEM(b []byte) (ed25519.PrivateKey, error) {
