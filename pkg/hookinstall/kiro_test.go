@@ -152,3 +152,25 @@ func TestKiroRejectsIncompatibleHooks(t *testing.T) {
 		t.Fatal("expected an error for a non-array hooks member")
 	}
 }
+
+// TestKiroReenablesDisabledHook: turning a hook off in Kiro's Agent Hooks
+// panel writes "enabled": false into our entry. The next convergence replaces
+// the entry, which turns the hook back on.
+func TestKiroReenablesDisabledHook(t *testing.T) {
+	d := destFor(t, localagent.Kiro, FormatJSON)
+	fresh, err := mergeConfig(d, nil, macExe, "darwin", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	disabled := strings.Replace(string(fresh.data), `"name": "Obot audit",`, `"name": "Obot audit", "enabled": false,`, 1)
+	if disabled == string(fresh.data) {
+		t.Fatal("test setup: could not disable the hook")
+	}
+	out, err := mergeConfig(d, []byte(disabled), macExe, "darwin", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.status != StatusUpdated || !out.write || strings.Contains(string(out.data), `"enabled"`) {
+		t.Fatalf("outcome = %s, write = %v, data:\n%s", out.status, out.write, out.data)
+	}
+}
