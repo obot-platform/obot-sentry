@@ -122,6 +122,8 @@ hook cannot tell which MCP server a call targets, the call is blocked.
   folder trusted after Kiro starts stays unchecked until Kiro restarts. See
   [Tool call enforcement](https://docs.obot.ai/functionality/device-management/#tool-call-enforcement)
   for what to cover with your MDM.
+- The Kiro CLI runs these hooks only on its v3 agent engine. Sessions on its
+  default v2 engine are neither checked nor audited.
 - An MCP server can be allowlisted by URL, by its `npx`/`uvx` package, or — for a
   claude.ai connector — by display name. A stdio server started from a local
   executable path presents none of those, so it cannot be allowlisted and is
