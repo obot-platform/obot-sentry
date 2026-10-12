@@ -393,3 +393,91 @@ OBOT_SENTRY_SERVER_URL=http://localhost:8080 OBOT_SENTRY_ENROLLMENT_KEY=ode1-...
 
 Repeat submissions inside the scan interval are throttled; add `--force` to
 submit every time.
+
+## Testing, releasing, and rolling out
+
+A change reaches devices in three steps: build MDM assets from your branch and
+test them against a local obot, tag a release, then bump the default asset
+source in obot so new obot releases serve it.
+
+### 1. Test a change with real MDM assets
+
+Push your change to a scratch branch on this repo (not your fork) and build the
+full asset tree there:
+
+```
+git switch -c "$(git branch --show-current)-mdm"
+git push upstream HEAD
+MDM_REMOTE=upstream make mdm VERSION=0.1.8   # dispatches build.yaml, downloads dist/mdm-assets
+```
+
+The `-mdm` suffix keeps the push off `main` even if you start there. Switch
+back to your branch afterward and delete the scratch branch from this repo when
+you're done (`git push upstream --delete <branch>-mdm`).
+
+Only this repo holds the signing secrets, and the macOS MDM channels need
+them: Intune and Jamf accept only a Developer ID-signed pkg, and the PPPC
+profile grants Full Disk Access only to a binary signed by our team. A plain
+`make mdm` builds on your fork (`origin`) and skips signing, as PR builds do,
+so its `mdm-assets` (and every PR's `mdm-assets` workflow artifact) are only
+good for the Windows channels and the manual macOS channel.
+
+Pass a `VERSION` above whatever is installed on your test machine. Without one
+the build is versioned `0.0.<run number>`, and the MSI refuses to downgrade a
+machine that already runs a release.
+
+Point a local obot at the result with an absolute path:
+
+```
+OBOT_SERVER_MDM_ASSET_SOURCE=$PWD/dist/mdm-assets
+```
+
+obot imports the source at startup whenever its value changes. Rebuilding into
+the same directory does not change the value, so after a rebuild use **Refresh**
+on obot's Inventory page (or `POST /api/mdm/asset-source/refresh`) to re-import
+it. Then download a configuration from the Inventory wizard, install it on a
+test machine, and check that the device enrolls and submits.
+
+### 2. Release
+
+Releases are cut from `main` by pushing a `v<x.y.z>` tag to this repo:
+
+```
+git checkout main && git pull upstream main
+git tag v0.1.8
+git push upstream v0.1.8
+```
+
+`release.yml` runs the full `build.yaml` pipeline with that version and the
+signing secrets, then creates a GitHub release carrying `mdm-assets.tar.gz` and
+its `checksums.txt`. The version must be numeric `x.y.z`: prerelease tags such
+as `v0.1.8-rc1` are skipped entirely, because the MSI's `ProductVersion` can't
+carry a suffix. The tarball's URL is what obot consumes:
+
+```
+https://github.com/obot-platform/obot-sentry/releases/download/v0.1.8/mdm-assets.tar.gz
+```
+
+Before rolling it out, point a local obot at that URL
+(`OBOT_SERVER_MDM_ASSET_SOURCE=<url>`) and repeat the smoke test from step 1
+against the release build.
+
+### 3. Roll it out in obot
+
+obot defaults `OBOT_SERVER_MDM_ASSET_SOURCE` to a pinned release URL, so a new
+obot-sentry release reaches deployments only after obot bumps that default. In
+[obot](https://github.com/obot-platform/obot), open a PR (titled
+`chore: bump obot-sentry to v0.1.8` by convention) that changes the version in
+both places the default is spelled out:
+
+- `pkg/services/config.go`: the `default:` tag on `MDMAssetSource`
+- `docs/docs/configuration/server-configuration.md`: the default column for
+  `OBOT_SERVER_MDM_ASSET_SOURCE`
+
+Once the bump is in an obot release, upgraded servers see the new
+source at startup and import it, and the Inventory wizard serves the new
+installers. Already-deployed devices pick up the new version when admins push
+the new installer through their MDM. Deployments that set
+`OBOT_SERVER_MDM_ASSET_SOURCE` explicitly (for example via the Helm chart's
+`config.OBOT_SERVER_MDM_ASSET_SOURCE`) keep their own value and must update it
+themselves.

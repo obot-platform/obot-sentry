@@ -2,6 +2,7 @@
 # Build the MDM assets remotely: dispatch the build.yaml workflow on the
 # current branch of the repo a git remote points at, wait for it to
 # finish, and download the assembled assets into dist/mdm-assets.
+# Refuses to run on main; test builds belong on a feature branch.
 #
 # Defaults to `origin` (your fork), which produces unsigned installers:
 # forks hold none of the signing secrets. Point it at the remote that
@@ -18,6 +19,10 @@ remote="${MDM_REMOTE:-origin}"
 branch="$(git branch --show-current)"
 if [[ -z "$branch" ]]; then
 	echo "detached HEAD; check out a branch first" >&2
+	exit 1
+fi
+if [[ "$branch" == "main" ]]; then
+	echo "on main; check out a feature branch first" >&2
 	exit 1
 fi
 if ! git remote get-url "$remote" >/dev/null 2>&1; then
