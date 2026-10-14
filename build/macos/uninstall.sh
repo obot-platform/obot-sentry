@@ -33,6 +33,8 @@ pkgutil --forget ai.obot.obot-sentry 2>/dev/null || true
 # Local configuration only. MDM-delivered settings live under /Library/Managed
 # Preferences and go away with the configuration profile.
 defaults delete /Library/Preferences/ai.obot.obot-sentry 2>/dev/null || true
+# defaults delete empties the domain but leaves the plist behind.
+rm -f /Library/Preferences/ai.obot.obot-sentry.plist
 
 rm -rf "/Library/Application Support/obot/obot-sentry"
 for home in /Users/*; do
