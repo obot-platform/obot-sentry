@@ -152,6 +152,16 @@ hook cannot tell which MCP server a call targets, the call is blocked.
 - Turning enforcement off in Obot stops the blocking immediately, for all computers,
   even before the hooks are removed from any computer.
 {{end}}
+## Turning enforcement on or off
+
+The configuration profile in this package carries the **Enforce tool calls on
+enrolled devices** setting from Obot as of its download: enforcement is {{if .enforcementEnabled}}on{{else}}off{{end}}.
+After changing that setting, re-download the install package, replace
+`REPLACE_WITH_ENROLLMENT_KEY` in the new `ai.obot.obot-sentry.mobileconfig`, and
+re-upload it to the same profile, as in step 2. Devices pick it up on their next
+profile sync, and the hook-install job applies it within the hour after that.
+The agent doesn't need to be reinstalled.
+
 ## Upgrades
 
 Package filenames carry the version, so releases coexist in Jamf:
