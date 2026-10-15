@@ -9,6 +9,7 @@ import (
 
 	"github.com/obot-platform/obot-sentry/pkg/agent"
 	"github.com/obot-platform/obot-sentry/pkg/datadir"
+	"github.com/obot-platform/obot-sentry/pkg/mdmconfig"
 )
 
 type Enroll struct {
@@ -33,8 +34,8 @@ func (e *Enroll) Run(cmd *cobra.Command, _ []string) error {
 	if cfg.ServerURL == "" {
 		return NewConfigError(fmt.Errorf("no server URL configured (flag, env, or MDM)"))
 	}
-	if cfg.EnrollmentKey == "" {
-		return NewConfigError(fmt.Errorf("no enrollment key configured (flag, env, or MDM)"))
+	if err := mdmconfig.ValidateEnrollmentKey(cfg.EnrollmentKey); err != nil {
+		return NewConfigError(err)
 	}
 
 	dir, err := enrollStateDir()
@@ -47,7 +48,7 @@ func (e *Enroll) Run(cmd *cobra.Command, _ []string) error {
 	}
 	id, st, err := agent.New(dir, idDir, cfg).EnsureEnrolled(cmd.Context())
 	if err != nil {
-		return err
+		return enrollmentError(err)
 	}
 	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Enrolled as device %s (deployment %d, enrolled at %s)\n",
 		id.DeviceID, st.MDMDeploymentID, st.EnrolledAt.Format(time.RFC3339))

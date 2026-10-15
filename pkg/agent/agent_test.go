@@ -2,9 +2,11 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -124,5 +126,87 @@ func TestSubmitLocalAgentAuditLogsStateSaveFailureDoesNotFailSubmit(t *testing.T
 	}
 	if submitCalls != 1 {
 		t.Fatalf("expected exactly one successful submit, got %d", submitCalls)
+	}
+}
+
+// A placeholder key can't re-enroll either, so a rejected device credential
+// must surface as the original 401 rather than a key error that would spool.
+func TestSubmitLocalAgentAuditLogsUnauthorizedWithPlaceholderKeyDoesNotReEnroll(t *testing.T) {
+	var submitCalls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/local-agent-audit-logs" {
+			submitCalls++
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		t.Errorf("unexpected request to %s", r.URL.Path)
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	a, id, st := enrolledAgent(t, srv.URL, mdmconfig.EnrollmentKeyPlaceholder)
+
+	err := a.SubmitLocalAgentAuditLogs(t.Context(), id, st, []types.LocalAgentToolCallAuditLogInput{{}})
+	if !client.IsUnauthorized(err) {
+		t.Fatalf("expected an unauthorized (*ErrHTTP) error so the caller discards without spooling, got %v", err)
+	}
+	if submitCalls != 1 {
+		t.Fatalf("expected exactly one submit attempt (no re-enroll/retry), got %d", submitCalls)
+	}
+}
+
+// Keys that can't possibly enroll are rejected locally, before any request.
+func TestEnsureEnrolledRejectsMalformedKeyWithoutContactingServer(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("unexpected request to %s", r.URL.Path)
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	for _, key := range []string{"", mdmconfig.EnrollmentKeyPlaceholder, "ode1-not-a-key"} {
+		dir := t.TempDir()
+		_, _, err := New(dir, dir, mdmconfig.Config{ServerURL: srv.URL, EnrollmentKey: key}).EnsureEnrolled(t.Context())
+		if _, ok := errors.AsType[*mdmconfig.EnrollmentKeyError](err); !ok {
+			t.Errorf("EnsureEnrolled with key %q = %v, want an *EnrollmentKeyError", key, err)
+		}
+	}
+}
+
+// A 401 from enroll is reported as a key problem while still reading as
+// unauthorized to the audit path, which discards on 401.
+func TestEnsureEnrolledReportsRejectedKey(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+
+	dir := t.TempDir()
+	_, _, err := New(dir, dir, mdmconfig.Config{ServerURL: srv.URL, EnrollmentKey: "ode1-3-17-secret"}).EnsureEnrolled(t.Context())
+	keyErr, ok := errors.AsType[*mdmconfig.EnrollmentKeyError](err)
+	if !ok {
+		t.Fatalf("expected an *EnrollmentKeyError for a 401 from enroll, got %v", err)
+	}
+	if !strings.Contains(keyErr.Error(), "server rejected the enrollment key") {
+		t.Errorf("error = %q, want it to say the server rejected the key", keyErr.Error())
+	}
+	if !client.IsUnauthorized(err) {
+		t.Errorf("a rejected key must still read as unauthorized for callers that discard on 401, got %v", err)
+	}
+}
+
+// Only auth failures blame the key; a server error stays a runtime failure.
+func TestEnsureEnrolledLeavesTransientFailuresAlone(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+
+	dir := t.TempDir()
+	_, _, err := New(dir, dir, mdmconfig.Config{ServerURL: srv.URL, EnrollmentKey: "ode1-3-17-secret"}).EnsureEnrolled(t.Context())
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if _, ok := errors.AsType[*mdmconfig.EnrollmentKeyError](err); ok {
+		t.Fatalf("a 503 is not a key problem, got %v", err)
 	}
 }

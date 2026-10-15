@@ -110,6 +110,17 @@ Everything below needs an administrator account.
    log show --last 2h --predicate 'process == "obot-sentry"'
    ```
 
+5. Check the agent's configuration, enrollment, and last scan in one place, as
+   the signed-in user:
+
+   ```sh
+   obot-sentry status
+   ```
+
+   If the device isn't enrolled yet, this enrolls it now, so a wrong server URL
+   or an enrollment key Obot rejects shows up right away. It exits 2 for a
+   configuration problem. `Last scan` reports that user's latest scan.
+
 ## Standalone binary (Alternate)
 
 Install `obot-sentry` by hand to run one-off scans or install hooks yourself.
