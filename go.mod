@@ -18,7 +18,7 @@ require (
 
 require (
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
-	github.com/klauspost/compress v1.18.6 // indirect
+	github.com/klauspost/compress v1.18.7 // indirect
 	github.com/kr/text v0.2.0 // indirect
 	github.com/obot-platform/obot/logger v0.0.0-20241217130503-4004a5c69f32 // indirect
 	github.com/rogpeppe/go-internal v1.15.0 // indirect
