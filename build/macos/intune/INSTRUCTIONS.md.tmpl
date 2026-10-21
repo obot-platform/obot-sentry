@@ -167,13 +167,21 @@ files, re-upload them to the same profiles.
 
 ## Uninstall
 
-1. Add `uninstall.sh` as a shell script under *Devices > macOS > Manage devices >
-   Scripts > Add*, and set **Run script as signed-in user** to **No**.
+1. Take the users, groups, or devices you are removing Obot Sentry from off the
+   app's **Required** assignment and off the assignments of both configuration
+   profiles. If they belong to a group the app stays assigned to, add them to
+   the app's **Excluded** groups instead. While the app is still **Required**
+   for a device, Intune reinstalls the agent the script removes on its next
+   check-in.
 
-2. Assign it to the targets you are removing Obot Sentry from. It is idempotent,
-   so a device that already ran it is unaffected.
+2. Add `uninstall.sh` as a shell script under *Devices > macOS > Manage devices >
+   Scripts > Add*, set **Run script as signed-in user** to **No**, and assign it
+   to the targets removed in step 1. It is idempotent, so a device that already
+   ran it is unaffected.
 
-3. Once the script has run everywhere, unassign the app and both configuration
-   profiles.
+The script needs none of the settings removed in step 1, so it removes the
+agent, both launchd jobs, and the hooks whenever it lands. Scripts run on the
+management agent's next check-in; to run it right away, force a check-in on the
+device with `sudo killall IntuneMdmAgent`.
 
 Restart Claude Code, Codex, VS Code, Cursor, and Kiro afterward to drop the hooks.
