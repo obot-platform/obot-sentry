@@ -60,11 +60,16 @@ func (a *Agent) EnsureEnrolled(ctx context.Context) (*identity.Identity, state.S
 		return id, st, nil
 	}
 
-	if a.Config.EnrollmentKey == "" {
-		return nil, st, fmt.Errorf("device %s is not enrolled with %s and no enrollment key is configured", id.DeviceID, serverURL)
+	if err := mdmconfig.ValidateEnrollmentKey(a.Config.EnrollmentKey); err != nil {
+		return nil, st, fmt.Errorf("device %s is not enrolled with %s: %w", id.DeviceID, serverURL, err)
 	}
 
 	device, err := a.Client.Enroll(ctx, a.Config.EnrollmentKey, id)
+	if client.IsUnauthorized(err) {
+		// The key is the only credential on this request, so a 401 means the key
+		// itself is bad. Keep the *ErrHTTP wrapped for callers that discard on 401.
+		err = &mdmconfig.EnrollmentKeyError{Reason: "the server rejected the enrollment key (mistyped, expired, or revoked)", Err: err}
+	}
 	if err != nil {
 		return nil, st, fmt.Errorf("enrolling device: %w", err)
 	}
@@ -115,11 +120,11 @@ func (a *Agent) SubmitScan(ctx context.Context, id *identity.Identity, st state.
 func (a *Agent) SubmitLocalAgentAuditLogs(ctx context.Context, id *identity.Identity, st state.State, logs []types.LocalAgentToolCallAuditLogInput) error {
 	err := a.Client.SubmitLocalAgentAuditLogs(ctx, id, logs)
 	if client.IsUnauthorized(err) {
-		// Without an enrollment key we cannot re-enroll, so a rejected device
+		// Without a usable enrollment key we cannot re-enroll, so a rejected device
 		// credential is a terminal auth failure. Return the original 401/403
 		// (an *ErrHTTP) so the caller fails open and discards rather than
 		// spooling an event that can never authenticate.
-		if a.Config.EnrollmentKey == "" {
+		if mdmconfig.ValidateEnrollmentKey(a.Config.EnrollmentKey) != nil {
 			return err
 		}
 		slog.Warn("device credentials rejected; re-enrolling and retrying local-agent audit submission once", "err", err)

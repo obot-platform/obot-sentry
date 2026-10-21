@@ -1,7 +1,9 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/obot-platform/obot-sentry/pkg/mdmconfig"
 )
@@ -31,9 +33,11 @@ func (f ConfigFlags) resolve() (mdmconfig.Config, error) {
 	if err != nil {
 		return mdmconfig.Config{}, fmt.Errorf("reading MDM configuration: %w", err)
 	}
+	// Trim the key like the MDM store's values, so a stray newline in an env var
+	// doesn't break enrollment.
 	return mdmconfig.Config{
 		ServerURL:           f.ServerURL,
-		EnrollmentKey:       f.EnrollmentKey,
+		EnrollmentKey:       strings.TrimSpace(f.EnrollmentKey),
 		ScanIntervalMinutes: f.ScanIntervalMinutes,
 	}.Merge(mdm), nil
 }
@@ -55,4 +59,14 @@ func (e *ExitCodeError) Unwrap() error { return e.Err }
 // NewConfigError wraps err as a configuration error (exit code 2).
 func NewConfigError(err error) error {
 	return &ExitCodeError{Code: 2, Err: err}
+}
+
+// enrollmentError marks an enrollment failure caused by the enrollment key as a
+// configuration error (exit 2); anything else, like an unreachable server, is
+// returned as is.
+func enrollmentError(err error) error {
+	if _, ok := errors.AsType[*mdmconfig.EnrollmentKeyError](err); ok {
+		return NewConfigError(err)
+	}
+	return err
 }

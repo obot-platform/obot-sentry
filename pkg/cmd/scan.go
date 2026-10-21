@@ -49,16 +49,20 @@ func (s *Scan) Run(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("--force requires --submit")
 	}
 
+	startedAt := time.Now().UTC()
+
 	cfg, err := s.resolve()
+	if err == nil && s.Submit && cfg.ServerURL == "" {
+		err = fmt.Errorf("--submit requires a server URL (flag, env, or MDM configuration)")
+	}
 	if err != nil {
+		// Scheduled scans run with nowhere to print, so record why this one
+		// never started where the guides tell admins to look.
+		if s.Submit {
+			s.recordConfigError(cmd, startedAt, err)
+		}
 		return NewConfigError(err)
 	}
-
-	if s.Submit && cfg.ServerURL == "" {
-		return NewConfigError(fmt.Errorf("--submit requires a server URL (flag, env, or MDM configuration)"))
-	}
-
-	startedAt := time.Now().UTC()
 
 	// The OS scheduler polls every few minutes; throttle real submissions
 	// to the configured interval against the per-user scan state. Cache
@@ -121,7 +125,27 @@ func (s *Scan) Run(cmd *cobra.Command, _ []string) error {
 		}
 		s.recordScanOutcome(cmd, cacheDir, scanState, startedAt, outcome, submitErr)
 	}
-	return submitErr
+	return enrollmentError(submitErr)
+}
+
+// recordConfigError records a submission that failed before scanning started,
+// in the same scan state and scan log a failed submission writes. Like any
+// other recording problem, failures here only warn.
+func (s *Scan) recordConfigError(cmd *cobra.Command, startedAt time.Time, configErr error) {
+	cacheDir, err := datadir.CacheDir()
+	if err != nil {
+		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "warning: resolving cache directory: %v\n", err)
+		return
+	}
+	scanState, err := state.LoadScanState(cacheDir)
+	if err != nil {
+		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "warning: reading scan state: %v\n", err)
+	}
+	scanState.LastScanAt = &startedAt
+	scanState.LastStatus = "error"
+	scanState.LastError = configErr.Error()
+	scanState.ScannerVersion = version.Get().String()
+	s.recordScanOutcome(cmd, cacheDir, scanState, startedAt, "error", configErr)
 }
 
 // submit enrolls (if needed) and uploads the manifest, filling in the

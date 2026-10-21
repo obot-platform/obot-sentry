@@ -20,6 +20,7 @@ It enrolls each machine with an [Obot](https://github.com/obot-platform/obot) se
 obot-sentry scan              # build + print the manifest (add --submit to enroll + upload)
                               #   --submit --force ignores the scan interval and submits now
 obot-sentry enroll            # explicit enrollment, for verifying a configuration
+obot-sentry status            # config, enrollment (enrolls if needed), and last scan; exits 2 on a config problem
 obot-sentry hook-install      # install managed local-agent hooks (root/Administrator)
                               #   --enforce also installs the tool-call enforcement hooks
 obot-sentry hook-uninstall    # remove all marker-owned hooks (root/Administrator)

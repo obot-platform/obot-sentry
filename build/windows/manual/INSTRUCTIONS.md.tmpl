@@ -18,6 +18,11 @@ Everything below needs an Administrator PowerShell.
    ```powershell
    msiexec /i "obot-sentry.msi" /qn SERVER_URL="{{.serverURL}}" ENROLLMENT_KEY="REPLACE_WITH_ENROLLMENT_KEY" SCAN_INTERVAL_MINUTES="{{.scanIntervalMinutes}}"{{if .enforcementEnabled}} ENFORCEMENT=1{{end}}
    ```
+
+   The install is silent. It fails with exit code 1603 when `ENROLLMENT_KEY` is
+   still the placeholder or otherwise not an Obot enrollment key, but it doesn't
+   contact Obot: the device enrolls on its first scan. Run `status` from
+   **Verify the install** to check the server URL and key right away.
 {{if .enforcementEnabled}}
    `ENFORCEMENT=1` writes `EnforcementEnabled` to the registry, which the hook
    task reads. Keep it in the command you use for upgrades too: an install
@@ -28,6 +33,9 @@ Everything below needs an Administrator PowerShell.
    ```powershell
    Start-ScheduledTask -TaskName 'Obot Sentry Scan'
    ```
+
+   This starts the scan in the background and prints nothing, even when the
+   scan fails. Check its result with `status` from **Verify the install**.
 
 ## What the installer does
 
@@ -75,9 +83,9 @@ Everything below needs an Administrator PowerShell.
 
    - `LastRunTime` climbs on schedule — every 10 minutes for the scan task,
      hourly for the hook task, and at each logon for both.
-   - `LastTaskResult = 0` means the last run succeeded. Non-zero is usually a
-     configuration problem — recheck the registry values from step 2. `267011`
-     means the task has not run yet.
+   - `LastTaskResult = 0` means the last run succeeded. `2` is a configuration
+     problem — recheck the registry values from step 2, or run `status` from
+     step 5. `267011` means the task has not run yet.
    - `NumberOfMissedRuns` above 0 means the device was asleep or off when a run
      was due; the next run catches up.
 
@@ -91,8 +99,22 @@ Everything below needs an Administrator PowerShell.
 
    `lastSubmitAt` records the last successful submission, and `lastStatus` is `ok` or
    `error` with `lastError` carrying the reason.
+   If `lastError` says `the server rejected the enrollment key`, Obot doesn't
+   accept the key — recheck `EnrollmentKey` from step 2. The next scan retries
+   with the corrected key.
 
    The adjacent `scan-logs` directory retains up to 14 days of the most recent scan attempts.
+
+5. Check the agent's configuration, enrollment, and last scan in one place:
+
+   ```powershell
+   & "C:\Program Files\Obot\obot-sentry\obot-sentry.exe" status
+   ```
+
+   If the device isn't enrolled yet, this enrolls it now, so a wrong server URL
+   or an enrollment key Obot rejects shows up right away. It exits 2 for a
+   configuration problem. `Last scan` reports the latest scan of the account
+   running the command.
 
 ## Standalone binary (Alternate)
 

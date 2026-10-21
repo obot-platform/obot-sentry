@@ -27,7 +27,9 @@
     <!--
       Tenant configuration arrives as public properties on every install
       and upgrade command; the launch conditions below hard-fail installs
-      missing it (no registry read-back, so stale values never win).
+      missing it, or whose enrollment key isn't an ode1- credential, such as
+      the unreplaced placeholder (no registry read-back, so stale values
+      never win).
       Secure="yes" carries the values into the elevated execute sequence.
     -->
     <Property Id="SERVER_URL" Secure="yes" />
@@ -37,8 +39,8 @@
 
     <Launch Condition="SERVER_URL OR REMOVE~=&quot;ALL&quot;"
             Message="The SERVER_URL property is required (obot server base URL). Install with the completed command from INSTRUCTIONS.md." />
-    <Launch Condition="ENROLLMENT_KEY OR REMOVE~=&quot;ALL&quot;"
-            Message="The ENROLLMENT_KEY property is required (ode1-... enrollment credential). Install with the completed command from INSTRUCTIONS.md." />
+    <Launch Condition="ENROLLMENT_KEY &lt;&lt; &quot;ode1-&quot; OR REMOVE~=&quot;ALL&quot;"
+            Message="The ENROLLMENT_KEY property must be an Obot enrollment key (ode1-...), not REPLACE_WITH_ENROLLMENT_KEY. Install with the completed command from INSTRUCTIONS.md." />
 
     <!-- No ARP Change/Repair: a repair can't carry the properties and
          would rewrite the registry config with empty values. -->
