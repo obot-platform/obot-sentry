@@ -180,6 +180,21 @@ Turning enforcement off in Obot stops the blocking immediately — the server
 allows every call when enforcement is disabled — even before the hooks
 themselves are removed.
 {{end}}
+## Turning enforcement on or off
+
+These instructions match the **Enforce tool calls on enrolled devices** setting
+in Obot when they were downloaded: enforcement is {{if .enforcementEnabled}}on{{else}}off{{end}}. After changing that
+setting, re-download the install package and run the following on each device
+that already runs Obot Sentry. No reinstall is needed.
+
+```sh
+sudo defaults write /Library/Preferences/ai.obot.obot-sentry EnforcementEnabled -bool {{if .enforcementEnabled}}true{{else}}false{{end}}
+sudo obot-sentry hook-install
+```
+
+`hook-install` applies the change right away. Otherwise the hourly hook-install
+job picks it up within the hour.
+
 ## Uninstall
 
 Run `uninstall.sh` to remove every Obot Sentry managed hook, unload both launchd

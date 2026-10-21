@@ -175,6 +175,23 @@ value and let the hook task reconverge:
 Set-ItemProperty -Path 'HKLM:\SOFTWARE\Obot\obot-sentry' -Name EnforcementEnabled -Type DWord -Value 0
 ```
 {{end}}
+## Turning enforcement on or off
+
+These instructions match the **Enforce tool calls on enrolled devices** setting
+in Obot when they were downloaded: enforcement is {{if .enforcementEnabled}}on{{else}}off{{end}}. After changing that
+setting, re-download the install package and run the following on each device
+that already runs Obot Sentry. No reinstall is needed.
+
+```powershell
+Set-ItemProperty -Path 'HKLM:\SOFTWARE\Obot\obot-sentry' -Name EnforcementEnabled -Type DWord -Value {{if .enforcementEnabled}}1{{else}}0{{end}}
+& "C:\Program Files\Obot\obot-sentry\obot-sentry.exe" hook-install
+```
+
+`hook-install` applies the change right away. Otherwise the hook task picks it
+up at the next logon or within the hour. If you later reinstall or upgrade with
+the MSI, use the install command from the new copy: a command without
+`ENFORCEMENT=1` turns enforcement off.
+
 ## Uninstall
 
 Remove the hooks first, then Obot Sentry itself. Uninstalling the MSI

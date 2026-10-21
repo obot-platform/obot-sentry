@@ -131,6 +131,23 @@ hook cannot tell which MCP server a call targets, the call is blocked.
 - Turning enforcement off in Obot stops the blocking immediately, for all devices, even
   before the hooks are removed from any device.
 {{end}}
+## Turning enforcement on or off
+
+The install command in step 2 carries the **Enforce tool calls on enrolled
+devices** setting from Obot as of this package's download: enforcement is
+{{if .enforcementEnabled}}on{{else}}off{{end}}. After changing that setting, re-download the install package, then:
+
+1. Replace the app's **Install command** with the one from step 2 of the new
+   copy, so new installs and upgrades get the setting. A command without
+   `ENFORCEMENT=1` turns enforcement off.
+
+2. Devices that already have the app keep their current setting until the app
+   is upgraded. To change it on them now, push `EnforcementEnabled` as a
+   `REG_DWORD` set to `{{if .enforcementEnabled}}1{{else}}0{{end}}` under
+   `HKLM\SOFTWARE\Obot\obot-sentry` with a configuration profile or a
+   remediation script. The hook task applies it at the next logon or within the
+   hour.
+
 ## Upgrades
 
 To upgrade to a new version of Obot Sentry, upload the new `obot-sentry.intunewin`
