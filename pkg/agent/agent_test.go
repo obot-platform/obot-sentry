@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -124,5 +125,65 @@ func TestSubmitLocalAgentAuditLogsStateSaveFailureDoesNotFailSubmit(t *testing.T
 	}
 	if submitCalls != 1 {
 		t.Fatalf("expected exactly one successful submit, got %d", submitCalls)
+	}
+}
+
+// Enrollment failures name the likely cause of a rejection and keep the HTTP
+// error wrapped, so callers can still tell a rejection from a transient failure.
+func TestEnsureEnrolledExplainsRejections(t *testing.T) {
+	tests := []struct {
+		name         string
+		status       int
+		wantRejected bool
+		wantMessage  string
+	}{
+		{
+			name:         "rejected key",
+			status:       http.StatusUnauthorized,
+			wantRejected: true,
+			wantMessage:  "invalid, expired, or deleted",
+		},
+		{
+			name:         "device limit",
+			status:       http.StatusForbidden,
+			wantRejected: true,
+			wantMessage:  "device limit",
+		},
+		{
+			name:         "wrong server",
+			status:       http.StatusNotFound,
+			wantRejected: true,
+			wantMessage:  "points at Obot",
+		},
+		{
+			name:         "server error",
+			status:       http.StatusBadGateway,
+			wantRejected: false,
+			wantMessage:  "enrolling device: error code 502",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/api/mdm/enroll" {
+					t.Errorf("unexpected request to %s", r.URL.Path)
+				}
+				w.WriteHeader(tt.status)
+			}))
+			defer srv.Close()
+
+			dir := t.TempDir()
+			a := New(dir, dir, mdmconfig.Config{ServerURL: srv.URL, EnrollmentKey: "ode1-1-1-secret"})
+			_, _, err := a.EnsureEnrolled(t.Context())
+			if err == nil {
+				t.Fatal("expected an error")
+			}
+			if got := client.IsRejected(err); got != tt.wantRejected {
+				t.Fatalf("IsRejected(%v) = %v, want %v", err, got, tt.wantRejected)
+			}
+			if !strings.Contains(err.Error(), tt.wantMessage) {
+				t.Fatalf("error %q does not contain %q", err, tt.wantMessage)
+			}
+		})
 	}
 }
