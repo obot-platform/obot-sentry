@@ -1,6 +1,7 @@
 package enforce
 
 import (
+	"maps"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -347,5 +348,260 @@ func TestCodexNodeREPLMustBeTheOnlyDefinition(t *testing.T) {
 	f.setenv("CODEX_HOME", f.homePath(".codex")+"/")
 	if res := Resolve(f.Env, codexReq("node_repl")); res.Unresolved {
 		t.Fatalf("CODEX_HOME at the default: Unresolved (%s), want built-in", res.Reason)
+	}
+}
+
+const (
+	chatGPTNodeREPL    = "/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node_repl"
+	chatGPTNodeREPLDir = "/Applications/ChatGPT.app/Contents/Resources/cua_node"
+)
+
+// chatGPTNodeREPLEnv returns the env table Codex Desktop inside the ChatGPT app
+// writes for node_repl, with codexHome standing in for ~/.codex and overrides
+// replacing or adding variables.
+func chatGPTNodeREPLEnv(codexHome string, overrides map[string]string) string {
+	vars := map[string]string{
+		"NODE_REPL_NATIVE_PIPE_CONNECT_TIMEOUT_MS": "1000",
+		"NODE_REPL_NODE_MODULE_DIRS":               chatGPTNodeREPLDir + "/lib/node_modules",
+		"NODE_REPL_NODE_PATH":                      chatGPTNodeREPLDir + "/bin/node",
+		"NODE_REPL_TRUSTED_CODE_PATHS":             codexHome,
+		"CODEX_HOME":                               codexHome,
+		"NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S": strings.Repeat("6d", 32) + "," + strings.Repeat("E1", 32),
+		"BROWSER_USE_AVAILABLE_BACKENDS":           "chrome,iab",
+		"NODE_REPL_INSTRUCTIONS_USE_CASE_BROWSER":  "Control the in-app browser in conjunction with the Browser Plugin.",
+	}
+	for k, v := range overrides {
+		vars[k] = v
+	}
+	var b strings.Builder
+	b.WriteString("[mcp_servers.node_repl.env]\n")
+	for _, k := range slices.Sorted(maps.Keys(vars)) {
+		b.WriteString(k + " = " + tomlLiteral(vars[k]) + "\n")
+	}
+	return b.String()
+}
+
+// TestCodexChatGPTNodeREPLIsBuiltin covers Codex Desktop as it now ships, inside
+// the ChatGPT app, with the environment it writes for node_repl.
+func TestCodexChatGPTNodeREPLIsBuiltin(t *testing.T) {
+	f := newFixture(t, "darwin")
+	f.write(f.homePath(".codex", "config.toml"),
+		codexNodeREPLConfig(chatGPTNodeREPL, "startup_timeout_sec = 120\n\n"+chatGPTNodeREPLEnv(f.homePath(".codex"), nil)))
+
+	res := Resolve(f.Env, codexReq("node_repl"))
+	if res.Unresolved {
+		t.Fatalf("Unresolved = true (%s), want the bundled node_repl reported as built-in", res.Reason)
+	}
+	if res.ServerName != "node_repl" || res.String() != "" {
+		t.Fatalf("got %+v, want ServerName node_repl with no identity", res)
+	}
+}
+
+// TestCodexChatGPTNodeREPLEnvLookalikes covers environment that would make the
+// bundled node_repl run code from outside its bundle, or trust code outside
+// Codex's home.
+func TestCodexChatGPTNodeREPLEnvLookalikes(t *testing.T) {
+	cases := []struct {
+		name      string
+		command   string
+		overrides func(codexHome string) map[string]string
+	}{
+		{
+			name:    "node binary outside the bundle",
+			command: chatGPTNodeREPL,
+			overrides: func(string) map[string]string {
+				return map[string]string{"NODE_REPL_NODE_PATH": "/tmp/node"}
+			},
+		},
+		{
+			name:    "node binary traverses out of the bundle",
+			command: chatGPTNodeREPL,
+			overrides: func(string) map[string]string {
+				return map[string]string{"NODE_REPL_NODE_PATH": chatGPTNodeREPLDir + "/../../../../../tmp/node"}
+			},
+		},
+		{
+			name:    "node binary in a different bundle",
+			command: chatGPTNodeREPL,
+			overrides: func(string) map[string]string {
+				return map[string]string{"NODE_REPL_NODE_PATH": "/Applications/Codex.app/Contents/Resources/cua_node/bin/node"}
+			},
+		},
+		{
+			name:    "relative node binary",
+			command: chatGPTNodeREPL,
+			overrides: func(string) map[string]string {
+				return map[string]string{"NODE_REPL_NODE_PATH": "node"}
+			},
+		},
+		{
+			name:    "module directory outside the bundle",
+			command: chatGPTNodeREPL,
+			overrides: func(string) map[string]string {
+				return map[string]string{"NODE_REPL_NODE_MODULE_DIRS": chatGPTNodeREPLDir + "/lib/node_modules:/tmp/evil_modules"}
+			},
+		},
+		{
+			name:    "empty module directory list",
+			command: chatGPTNodeREPL,
+			overrides: func(string) map[string]string {
+				return map[string]string{"NODE_REPL_NODE_MODULE_DIRS": ""}
+			},
+		},
+		{
+			name:    "trusted code outside Codex home",
+			command: chatGPTNodeREPL,
+			overrides: func(codexHome string) map[string]string {
+				return map[string]string{"NODE_REPL_TRUSTED_CODE_PATHS": codexHome + ":/tmp"}
+			},
+		},
+		{
+			name:    "CODEX_HOME elsewhere",
+			command: chatGPTNodeREPL,
+			overrides: func(string) map[string]string {
+				return map[string]string{"CODEX_HOME": "/tmp/codex"}
+			},
+		},
+		{
+			name:    "malformed browser client hash",
+			command: chatGPTNodeREPL,
+			overrides: func(string) map[string]string {
+				return map[string]string{"NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S": "not-a-hash"}
+			},
+		},
+		{
+			name:    "unknown NODE_REPL variable",
+			command: chatGPTNodeREPL,
+			overrides: func(string) map[string]string {
+				return map[string]string{"NODE_REPL_SOMETHING_NEW": "x"}
+			},
+		},
+		{
+			name:    "NODE_OPTIONS",
+			command: chatGPTNodeREPL,
+			overrides: func(string) map[string]string {
+				return map[string]string{"NODE_OPTIONS": "--require /tmp/evil.js"}
+			},
+		},
+		{
+			name:    "user Applications folder",
+			command: "/Users/dev/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node_repl",
+			overrides: func(string) map[string]string {
+				return nil
+			},
+		},
+		{
+			name:    "lookalike bundle name",
+			command: "/Applications/ChatGPT.app.evil/Contents/Resources/cua_node/bin/node_repl",
+			overrides: func(string) map[string]string {
+				return nil
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t, "darwin")
+			codexHome := f.homePath(".codex")
+			f.write(filepath.Join(codexHome, "config.toml"),
+				codexNodeREPLConfig(tc.command, chatGPTNodeREPLEnv(codexHome, tc.overrides(codexHome))))
+
+			if res := Resolve(f.Env, codexReq("node_repl")); !res.Unresolved {
+				t.Fatalf("got %+v, want the node_repl entry not reported as built-in", res)
+			}
+		})
+	}
+}
+
+// TestCodexWindowsNodeREPLEnvStaysInRuntimes covers the path-valued variables on
+// Windows, where the bundle is Codex Desktop's runtimes directory.
+func TestCodexWindowsNodeREPLEnvStaysInRuntimes(t *testing.T) {
+	const (
+		localAppData = `C:\Users\dev\AppData\Local`
+		runtime      = localAppData + `\OpenAI\Codex\runtimes\cua_node\abc123`
+	)
+	cases := []struct {
+		name     string
+		nodePath string
+		want     bool
+	}{
+		{
+			name:     "node in the runtimes directory",
+			nodePath: runtime + `\bin\node.exe`,
+			want:     true,
+		},
+		{
+			name:     "node outside the runtimes directory",
+			nodePath: `C:\Users\dev\Downloads\node.exe`,
+			want:     false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t, "windows")
+			f.setenv("LOCALAPPDATA", localAppData)
+			f.write(f.homePath(".codex", "config.toml"), codexNodeREPLConfig(runtime+`\bin\node_repl.exe`,
+				"[mcp_servers.node_repl.env]\nNODE_REPL_NODE_PATH = "+tomlLiteral(tc.nodePath)+"\n"))
+
+			if res := Resolve(f.Env, codexReq("node_repl")); res.Unresolved == tc.want {
+				t.Fatalf("got %+v, want built-in = %v", res, tc.want)
+			}
+		})
+	}
+}
+
+// TestCodexNodeREPLEnvVariationsAreBuiltin covers environment shapes Codex
+// Desktop writes besides the one in TestCodexChatGPTNodeREPLIsBuiltin.
+func TestCodexNodeREPLEnvVariationsAreBuiltin(t *testing.T) {
+	cases := []struct {
+		name      string
+		overrides func(codexHome string) map[string]string
+	}{
+		{
+			name: "trusted code includes the bundle's modules",
+			overrides: func(codexHome string) map[string]string {
+				return map[string]string{"NODE_REPL_TRUSTED_CODE_PATHS": codexHome + ":" + chatGPTNodeREPLDir + "/lib/node_modules"}
+			},
+		},
+		{
+			name: "several module directories in the bundle",
+			overrides: func(string) map[string]string {
+				return map[string]string{"NODE_REPL_NODE_MODULE_DIRS": chatGPTNodeREPLDir + "/lib/node_modules:" + chatGPTNodeREPLDir + "/lib/extra"}
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t, "darwin")
+			codexHome := f.homePath(".codex")
+			f.write(filepath.Join(codexHome, "config.toml"),
+				codexNodeREPLConfig(chatGPTNodeREPL, chatGPTNodeREPLEnv(codexHome, tc.overrides(codexHome))))
+
+			if res := Resolve(f.Env, codexReq("node_repl")); res.Unresolved {
+				t.Fatalf("Unresolved = true (%s), want the bundled node_repl reported as built-in", res.Reason)
+			}
+		})
+	}
+}
+
+// TestCodexWindowsNodeREPLFullEnvIsBuiltin covers a Windows entry carrying the
+// same variables the macOS app writes, with Windows paths and list separators.
+func TestCodexWindowsNodeREPLFullEnvIsBuiltin(t *testing.T) {
+	const (
+		localAppData = `C:\Users\dev\AppData\Local`
+		runtime      = localAppData + `\OpenAI\Codex\runtimes\cua_node\3dd31cfff853001c`
+	)
+	f := newFixture(t, "windows")
+	f.setenv("LOCALAPPDATA", localAppData)
+	codexHome := f.homePath(".codex")
+	f.write(filepath.Join(codexHome, "config.toml"), codexNodeREPLConfig(runtime+`\bin\node_repl.exe`,
+		"[mcp_servers.node_repl.env]\n"+
+			"NODE_REPL_NATIVE_PIPE = '\\\\.\\pipe\\codex'\n"+
+			"NODE_REPL_NODE_PATH = "+tomlLiteral(runtime+`\bin\node.exe`)+"\n"+
+			"NODE_REPL_NODE_MODULE_DIRS = "+tomlLiteral(runtime+`\lib\node_modules`)+"\n"+
+			"NODE_REPL_TRUSTED_CODE_PATHS = "+tomlLiteral(codexHome+";"+runtime+`\lib\node_modules`)+"\n"+
+			"CODEX_HOME = "+tomlLiteral(codexHome)+"\n"))
+
+	if res := Resolve(f.Env, codexReq("node_repl")); res.Unresolved {
+		t.Fatalf("Unresolved = true (%s), want the bundled node_repl reported as built-in", res.Reason)
 	}
 }

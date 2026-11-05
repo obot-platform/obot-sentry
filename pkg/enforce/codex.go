@@ -82,14 +82,16 @@ const codexNodeREPLKey = "node_repl"
 // entry in ~/.codex/config.toml, and Codex will happily accept a user-defined
 // server under the same key. So the name alone proves nothing, and what is
 // checked instead is the entry itself: a command that is the executable shipped
-// inside the Codex app, run with no arguments, and with no environment — set or
-// forwarded — that could make that executable load other code. codexNodeREPLIsSole
-// adds the configuration-wide conditions.
+// inside the app, run with no arguments, with nothing forwarded from Codex's own
+// environment, and with only the environment Codex Desktop itself writes (see
+// nodeREPLEnvAllowed). codexNodeREPLIsSole adds the configuration-wide
+// conditions.
 //
-//   - macOS: /Applications/Codex.app/Contents/Resources/.../node_repl. The
-//     system Applications folder is admin-writable only; ~/Applications is not
-//     accepted, because any process running as the user could plant a bundle
-//     there.
+//   - macOS: /Applications/ChatGPT.app/Contents/Resources/.../node_repl, where
+//     Codex Desktop now ships inside the ChatGPT app, or the same path under the
+//     older standalone /Applications/Codex.app. The system Applications folder is
+//     admin-writable only; ~/Applications is not accepted, because any process
+//     running as the user could plant a bundle there.
 //   - Windows: %LOCALAPPDATA%\OpenAI\Codex\runtimes\...\node_repl.exe. This is
 //     where Codex Desktop installs its runtimes, and it is user-writable; there
 //     is no admin-owned location to require instead.
@@ -113,34 +115,83 @@ func isCodexBundledNodeREPL(env Env, key string, entry mcpEntry) bool {
 	if len(entry.EnvVars) != 0 {
 		return false
 	}
-	for name := range entry.Environment {
-		if nodeREPLEnvChangesExecution(name) {
+
+	bundle, ok := codexNodeREPLBundleFor(env, command)
+	if !ok {
+		return false
+	}
+	for name, value := range entry.Environment {
+		if !nodeREPLEnvAllowed(env, bundle, name, value) {
 			return false
 		}
 	}
+	return true
+}
 
+// codexNodeREPLMacBundles are the app bundles Codex Desktop's node_repl ships
+// in on macOS. Codex Desktop now ships inside the ChatGPT app; the standalone
+// Codex app is the older layout.
+var codexNodeREPLMacBundles = []string{
+	"/Applications/ChatGPT.app/Contents/Resources/",
+	"/Applications/Codex.app/Contents/Resources/",
+}
+
+// nodeREPLBundle is the directory the bundled node_repl was found in. Paths in
+// node_repl's environment that name code to run must lie within the same one.
+type nodeREPLBundle struct {
+	// root is cleaned, slash-separated, and ends in a slash.
+	root    string
+	windows bool
+}
+
+// clean normalizes p for a prefix comparison against root, so ".." segments
+// and doubled separators cannot defeat it. It reports false for a path that is
+// not absolute.
+func (b nodeREPLBundle) clean(p string) (string, bool) {
+	p = strings.TrimSpace(p)
+	if p == "" || strings.ContainsAny(p, "\x00\n") {
+		return "", false
+	}
+	if b.windows {
+		if !isWindowsAbs(p) {
+			return "", false
+		}
+		return strings.ToLower(windowsClean(p)), true
+	}
+	if !strings.HasPrefix(p, "/") {
+		return "", false
+	}
+	return path.Clean(p), true
+}
+
+// contains reports whether p lies strictly below the bundle root.
+func (b nodeREPLBundle) contains(p string) bool {
+	p, ok := b.clean(p)
+	return ok && strings.HasPrefix(p, b.root)
+}
+
+// codexNodeREPLBundleFor returns the bundle that command is Codex Desktop's
+// node_repl executable in, if it is one.
+func codexNodeREPLBundleFor(env Env, command string) (nodeREPLBundle, bool) {
 	switch env.GOOS {
 	case "darwin":
-		return bundledUnder(path.Clean(command), "/Applications/Codex.app/Contents/Resources/", "node_repl", false)
+		for _, root := range codexNodeREPLMacBundles {
+			b := nodeREPLBundle{root: root}
+			if b.contains(command) && path.Base(path.Clean(command)) == "node_repl" {
+				return b, true
+			}
+		}
 	case "windows":
 		base := strings.TrimSpace(env.getenv("LOCALAPPDATA"))
 		if !isWindowsAbs(base) {
-			return false
+			return nodeREPLBundle{}, false
 		}
-		root := windowsClean(base) + `/OpenAI/Codex/runtimes/`
-		return bundledUnder(windowsClean(command), root, "node_repl.exe", true)
-	default:
-		return false
+		b := nodeREPLBundle{root: strings.ToLower(windowsClean(base)) + "/openai/codex/runtimes/", windows: true}
+		if cleaned, ok := b.clean(command); ok && b.contains(command) && path.Base(cleaned) == "node_repl.exe" {
+			return b, true
+		}
 	}
-}
-
-// bundledUnder reports whether the cleaned, slash-separated command lies
-// strictly below root and names the executable base.
-func bundledUnder(command, root, base string, foldCase bool) bool {
-	if foldCase {
-		command, root, base = strings.ToLower(command), strings.ToLower(root), strings.ToLower(base)
-	}
-	return strings.HasPrefix(command, root) && path.Base(command) == base
+	return nodeREPLBundle{}, false
 }
 
 // windowsClean converts a Windows path to slash-separated form and cleans it, so
@@ -156,22 +207,89 @@ func isWindowsAbs(p string) bool {
 		((p[0] >= 'a' && p[0] <= 'z') || (p[0] >= 'A' && p[0] <= 'Z'))
 }
 
-// codexNodeREPLNativePipe is the one Node-prefixed variable Codex Desktop itself
-// sets on node_repl (on Windows): the pipe it talks to the app over.
-const codexNodeREPLNativePipe = "NODE_REPL_NATIVE_PIPE"
+// listSeparator is the PATH-style list separator on env's platform.
+func (e Env) listSeparator() string {
+	if e.windows() {
+		return ";"
+	}
+	return ":"
+}
 
-// nodeREPLEnvChangesExecution reports whether a configured environment variable
-// could make the bundled node_repl run something other than what Codex shipped:
-// the loader and search-path variables every runner check rejects, and every
-// NODE_* variable but the pipe Codex sets. Node reads many of those
-// (NODE_OPTIONS, NODE_PATH, NODE_REPL_EXTERNAL_MODULE, ...), and an unknown one
-// is refused rather than guessed about.
-func nodeREPLEnvChangesExecution(name string) bool {
+// isDefaultCodexHome reports whether p names Codex's default configuration
+// directory, ~/.codex: the only one this resolver reads.
+func isDefaultCodexHome(env Env, p string) bool {
+	p = strings.TrimSpace(p)
+	return p != "" && filepath.Clean(p) == filepath.Clean(env.homePath(".codex"))
+}
+
+// nodeREPLEnvAllowed reports whether a variable in node_repl's configured
+// environment leaves it running only what the app shipped.
+//
+// Codex Desktop configures node_repl with a set of NODE_REPL_* variables. The
+// ones that name code to run must point inside the same bundle as node_repl
+// itself (the code it trusts may also be Codex's own home); the rest carry data
+// (timeouts, hashes, instruction text) and are accepted as they are. Every
+// other NODE_* variable is refused, known (NODE_OPTIONS, NODE_PATH,
+// NODE_REPL_EXTERNAL_MODULE) or not, rather than guessed about, so a variable a
+// future Codex release adds keeps node_repl denied until it is listed here. The
+// loader and search-path variables every runner check rejects are refused too.
+func nodeREPLEnvAllowed(env Env, bundle nodeREPLBundle, name, value string) bool {
 	name = strings.ToUpper(strings.TrimSpace(name))
 	if _, ok := commonConfiguredPackageEnv[name]; ok {
-		return true
+		return false
 	}
-	return strings.HasPrefix(name, "NODE_") && name != codexNodeREPLNativePipe
+	switch {
+	case name == "NODE_REPL_NODE_PATH":
+		// The node binary node_repl runs code with.
+		return bundle.contains(value)
+	case name == "NODE_REPL_NODE_MODULE_DIRS":
+		// Where node_repl resolves modules from.
+		return allListItems(value, env.listSeparator(), bundle.contains)
+	case name == "NODE_REPL_TRUSTED_CODE_PATHS":
+		// Code node_repl trusts: Codex's home, and in some Codex setups the
+		// bundle's own modules as well.
+		return allListItems(value, env.listSeparator(), func(p string) bool {
+			return isDefaultCodexHome(env, p) || bundle.contains(p)
+		})
+	case name == "CODEX_HOME":
+		return isDefaultCodexHome(env, value)
+	case name == "NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S":
+		return allListItems(value, ",", isSHA256Hex)
+	case name == "NODE_REPL_NATIVE_PIPE",
+		name == "NODE_REPL_NATIVE_PIPE_CONNECT_TIMEOUT_MS",
+		strings.HasPrefix(name, "NODE_REPL_INSTRUCTIONS_"):
+		return true
+	case strings.HasPrefix(name, "NODE_"):
+		return false
+	}
+	return true
+}
+
+// allListItems reports whether value is a non-empty sep-separated list whose
+// every item satisfies ok.
+func allListItems(value, sep string, ok func(string) bool) bool {
+	if strings.TrimSpace(value) == "" {
+		return false
+	}
+	for _, item := range strings.Split(value, sep) {
+		if !ok(strings.TrimSpace(item)) {
+			return false
+		}
+	}
+	return true
+}
+
+// isSHA256Hex reports whether s is a hex-encoded SHA-256 digest.
+func isSHA256Hex(s string) bool {
+	if len(s) != 64 {
+		return false
+	}
+	for _, c := range s {
+		if !strings.ContainsRune("0123456789abcdefABCDEF", c) {
+			return false
+		}
+	}
+	return true
 }
 
 // codexNodeREPLIsSole reports whether the matched node_repl entry is the only
@@ -186,8 +304,7 @@ func nodeREPLEnvChangesExecution(name string) bool {
 // across all of them may name node_repl in any form, and CODEX_HOME must not
 // point Codex at a configuration directory this resolver never read.
 func codexNodeREPLIsSole(ctx context.Context, loader *configLoader, env Env) bool {
-	if home := strings.TrimSpace(env.getenv("CODEX_HOME")); home != "" &&
-		filepath.Clean(home) != filepath.Clean(env.homePath(".codex")) {
+	if home := env.getenv("CODEX_HOME"); strings.TrimSpace(home) != "" && !isDefaultCodexHome(env, home) {
 		return false
 	}
 	definitions := 0
