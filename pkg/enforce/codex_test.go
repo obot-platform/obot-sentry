@@ -3,6 +3,7 @@ package enforce
 import (
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/obot-platform/obot-sentry/pkg/localagent"
@@ -156,4 +157,125 @@ func TestCodexHasNoBuiltinServers(t *testing.T) {
 	f.write(f.homePath(".codex", "config.toml"),
 		"[mcp_servers.\"computer-use\"]\nurl = \"https://user.example.com/sse\"\n")
 	assertURL(t, Resolve(f.Env, codexReq("computer-use")), "https://user.example.com/sse")
+}
+
+// codexNodeREPLConfig is the shape Codex Desktop writes for its node_repl server.
+func codexNodeREPLConfig(command, extra string) string {
+	return "[mcp_servers.node_repl]\ncommand = " + tomlLiteral(command) + "\nargs = []\n" + extra
+}
+
+// tomlLiteral quotes s as a TOML literal string, which takes Windows
+// backslashes verbatim.
+func tomlLiteral(s string) string {
+	return `'` + s + `'`
+}
+
+// TestCodexBundledNodeREPLIsBuiltin covers the server Codex Desktop's browser
+// control runs on: reported by name with no identity, so Obot's built-in MCP
+// toggle decides it, rather than as an unresolvable local path.
+func TestCodexBundledNodeREPLIsBuiltin(t *testing.T) {
+	cases := []struct {
+		name, goos, localAppData, command, extra string
+	}{
+		{name: "macOS app bundle", goos: "darwin",
+			command: "/Applications/Codex.app/Contents/Resources/cua_node/bin/node_repl"},
+		{name: "macOS bundle root", goos: "darwin",
+			command: "/Applications/Codex.app/Contents/Resources/node_repl"},
+		{name: "Windows runtime", goos: "windows", localAppData: `C:\Users\dev\AppData\Local`,
+			command: `C:\Users\dev\AppData\Local\OpenAI\Codex\runtimes\cua_node\abc123\bin\node_repl.exe`,
+			extra:   "[mcp_servers.node_repl.env]\nNODE_REPL_NATIVE_PIPE = '\\\\.\\pipe\\codex'\n"},
+		{name: "Windows path case differs", goos: "windows", localAppData: `C:\Users\dev\AppData\Local`,
+			command: `c:\users\dev\appdata\local\OpenAI\Codex\Runtimes\cua_node\abc123\bin\NODE_REPL.EXE`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t, tc.goos)
+			if tc.localAppData != "" {
+				f.setenv("LOCALAPPDATA", tc.localAppData)
+			}
+			f.write(f.homePath(".codex", "config.toml"), codexNodeREPLConfig(tc.command, tc.extra))
+
+			res := Resolve(f.Env, codexReq("node_repl"))
+			if res.Unresolved {
+				t.Fatalf("Unresolved = true (%s), want the bundled node_repl reported as built-in", res.Reason)
+			}
+			if res.ServerName != "node_repl" || res.String() != "" {
+				t.Fatalf("got %+v, want ServerName node_repl with no identity", res)
+			}
+		})
+	}
+}
+
+// TestCodexNodeREPLLookalikesAreNotBuiltin covers what the name alone must not
+// earn: anything other than the executable Codex Desktop ships stays on the
+// ordinary resolution path.
+func TestCodexNodeREPLLookalikesAreNotBuiltin(t *testing.T) {
+	cases := []struct {
+		name, goos, localAppData, key, command, extra string
+	}{
+		{name: "user Applications folder", goos: "darwin",
+			command: "/Users/dev/Applications/Codex.app/Contents/Resources/node_repl"},
+		{name: "traversal out of the bundle", goos: "darwin",
+			command: "/Applications/Codex.app/Contents/Resources/../../../../tmp/node_repl"},
+		{name: "a different executable in the bundle", goos: "darwin",
+			command: "/Applications/Codex.app/Contents/Resources/cua_node/bin/node"},
+		{name: "a lookalike bundle name", goos: "darwin",
+			command: "/Applications/Codex.app.evil/Contents/Resources/node_repl"},
+		{name: "a different key", goos: "darwin", key: "node-repl",
+			command: "/Applications/Codex.app/Contents/Resources/node_repl"},
+		{name: "NODE_OPTIONS injects code", goos: "darwin",
+			command: "/Applications/Codex.app/Contents/Resources/node_repl",
+			extra:   "[mcp_servers.node_repl.env]\nNODE_OPTIONS = '--require /tmp/evil.js'\n"},
+		{name: "DYLD_INSERT_LIBRARIES injects code", goos: "darwin",
+			command: "/Applications/Codex.app/Contents/Resources/node_repl",
+			extra:   "[mcp_servers.node_repl.env]\nDYLD_INSERT_LIBRARIES = '/tmp/evil.dylib'\n"},
+		{name: "no Codex Desktop on Linux", goos: "linux",
+			command: "/Applications/Codex.app/Contents/Resources/node_repl"},
+		{name: "Windows outside the runtimes directory", goos: "windows", localAppData: `C:\Users\dev\AppData\Local`,
+			command: `C:\Users\dev\Downloads\node_repl.exe`},
+		{name: "Windows traversal", goos: "windows", localAppData: `C:\Users\dev\AppData\Local`,
+			command: `C:\Users\dev\AppData\Local\OpenAI\Codex\runtimes\..\..\..\Temp\node_repl.exe`},
+		{name: "Windows relative LOCALAPPDATA", goos: "windows", localAppData: `AppData\Local`,
+			command: `AppData\Local\OpenAI\Codex\runtimes\x\node_repl.exe`},
+		{name: "Windows without LOCALAPPDATA", goos: "windows",
+			command: `C:\Users\dev\AppData\Local\OpenAI\Codex\runtimes\x\node_repl.exe`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t, tc.goos)
+			if tc.localAppData != "" {
+				f.setenv("LOCALAPPDATA", tc.localAppData)
+			}
+			key := tc.key
+			if key == "" {
+				key = "node_repl"
+			}
+			f.write(f.homePath(".codex", "config.toml"),
+				"[mcp_servers."+key+"]\ncommand = "+tomlLiteral(tc.command)+"\n"+strings.ReplaceAll(tc.extra, "node_repl", key))
+
+			res := Resolve(f.Env, codexReq(strings.ReplaceAll(key, "-", "_")))
+			if !res.Unresolved {
+				t.Fatalf("got %+v, want an unresolved local-path server", res)
+			}
+		})
+	}
+}
+
+// TestCodexNodeREPLPackageIsNotBuiltin covers a user server that takes the name
+// and resolves cleanly: it is reported with its package identity, never by name
+// alone, so it is matched against the allowlist like any other server.
+func TestCodexNodeREPLPackageIsNotBuiltin(t *testing.T) {
+	f := newFixture(t, "darwin")
+	f.write(f.homePath(".codex", "config.toml"),
+		"[mcp_servers.node_repl]\ncommand = \"npx\"\nargs = [\"-y\", \"some-node-repl\"]\n")
+
+	assertPackage(t, Resolve(f.Env, codexReq("node_repl")), "npm", "some-node-repl", "")
+}
+
+// TestCodexUnconfiguredNodeREPLIsUnresolved covers the name with no entry behind
+// it: unlike a Claude Code built-in, node_repl is always configured when real.
+func TestCodexUnconfiguredNodeREPLIsUnresolved(t *testing.T) {
+	f := newFixture(t, "darwin")
+	assertUnresolved(t, Resolve(f.Env, codexReq("node_repl")),
+		`MCP server "node_repl" was not found in any Codex MCP configuration`)
 }
