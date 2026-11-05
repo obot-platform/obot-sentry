@@ -235,10 +235,8 @@ func enforcementURL(raw string) (string, bool) {
 // consulted only from notFound(), and with no possible collision a built-in call
 // always misses every configuration source and reaches it.
 //
-// Codex has one built-in, node_repl, and it is deliberately not in this table: it
-// is a configured entry that any user could also define, so a name match here
-// would be unsound. resolveCodex recognizes it from its entry instead — see
-// isCodexBundledNodeREPL — and obot's copy lists it under Codex.
+// Codex's built-ins are not here: they are matched by name before any
+// configuration is read. See codexBuiltinMCPServers.
 var builtinAgentMCPServers = map[localagent.Agent]map[string]struct{}{
 	localagent.ClaudeCode: {
 		"workspace":        {},
