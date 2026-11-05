@@ -17,6 +17,9 @@ type mcpEntry struct {
 	Command     string            `json:"command" toml:"command"`
 	Args        []string          `json:"args" toml:"args"`
 	Environment map[string]string `json:"env" toml:"env"`
+	// EnvVars is Codex's list of variables to forward from Codex's own
+	// environment to the server. Only the Codex built-in check reads it.
+	EnvVars []string `json:"-" toml:"env_vars"`
 }
 
 // TraceStep records one source the resolver consulted. The trace is what makes

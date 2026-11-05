@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path"
+	"path/filepath"
 	"strings"
 
 	"github.com/obot-platform/obot-sentry/pkg/localagent"
@@ -36,7 +37,7 @@ func resolveCodex(ctx context.Context, loader *configLoader, env Env, serverName
 	m, out := resolveScopes(ctx, codexScopes(loader, env), names, tr)
 	switch out {
 	case outcomeFound:
-		if isCodexBundledNodeREPL(env, m.key, m.entry) {
+		if isCodexBundledNodeREPL(env, m.key, m.entry) && codexNodeREPLIsSole(ctx, loader, env) {
 			// Reported by name with no identity, exactly as a Claude Code built-in is:
 			// the name is what Obot's built-in agent MCP toggle matches on.
 			return Resolution{ServerName: m.key}
@@ -81,8 +82,9 @@ const codexNodeREPLKey = "node_repl"
 // entry in ~/.codex/config.toml, and Codex will happily accept a user-defined
 // server under the same key. So the name alone proves nothing, and what is
 // checked instead is the entry itself: a command that is the executable shipped
-// inside the Codex app, with no configured environment that could make that
-// executable load other code.
+// inside the Codex app, run with no arguments, and with no environment — set or
+// forwarded — that could make that executable load other code. codexNodeREPLIsSole
+// adds the configuration-wide conditions.
 //
 //   - macOS: /Applications/Codex.app/Contents/Resources/.../node_repl. The
 //     system Applications folder is admin-writable only; ~/Applications is not
@@ -99,6 +101,16 @@ func isCodexBundledNodeREPL(env Env, key string, entry mcpEntry) bool {
 	}
 	command := strings.TrimSpace(entry.Command)
 	if command == "" || strings.ContainsAny(command, "\x00\n") {
+		return false
+	}
+	// Codex Desktop writes args = []. Any argument could be a script path or a
+	// Node flag that runs something other than the REPL.
+	if len(entry.Args) != 0 {
+		return false
+	}
+	// env_vars forwards variables from Codex's own environment, which the user
+	// controls, so NODE_OPTIONS could arrive that way instead of through env.
+	if len(entry.EnvVars) != 0 {
 		return false
 	}
 	for name := range entry.Environment {
@@ -144,15 +156,55 @@ func isWindowsAbs(p string) bool {
 		((p[0] >= 'a' && p[0] <= 'z') || (p[0] >= 'A' && p[0] <= 'Z'))
 }
 
+// codexNodeREPLNativePipe is the one Node-prefixed variable Codex Desktop itself
+// sets on node_repl (on Windows): the pipe it talks to the app over.
+const codexNodeREPLNativePipe = "NODE_REPL_NATIVE_PIPE"
+
 // nodeREPLEnvChangesExecution reports whether a configured environment variable
 // could make the bundled node_repl run something other than what Codex shipped:
-// the loader and search-path variables every runner check rejects, and the Node
-// variables that inject code or modules.
+// the loader and search-path variables every runner check rejects, and every
+// NODE_* variable but the pipe Codex sets. Node reads many of those
+// (NODE_OPTIONS, NODE_PATH, NODE_REPL_EXTERNAL_MODULE, ...), and an unknown one
+// is refused rather than guessed about.
 func nodeREPLEnvChangesExecution(name string) bool {
 	name = strings.ToUpper(strings.TrimSpace(name))
 	if _, ok := commonConfiguredPackageEnv[name]; ok {
 		return true
 	}
-	_, ok := npxExactPackageEnv[name]
-	return ok
+	return strings.HasPrefix(name, "NODE_") && name != codexNodeREPLNativePipe
+}
+
+// codexNodeREPLIsSole reports whether the matched node_repl entry is the only
+// definition Codex could be running, so that what was checked is what runs.
+//
+// The resolver ranks Codex's files and takes the first match, but Codex layers
+// them and merges tables field by field: a pristine entry in config.toml plus a
+// [mcp_servers.node_repl.env] table in the user-writable managed_config.toml
+// would run with that env while the check saw none. And a second key that
+// folds to node_repl in the tool namespace (node-repl) leaves it unclear which
+// server a call reached. So every Codex file must be readable, exactly one key
+// across all of them may name node_repl in any form, and CODEX_HOME must not
+// point Codex at a configuration directory this resolver never read.
+func codexNodeREPLIsSole(ctx context.Context, loader *configLoader, env Env) bool {
+	if home := strings.TrimSpace(env.getenv("CODEX_HOME")); home != "" &&
+		filepath.Clean(home) != filepath.Clean(env.homePath(".codex")) {
+		return false
+	}
+	definitions := 0
+	for _, s := range codexScopes(loader, env) {
+		set, res := s.load(ctx)
+		switch res {
+		case loadOK:
+		case loadAbsent:
+			continue
+		default:
+			return false
+		}
+		for key := range set {
+			if key == codexNodeREPLKey || formCodex(key) == codexNodeREPLKey {
+				definitions++
+			}
+		}
+	}
+	return definitions == 1
 }

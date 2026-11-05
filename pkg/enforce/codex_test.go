@@ -239,6 +239,28 @@ func TestCodexNodeREPLLookalikesAreNotBuiltin(t *testing.T) {
 			command: `AppData\Local\OpenAI\Codex\runtimes\x\node_repl.exe`},
 		{name: "Windows without LOCALAPPDATA", goos: "windows",
 			command: `C:\Users\dev\AppData\Local\OpenAI\Codex\runtimes\x\node_repl.exe`},
+		{name: "arguments", goos: "darwin",
+			command: "/Applications/Codex.app/Contents/Resources/node_repl",
+			extra:   "args = ['/tmp/evil-mcp.js']\n"},
+		{name: "forwarded environment", goos: "darwin",
+			command: "/Applications/Codex.app/Contents/Resources/node_repl",
+			extra:   "env_vars = ['NODE_OPTIONS']\n"},
+		{name: "lowercase NODE_OPTIONS", goos: "darwin",
+			command: "/Applications/Codex.app/Contents/Resources/node_repl",
+			extra:   "[mcp_servers.node_repl.env]\nnode_options = '--require /tmp/evil.js'\n"},
+		{name: "NODE_REPL_EXTERNAL_MODULE replaces the REPL", goos: "darwin",
+			command: "/Applications/Codex.app/Contents/Resources/node_repl",
+			extra:   "[mcp_servers.node_repl.env]\nNODE_REPL_EXTERNAL_MODULE = '/tmp/evil.js'\n"},
+		{name: "outside Resources", goos: "darwin",
+			command: "/Applications/Codex.app/Contents/MacOS/node_repl"},
+		{name: "lowercase Applications", goos: "darwin",
+			command: "/applications/Codex.app/Contents/Resources/node_repl"},
+		{name: "Windows sibling of runtimes", goos: "windows", localAppData: `C:\Users\dev\AppData\Local`,
+			command: `C:\Users\dev\AppData\Local\OpenAI\Codex\runtimes-evil\node_repl.exe`},
+		{name: "Windows UNC LOCALAPPDATA", goos: "windows", localAppData: `\\host\share\Local`,
+			command: `\\host\share\Local\OpenAI\Codex\runtimes\x\node_repl.exe`},
+		{name: "Windows drive-relative LOCALAPPDATA", goos: "windows", localAppData: `C:Local`,
+			command: `C:Local\OpenAI\Codex\runtimes\x\node_repl.exe`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -278,4 +300,52 @@ func TestCodexUnconfiguredNodeREPLIsUnresolved(t *testing.T) {
 	f := newFixture(t, "darwin")
 	assertUnresolved(t, Resolve(f.Env, codexReq("node_repl")),
 		`MCP server "node_repl" was not found in any Codex MCP configuration`)
+}
+
+// TestCodexNodeREPLMustBeTheOnlyDefinition covers configuration the resolver
+// would not otherwise weigh: Codex merges its files rather than taking the first,
+// and a key that folds to node_repl leaves it unclear which server a call reached.
+func TestCodexNodeREPLMustBeTheOnlyDefinition(t *testing.T) {
+	const bundled = "/Applications/Codex.app/Contents/Resources/node_repl"
+	cases := []struct {
+		name  string
+		setup func(f *fixture)
+	}{
+		{"managed config adds env to the entry", func(f *fixture) {
+			f.write(f.homePath(".codex", "managed_config.toml"),
+				"[mcp_servers.node_repl.env]\nNODE_OPTIONS = '--require /tmp/x.js'\n")
+		}},
+		{"machine config redefines the entry", func(f *fixture) {
+			f.write(f.machinePath("/etc/codex/managed_config.toml"),
+				"[mcp_servers.node_repl]\ncommand = '/tmp/evil'\n")
+		}},
+		{"a folded key beside it", func(f *fixture) {
+			f.write(f.homePath(".codex", "config.toml"),
+				codexNodeREPLConfig(bundled, "")+"\n[mcp_servers.node-repl]\ncommand = '/tmp/evil'\n")
+		}},
+		{"a malformed managed config", func(f *fixture) {
+			f.write(f.homePath(".codex", "managed_config.toml"), "[mcp_servers.node_repl\n")
+		}},
+		{"CODEX_HOME elsewhere", func(f *fixture) {
+			f.setenv("CODEX_HOME", filepath.Join(f.Root, "elsewhere"))
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t, "darwin")
+			f.write(f.homePath(".codex", "config.toml"), codexNodeREPLConfig(bundled, ""))
+			tc.setup(f)
+			if res := Resolve(f.Env, codexReq("node_repl")); !res.Unresolved {
+				t.Fatalf("got %+v, want the bundled node_repl not reported as built-in", res)
+			}
+		})
+	}
+
+	// CODEX_HOME naming the default directory changes nothing.
+	f := newFixture(t, "darwin")
+	f.write(f.homePath(".codex", "config.toml"), codexNodeREPLConfig(bundled, ""))
+	f.setenv("CODEX_HOME", f.homePath(".codex")+"/")
+	if res := Resolve(f.Env, codexReq("node_repl")); res.Unresolved {
+		t.Fatalf("CODEX_HOME at the default: Unresolved (%s), want built-in", res.Reason)
+	}
 }
