@@ -639,3 +639,61 @@ func (zeroes) Read(p []byte) (int, error) {
 	}
 	return len(p), nil
 }
+
+// TestRunCodexBuiltinNamesInDecisionRequests covers what the hook sends Obot for
+// a Codex call that reaches it as node_repl: the built-in by name alone when the
+// config key is exactly node_repl, and the configured server's own name and
+// identity when the key only folds to it.
+func TestRunCodexBuiltinNamesInDecisionRequests(t *testing.T) {
+	cases := []struct {
+		name           string
+		config         string
+		wantServerName string
+		wantPackage    string
+	}{
+		{
+			name:           "Codex Desktop's node_repl",
+			config:         "[mcp_servers.node_repl]\ncommand = '/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node_repl'\nargs = []\n",
+			wantServerName: "node_repl",
+		},
+		{
+			name:           "a node-repl npm package",
+			config:         "[mcp_servers.node-repl]\ncommand = 'npx'\nargs = ['-y', 'some-node-repl']\n",
+			wantServerName: "node-repl",
+			wantPackage:    "some-node-repl",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t, "darwin")
+			f.write(f.homePath(".codex", "config.toml"), tc.config)
+
+			run := runHook(t, f.Env, hookCase{
+				agent:   "codex",
+				event:   "PreToolUse",
+				payload: `{"tool_name":"mcp__node_repl__js","cwd":"/Users/dev/project"}`,
+				resp:    types.EnforcementDecisionResponse{Decision: types.EnforcementDecisionAllow},
+			})
+			if len(run.requests) != 1 {
+				t.Fatalf("issued %d decision requests, want exactly one", len(run.requests))
+			}
+			req := run.requests[0]
+			if req.Unresolved {
+				t.Fatalf("request is unresolved (%s), want it resolved", req.UnresolvedReason)
+			}
+			if req.ServerName != tc.wantServerName {
+				t.Errorf("serverName = %q, want %q", req.ServerName, tc.wantServerName)
+			}
+			var gotPackage string
+			if req.Server.Package != nil {
+				gotPackage = req.Server.Package.Name
+			}
+			if gotPackage != tc.wantPackage {
+				t.Errorf("package = %q, want %q", gotPackage, tc.wantPackage)
+			}
+			if tc.wantPackage == "" && (req.Server.URL != "" || req.Server.Command != "") {
+				t.Errorf("server = %+v, want no identity for the built-in", req.Server)
+			}
+		})
+	}
+}

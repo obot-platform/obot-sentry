@@ -234,6 +234,13 @@ func enforcementURL(raw string) (string, bool) {
 // configuration key. That is what makes the single call site correct — this is
 // consulted only from notFound(), and with no possible collision a built-in call
 // always misses every configuration source and reaches it.
+//
+// Codex's built-ins are not here, because Codex does let a configured server
+// take a built-in name, and Codex Desktop itself configures node_repl. They are
+// handled in resolveCodex, after configuration is read: a call is built-in when
+// its matched key is exactly a built-in name or when nothing matched, and a key
+// that only folds to one (node-repl) keeps its identity. See
+// codexBuiltinMCPServers.
 var builtinAgentMCPServers = map[localagent.Agent]map[string]struct{}{
 	localagent.ClaudeCode: {
 		"workspace":        {},

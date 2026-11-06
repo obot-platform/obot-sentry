@@ -157,3 +157,145 @@ func TestCodexHasNoBuiltinServers(t *testing.T) {
 		"[mcp_servers.\"computer-use\"]\nurl = \"https://user.example.com/sse\"\n")
 	assertURL(t, Resolve(f.Env, codexReq("computer-use")), "https://user.example.com/sse")
 }
+
+// TestCodexBuiltinsAreMatchedByName covers the REPLs Codex Desktop runs its
+// browser and computer use on: reported by name with no identity whether or not
+// any config file defines them, and whatever that definition says.
+func TestCodexBuiltinsAreMatchedByName(t *testing.T) {
+	cases := []struct {
+		name       string
+		serverName string
+		config     string
+	}{
+		{
+			name:       "node_repl in the ChatGPT app",
+			serverName: "node_repl",
+			config:     "[mcp_servers.node_repl]\ncommand = '/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node_repl'\nargs = []\nenv_vars = ['BROWSER_USE_ACCESS_PIPE_PATH']\n\n[mcp_servers.node_repl.env]\nNODE_REPL_TRUSTED_SERVICES = '{}'\n",
+		},
+		{
+			name:       "node_repl as an npm package",
+			serverName: "node_repl",
+			config:     "[mcp_servers.node_repl]\ncommand = 'npx'\nargs = ['-y', 'some-node-repl']\n",
+		},
+		{
+			name:       "unconfigured node_repl",
+			serverName: "node_repl",
+		},
+		{
+			name:       "cua_repl from the bundled plugin",
+			serverName: "cua_repl",
+		},
+		{
+			name:       "configured cua_repl",
+			serverName: "cua_repl",
+			config:     "[mcp_servers.cua_repl]\ncommand = '/tmp/cua_repl'\n",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t, "darwin")
+			if tc.config != "" {
+				f.write(f.homePath(".codex", "config.toml"), tc.config)
+			}
+
+			res := Resolve(f.Env, codexReq(tc.serverName))
+			if res.Unresolved {
+				t.Fatalf("Unresolved = true (%s), want %s reported as built-in", res.Reason, tc.serverName)
+			}
+			if res.ServerName != tc.serverName || res.String() != "" {
+				t.Fatalf("got %+v, want ServerName %s with no identity", res, tc.serverName)
+			}
+		})
+	}
+}
+
+// TestCodexBuiltinNamesMatchExactly covers names that only resemble a built-in:
+// they resolve through the ordinary path.
+func TestCodexBuiltinNamesMatchExactly(t *testing.T) {
+	cases := []struct {
+		name       string
+		serverName string
+	}{
+		{
+			name:       "different case",
+			serverName: "Node_REPL",
+		},
+		{
+			name:       "no underscore",
+			serverName: "noderepl",
+		},
+		{
+			name:       "prefixed",
+			serverName: "my_cua_repl",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t, "darwin")
+			if res := Resolve(f.Env, codexReq(tc.serverName)); !res.Unresolved {
+				t.Fatalf("got %+v, want an unresolved server", res)
+			}
+		})
+	}
+}
+
+// TestCodexKeysFoldingToBuiltinsKeepTheirIdentity covers configured servers whose
+// keys only fold to a built-in's name in the tool namespace: the user never chose
+// that name, so they resolve through their own entries.
+func TestCodexKeysFoldingToBuiltinsKeepTheirIdentity(t *testing.T) {
+	cases := []struct {
+		name       string
+		serverName string
+		config     string
+		check      func(t *testing.T, res Resolution)
+	}{
+		{
+			name:       "hyphenated npm package",
+			serverName: "node_repl",
+			config:     "[mcp_servers.node-repl]\ncommand = 'npx'\nargs = ['-y', 'some-node-repl']\n",
+			check: func(t *testing.T, res Resolution) {
+				assertPackage(t, res, "npm", "some-node-repl", "")
+			},
+		},
+		{
+			name:       "dotted remote server",
+			serverName: "cua_repl",
+			config:     "[mcp_servers.\"cua.repl\"]\nurl = 'https://cua.example.com/mcp'\n",
+			check: func(t *testing.T, res Resolution) {
+				assertURL(t, res, "https://cua.example.com/mcp")
+			},
+		},
+		{
+			name:       "hyphenated local path",
+			serverName: "cua_repl",
+			config:     "[mcp_servers.cua-repl]\ncommand = '/tmp/cua-repl'\n",
+			check: func(t *testing.T, res Resolution) {
+				if !res.Unresolved {
+					t.Fatalf("got %+v, want an unresolved local-path server", res)
+				}
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t, "darwin")
+			f.write(f.homePath(".codex", "config.toml"), tc.config)
+
+			tc.check(t, Resolve(f.Env, codexReq(tc.serverName)))
+		})
+	}
+}
+
+// TestCodexExactBuiltinKeyWinsOverAFoldedOne covers both keys in one file: the
+// exact key is the one the call reached, so it is reported as built-in.
+func TestCodexExactBuiltinKeyWinsOverAFoldedOne(t *testing.T) {
+	f := newFixture(t, "darwin")
+	f.write(f.homePath(".codex", "config.toml"),
+		"[mcp_servers.node-repl]\ncommand = 'npx'\nargs = ['-y', 'some-node-repl']\n\n"+
+			"[mcp_servers.node_repl]\ncommand = '/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node_repl'\n")
+
+	res := Resolve(f.Env, codexReq("node_repl"))
+	if res.Unresolved || res.ServerName != "node_repl" || res.String() != "" {
+		t.Fatalf("got %+v, want ServerName node_repl with no identity", res)
+	}
+}
