@@ -238,3 +238,64 @@ func TestCodexBuiltinNamesMatchExactly(t *testing.T) {
 		})
 	}
 }
+
+// TestCodexKeysFoldingToBuiltinsKeepTheirIdentity covers configured servers whose
+// keys only fold to a built-in's name in the tool namespace: the user never chose
+// that name, so they resolve through their own entries.
+func TestCodexKeysFoldingToBuiltinsKeepTheirIdentity(t *testing.T) {
+	cases := []struct {
+		name       string
+		serverName string
+		config     string
+		check      func(t *testing.T, res Resolution)
+	}{
+		{
+			name:       "hyphenated npm package",
+			serverName: "node_repl",
+			config:     "[mcp_servers.node-repl]\ncommand = 'npx'\nargs = ['-y', 'some-node-repl']\n",
+			check: func(t *testing.T, res Resolution) {
+				assertPackage(t, res, "npm", "some-node-repl", "")
+			},
+		},
+		{
+			name:       "dotted remote server",
+			serverName: "cua_repl",
+			config:     "[mcp_servers.\"cua.repl\"]\nurl = 'https://cua.example.com/mcp'\n",
+			check: func(t *testing.T, res Resolution) {
+				assertURL(t, res, "https://cua.example.com/mcp")
+			},
+		},
+		{
+			name:       "hyphenated local path",
+			serverName: "cua_repl",
+			config:     "[mcp_servers.cua-repl]\ncommand = '/tmp/cua-repl'\n",
+			check: func(t *testing.T, res Resolution) {
+				if !res.Unresolved {
+					t.Fatalf("got %+v, want an unresolved local-path server", res)
+				}
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t, "darwin")
+			f.write(f.homePath(".codex", "config.toml"), tc.config)
+
+			tc.check(t, Resolve(f.Env, codexReq(tc.serverName)))
+		})
+	}
+}
+
+// TestCodexExactBuiltinKeyWinsOverAFoldedOne covers both keys in one file: the
+// exact key is the one the call reached, so it is reported as built-in.
+func TestCodexExactBuiltinKeyWinsOverAFoldedOne(t *testing.T) {
+	f := newFixture(t, "darwin")
+	f.write(f.homePath(".codex", "config.toml"),
+		"[mcp_servers.node-repl]\ncommand = 'npx'\nargs = ['-y', 'some-node-repl']\n\n"+
+			"[mcp_servers.node_repl]\ncommand = '/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node_repl'\n")
+
+	res := Resolve(f.Env, codexReq("node_repl"))
+	if res.Unresolved || res.ServerName != "node_repl" || res.String() != "" {
+		t.Fatalf("got %+v, want ServerName node_repl with no identity", res)
+	}
+}
