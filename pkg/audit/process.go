@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -309,7 +310,8 @@ const (
 // is only replaced when its key matches the way encoding/json matched it and
 // its bytes are exactly the ones the entry was built from, so nothing is
 // removed that is not submitted elsewhere: output in a field this parser does
-// not read, and the other values of a repeated key, stay in the raw payload.
+// not read, and every other occurrence of a repeated key, stay in the raw
+// payload.
 // Where the entry carries a decoded form of the value rather than its bytes,
 // the marker names the encoding, so the original can still be told apart from
 // a value that was sent undecoded. output is zero when no output was found. A
@@ -319,7 +321,10 @@ func slimRawPayload(payload []byte, input, output payloadField) json.RawMessage 
 		start, end int
 		marker     []byte
 	}
-	var spans []span
+	// One span per field at most. The parser keeps the last value of a
+	// repeated key, so that is the occurrence the entry was built from, even
+	// when an earlier one holds the same bytes.
+	var inputSpan, outputSpan *span
 
 	dec := json.NewDecoder(bytes.NewReader(payload))
 	if tok, err := dec.Token(); err != nil || tok != json.Delim('{') {
@@ -339,26 +344,30 @@ func slimRawPayload(payload []byte, input, output payloadField) json.RawMessage 
 			return cloneRaw(payload)
 		}
 		end := int(dec.InputOffset())
+		start := end - len(value)
 
-		var marker []byte
 		switch {
 		case sameField(key, value, input):
-			marker = omittedMarker(rawOmittedToolInput, input)
+			inputSpan = &span{start: start, end: end, marker: omittedMarker(rawOmittedToolInput, input)}
 		case sameField(key, value, output):
-			marker = omittedMarker(rawOmittedToolOutput, output)
-		default:
-			continue
+			outputSpan = &span{start: start, end: end, marker: omittedMarker(rawOmittedToolOutput, output)}
 		}
-		spans = append(spans, span{start: end - len(value), end: end, marker: marker})
 	}
 	// The object has to close: json.Decoder.More reports false at the end of
 	// the input as well as at the closing brace.
 	if tok, err := dec.Token(); err != nil || tok != json.Delim('}') {
 		return cloneRaw(payload)
 	}
+	var spans []span
+	for _, s := range []*span{inputSpan, outputSpan} {
+		if s != nil {
+			spans = append(spans, *s)
+		}
+	}
 	if len(spans) == 0 {
 		return cloneRaw(payload)
 	}
+	slices.SortFunc(spans, func(a, b span) int { return a.start - b.start })
 
 	slim := make([]byte, 0, len(payload))
 	next := 0
