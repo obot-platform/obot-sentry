@@ -274,9 +274,144 @@ func TestProcessIdempotencyKeyCoversOmittedOutput(t *testing.T) {
 	}
 }
 
+func TestSlimRawPayloadKeepsEverythingElseByteForByte(t *testing.T) {
+	// Key order, whitespace, escapes, and large numbers outside the replaced
+	// values are exactly what the agent sent.
+	payload := `{ "z_last": "<a&b>",
+		"tool_input" : {"command": "echo hi"},
+		"big": 12345678901234567890123,
+		"tool_response": {"stdout": "hi"}, "a_first": [1, 2] }`
+	want := `{ "z_last": "<a&b>",
+		"tool_input" : {"obot_sentry_omitted":"details.request.body"},
+		"big": 12345678901234567890123,
+		"tool_response": {"obot_sentry_omitted":"details.response.body"}, "a_first": [1, 2] }`
+
+	got := slimRawPayload([]byte(payload),
+		payloadField{key: "tool_input", raw: json.RawMessage(`{"command": "echo hi"}`)},
+		payloadField{key: "tool_response", raw: json.RawMessage(`{"stdout": "hi"}`)},
+	)
+	if string(got) != want {
+		t.Fatalf("unexpected raw payload:\n got: %s\nwant: %s", got, want)
+	}
+}
+
+func TestProcessRawPayloadOnlyOmitsValuesTheEntryCarries(t *testing.T) {
+	tests := []struct {
+		name       string
+		agent      localagent.Agent
+		phase      Phase
+		payload    string
+		wantInput  string
+		wantOutput string
+		wantRaw    string
+	}{
+		{
+			name:       "an empty key is not mistaken for a missing output",
+			agent:      localagent.ClaudeCode,
+			phase:      PhaseFailure,
+			payload:    `{"tool_name":"Bash","tool_input":{"c":1},"":"keep me","error":"boom"}`,
+			wantInput:  `{"c":1}`,
+			wantOutput: `null`,
+			wantRaw:    `{"tool_name":"Bash","tool_input":{"obot_sentry_omitted":"details.request.body"},"":"keep me","error":"boom"}`,
+		},
+		{
+			name:       "a differently cased key that the parser read is the one omitted",
+			agent:      localagent.ClaudeCode,
+			phase:      PhasePostTool,
+			payload:    `{"tool_name":"Bash","tool_input":{"c":1},"tool_response":"first","Tool_Response":"second"}`,
+			wantInput:  `{"c":1}`,
+			wantOutput: `"second"`,
+			wantRaw:    `{"tool_name":"Bash","tool_input":{"obot_sentry_omitted":"details.request.body"},"tool_response":"first","Tool_Response":{"obot_sentry_omitted":"details.response.body"}}`,
+		},
+		{
+			name:       "only the value of a repeated key that the parser read is omitted",
+			agent:      localagent.ClaudeCode,
+			phase:      PhasePostTool,
+			payload:    `{"tool_name":"Bash","tool_input":{"a":"first"},"tool_input":{"b":"second"},"tool_response":"out"}`,
+			wantInput:  `{"b":"second"}`,
+			wantOutput: `"out"`,
+			wantRaw:    `{"tool_name":"Bash","tool_input":{"a":"first"},"tool_input":{"obot_sentry_omitted":"details.request.body"},"tool_response":{"obot_sentry_omitted":"details.response.body"}}`,
+		},
+		{
+			name:       "a failure keeps an output field it did not read",
+			agent:      localagent.ClaudeCode,
+			phase:      PhaseFailure,
+			payload:    `{"tool_name":"Bash","tool_input":{"c":1},"tool_response":"partial","error":"boom"}`,
+			wantInput:  `{"c":1}`,
+			wantOutput: `null`,
+			wantRaw:    `{"tool_name":"Bash","tool_input":{"obot_sentry_omitted":"details.request.body"},"tool_response":"partial","error":"boom"}`,
+		},
+		{
+			name:       "a cursor failure keeps an output field it did not read",
+			agent:      localagent.Cursor,
+			phase:      PhaseFailure,
+			payload:    `{"tool_name":"Shell","tool_input":{"c":1},"tool_output":"partial","error_message":"boom"}`,
+			wantInput:  `{"c":1}`,
+			wantOutput: `null`,
+			wantRaw:    `{"tool_name":"Shell","tool_input":{"obot_sentry_omitted":"details.request.body"},"tool_output":"partial","error_message":"boom"}`,
+		},
+		{
+			name:       "a null tool_response gives way to tool_result",
+			agent:      localagent.VSCode,
+			phase:      PhasePostTool,
+			payload:    `{"tool_name":"Bash","tool_input":{"c":1},"tool_response": null ,"tool_result":{"result_type":"success","text_result_for_llm":"hi"}}`,
+			wantInput:  `{"c":1}`,
+			wantOutput: `{"result_type":"success","text_result_for_llm":"hi"}`,
+			wantRaw:    `{"tool_name":"Bash","tool_input":{"obot_sentry_omitted":"details.request.body"},"tool_response": null ,"tool_result":{"obot_sentry_omitted":"details.response.body"}}`,
+		},
+		{
+			name:       "an event with no output keeps a null output field",
+			agent:      localagent.Codex,
+			phase:      PhasePostTool,
+			payload:    `{"tool_name":"Bash","tool_input":{"c":1},"tool_response":null,"model":"gpt-5"}`,
+			wantInput:  `{"c":1}`,
+			wantOutput: `null`,
+			wantRaw:    `{"tool_name":"Bash","tool_input":{"obot_sentry_omitted":"details.request.body"},"tool_response":null,"model":"gpt-5"}`,
+		},
+		{
+			name:       "cursor skips a null tool_output for a later output field",
+			agent:      localagent.Cursor,
+			phase:      PhasePostTool,
+			payload:    `{"tool_name":"MCP:echo","tool_input":{"c":1},"tool_output":null,"result_json":"{\"r\":1}"}`,
+			wantInput:  `{"c":1}`,
+			wantOutput: `{"r":1}`,
+			wantRaw:    `{"tool_name":"MCP:echo","tool_input":{"obot_sentry_omitted":"details.request.body"},"tool_output":null,"result_json":{"obot_sentry_omitted":"details.response.body"}}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := Process([]byte(tt.payload), ProcessOptions{
+				Agent:      tt.agent,
+				Phase:      tt.phase,
+				Now:        fixedNow,
+				Enrichment: &Enrichment{},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(result.Entries) != 1 {
+				t.Fatalf("expected one entry, got %d; warnings=%v", len(result.Entries), result.Warnings)
+			}
+			entry := result.Entries[0]
+			if got := string(entry.ToolInput); got != tt.wantInput {
+				t.Fatalf("unexpected input: got %s, want %s", got, tt.wantInput)
+			}
+			if got := string(entry.ToolOutput); got != tt.wantOutput {
+				t.Fatalf("unexpected output: got %s, want %s", got, tt.wantOutput)
+			}
+			if got := string(entry.RawHookPayload); got != tt.wantRaw {
+				t.Fatalf("unexpected raw payload:\n got: %s\nwant: %s", got, tt.wantRaw)
+			}
+		})
+	}
+}
+
 func TestSlimRawPayloadKeepsNonObjectPayload(t *testing.T) {
-	for _, payload := range []string{`[1, 2]`, `"text"`, `null`, `not json`} {
-		if got := string(slimRawPayload([]byte(payload), "tool_response")); got != payload {
+	input := payloadField{key: "tool_input", raw: json.RawMessage(`1`)}
+	output := payloadField{key: "tool_response", raw: json.RawMessage(`2`)}
+	for _, payload := range []string{`[1, 2]`, `"text"`, `null`, `not json`, `{"tool_input": 1, "tool_response": 2`} {
+		if got := string(slimRawPayload([]byte(payload), input, output)); got != payload {
 			t.Fatalf("expected %q unchanged, got %q", payload, got)
 		}
 	}

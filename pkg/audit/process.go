@@ -127,7 +127,7 @@ func normalizeEvent(agent Agent, phase Phase, event nativeEvent, payload []byte,
 	}
 
 	status, failureType := statusFor(phase, event)
-	output, outputKey := event.toolOutput(phase)
+	output, outputSource := event.toolOutput(phase)
 
 	occurredAt := occurredAt(event, now)
 	cwd := firstNonEmpty(event.cwd(), enrichment.CWD)
@@ -163,7 +163,7 @@ func normalizeEvent(agent Agent, phase Phase, event nativeEvent, payload []byte,
 		GitBranch:         enrichment.GitBranch,
 		GitCommitSHA:      enrichment.GitCommitSHA,
 		TranscriptPath:    event.transcriptPath(),
-		RawHookPayload:    slimRawPayload(payload, outputKey),
+		RawHookPayload:    slimRawPayload(payload, payloadField{key: rawToolInputKey, raw: input}, outputSource),
 	}
 
 	entry.ToolKind, entry.MCPServerHint, entry.MCPToolName = classifyTool(agent, toolName)
@@ -294,44 +294,75 @@ const (
 
 // slimRawPayload returns the hook payload with the tool input and the tool
 // output replaced by a small marker, because the entry submits both in their
-// own fields and they are most of the payload's bytes. Every other field is
-// kept as the agent sent it.
+// own fields and they are most of the payload's bytes. Everything else,
+// including key order and formatting, is kept as the agent sent it.
 //
-// Only the keys the entry was actually built from are replaced. outputKey is
-// the top-level key the output was read from, or empty when none was found, so
-// output in a field this parser does not know about stays in the raw payload
-// rather than being dropped. A payload that is not a JSON object is returned
+// input and output are the top-level fields the entry was built from. A value
+// is only replaced when its key matches the way encoding/json matched it and
+// its bytes are exactly what the entry carries, so nothing is removed that is
+// not submitted elsewhere: output in a field this parser does not read, and
+// the other values of a repeated key, stay in the raw payload. output is zero
+// when no output was found. A payload that is not a JSON object is returned
 // unchanged.
-func slimRawPayload(payload []byte, outputKey string) json.RawMessage {
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(payload, &fields); err != nil || fields == nil {
+func slimRawPayload(payload []byte, input, output payloadField) json.RawMessage {
+	type span struct {
+		start, end int
+		marker     []byte
+	}
+	var spans []span
+
+	dec := json.NewDecoder(bytes.NewReader(payload))
+	if tok, err := dec.Token(); err != nil || tok != json.Delim('{') {
 		return cloneRaw(payload)
 	}
+	for dec.More() {
+		tok, err := dec.Token()
+		if err != nil {
+			return cloneRaw(payload)
+		}
+		key, ok := tok.(string)
+		if !ok {
+			return cloneRaw(payload)
+		}
+		var value json.RawMessage
+		if err := dec.Decode(&value); err != nil {
+			return cloneRaw(payload)
+		}
+		end := int(dec.InputOffset())
 
-	replaced := false
-	for key, movedTo := range map[string]string{
-		rawToolInputKey: rawOmittedToolInput,
-		outputKey:       rawOmittedToolOutput,
-	} {
-		if _, ok := fields[key]; !ok {
+		var movedTo string
+		switch {
+		case sameField(key, value, input):
+			movedTo = rawOmittedToolInput
+		case sameField(key, value, output):
+			movedTo = rawOmittedToolOutput
+		default:
 			continue
 		}
 		marker, err := json.Marshal(map[string]string{rawOmittedKey: movedTo})
 		if err != nil {
 			return cloneRaw(payload)
 		}
-		fields[key] = marker
-		replaced = true
+		spans = append(spans, span{start: end - len(value), end: end, marker: marker})
 	}
-	if !replaced {
+	if len(spans) == 0 {
 		return cloneRaw(payload)
 	}
 
-	slim, err := json.Marshal(fields)
-	if err != nil {
-		return cloneRaw(payload)
+	slim := make([]byte, 0, len(payload))
+	next := 0
+	for _, s := range spans {
+		slim = append(slim, payload[next:s.start]...)
+		slim = append(slim, s.marker...)
+		next = s.end
 	}
-	return slim
+	return append(slim, payload[next:]...)
+}
+
+// sameField reports whether a top-level key and value of the payload are the
+// field the entry was built from.
+func sameField(key string, value json.RawMessage, field payloadField) bool {
+	return field.key != "" && strings.EqualFold(key, field.key) && bytes.Equal(value, field.raw)
 }
 
 func cloneRaw(payload []byte) json.RawMessage {

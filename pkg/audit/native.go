@@ -21,10 +21,13 @@ type sharedToolHookCommon struct {
 // post-success; product-specific fields such as VS Code timestamp, Codex
 // turn_id/model, and Claude duration_ms/error remain optional.
 //
-// VS Code has two hook harnesses that share one hook file. The Local harness
-// reports the tool's output as tool_response; the Copilot harness (also used by
-// Copilot CLI) reports it as tool_result, an object holding result_type and
-// text_result_for_llm, and sends no tool_response at all.
+// The output is not always in tool_response. VS Code documents two hook
+// harnesses that read the same hook file: the Local harness reports the tool's
+// output as tool_response, and the Copilot harness reports it as tool_result,
+// an object holding result_type and text_result_for_llm, with no
+// tool_response. The tool_result shape was observed from Copilot CLI, which
+// GitHub documents as sharing the Copilot harness; it has not been observed
+// from VS Code itself.
 type sharedSingleToolHook struct {
 	sharedToolHookCommon
 
@@ -67,15 +70,22 @@ type cursorToolHook struct {
 	AgentMessage   string          `json:"agent_message,omitempty"`
 }
 
+// payloadField is a top-level field of a hook payload: its key and its value
+// exactly as the agent sent it.
+type payloadField struct {
+	key string
+	raw json.RawMessage
+}
+
 // nativeEvent is the small adapter surface the normalizer needs after
 // unmarshalling an agent-specific native hook payload.
 type nativeEvent interface {
 	toolName() string
 	toolInput() json.RawMessage
-	// toolOutput returns the tool's output and the top-level payload key it was
-	// read from. The key is empty when the event reported no output, in which
-	// case the output is an explicit JSON null.
-	toolOutput(phase Phase) (output json.RawMessage, key string)
+	// toolOutput returns the tool's output and the top-level payload field it
+	// was read from. The source is zero when the event reported no output, in
+	// which case the output is an explicit JSON null.
+	toolOutput(phase Phase) (output json.RawMessage, source payloadField)
 	toolUseID() string
 	sessionID() string
 	turnID() string
@@ -94,26 +104,23 @@ type nativeEvent interface {
 
 func (e sharedSingleToolHook) toolName() string           { return e.ToolName }
 func (e sharedSingleToolHook) toolInput() json.RawMessage { return e.ToolInput }
-func (e sharedSingleToolHook) toolOutput(phase Phase) (json.RawMessage, string) {
+func (e sharedSingleToolHook) toolOutput(phase Phase) (json.RawMessage, payloadField) {
 	// A terminal event with no reported output (a failure, or a success that
 	// simply produced nothing) is still a completed tool call: submit an
 	// explicit null rather than dropping the audit entry.
 	if phase == PhaseFailure {
-		return json.RawMessage("null"), ""
+		return json.RawMessage("null"), payloadField{}
 	}
-	for _, field := range []struct {
-		key string
-		raw json.RawMessage
-	}{
+	for _, field := range []payloadField{
 		{key: "tool_response", raw: e.ToolResponse},
 		{key: "tool_result", raw: e.ToolResult},
 	} {
 		if isJSONNullOrEmpty(field.raw) {
 			continue
 		}
-		return cloneRaw(field.raw), field.key
+		return cloneRaw(field.raw), field
 	}
-	return json.RawMessage("null"), ""
+	return json.RawMessage("null"), payloadField{}
 }
 func (e sharedSingleToolHook) toolUseID() string         { return e.ToolUseID }
 func (e sharedSingleToolHook) sessionID() string         { return e.SessionID }
@@ -132,26 +139,23 @@ func (e sharedSingleToolHook) timestamp() string         { return e.Timestamp }
 
 func (e cursorToolHook) toolName() string           { return e.ToolName }
 func (e cursorToolHook) toolInput() json.RawMessage { return e.ToolInput }
-func (e cursorToolHook) toolOutput(phase Phase) (json.RawMessage, string) {
+func (e cursorToolHook) toolOutput(phase Phase) (json.RawMessage, payloadField) {
 	if phase == PhaseFailure {
-		return json.RawMessage("null"), ""
+		return json.RawMessage("null"), payloadField{}
 	}
-	for _, field := range []struct {
-		key string
-		raw json.RawMessage
-	}{
+	for _, field := range []payloadField{
 		{key: "tool_output", raw: e.ToolOutput},
 		{key: "result_json", raw: e.ResultJSON},
 		{key: "tool_response", raw: e.ToolResponse},
 	} {
-		if len(field.raw) == 0 {
+		if isJSONNullOrEmpty(field.raw) {
 			continue
 		}
-		return parseJSONString(field.raw), field.key
+		return parseJSONString(field.raw), field
 	}
 	// A completed tool call that reported no output still gets an audit entry
 	// with an explicit null output rather than being dropped.
-	return json.RawMessage("null"), ""
+	return json.RawMessage("null"), payloadField{}
 }
 func (e cursorToolHook) toolUseID() string         { return e.ToolUseID }
 func (e cursorToolHook) sessionID() string         { return e.ConversationID }
