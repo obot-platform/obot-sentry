@@ -155,7 +155,18 @@ func (e cursorToolHook) toolOutput(phase Phase) (json.RawMessage, payloadField) 
 			continue
 		}
 		output := parseJSONString(field.raw)
-		field.jsonString = !bytes.Equal(output, field.raw)
+		if bytes.Equal(output, field.raw) {
+			return output, field
+		}
+		// The entry carries the JSON inside the string. It is submitted
+		// compacted, so the string can only be rebuilt from it when its
+		// content was compact to begin with; otherwise the raw payload keeps
+		// the string.
+		var content string
+		if err := json.Unmarshal(field.raw, &content); err != nil || !isCompactJSON([]byte(content)) {
+			return output, payloadField{}
+		}
+		field.jsonString = true
 		return output, field
 	}
 	// A completed tool call that reported no output still gets an audit entry
@@ -187,4 +198,13 @@ func (e cursorToolHook) timestamp() string      { return "" }
 func isJSONNullOrEmpty(raw json.RawMessage) bool {
 	trimmed := bytes.TrimSpace(raw)
 	return len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null"))
+}
+
+// isCompactJSON reports whether raw is JSON with no insignificant whitespace.
+func isCompactJSON(raw []byte) bool {
+	var compact bytes.Buffer
+	if err := json.Compact(&compact, raw); err != nil {
+		return false
+	}
+	return bytes.Equal(compact.Bytes(), raw)
 }

@@ -394,6 +394,24 @@ func TestProcessRawPayloadOnlyOmitsValuesTheEntryCarries(t *testing.T) {
 			wantRaw:    `{"tool_name":"Shell","tool_input":{"obot_sentry_omitted":"details.request.body"},"tool_output":{"obot_sentry_omitted":"details.response.body","encoding":"json_string"}}`,
 		},
 		{
+			name:       "cursor output whose JSON is formatted stays in the raw payload",
+			agent:      localagent.Cursor,
+			phase:      PhasePostTool,
+			payload:    `{"tool_name":"Shell","tool_input":{"c":1},"tool_output":"  {\"x\" : 1}  "}`,
+			wantInput:  `{"c":1}`,
+			wantOutput: `{"x" : 1}`,
+			wantRaw:    `{"tool_name":"Shell","tool_input":{"obot_sentry_omitted":"details.request.body"},"tool_output":"  {\"x\" : 1}  "}`,
+		},
+		{
+			name:       "cursor output whose JSON is padded stays in the raw payload",
+			agent:      localagent.Cursor,
+			phase:      PhasePostTool,
+			payload:    `{"tool_name":"Shell","tool_input":{"c":1},"tool_output":" {\"x\":1}\n"}`,
+			wantInput:  `{"c":1}`,
+			wantOutput: `{"x":1}`,
+			wantRaw:    `{"tool_name":"Shell","tool_input":{"obot_sentry_omitted":"details.request.body"},"tool_output":" {\"x\":1}\n"}`,
+		},
+		{
 			name:       "cursor output that is not JSON-encoded is omitted without an encoding",
 			agent:      localagent.Cursor,
 			phase:      PhasePostTool,
@@ -427,6 +445,69 @@ func TestProcessRawPayloadOnlyOmitsValuesTheEntryCarries(t *testing.T) {
 			}
 			if got := string(entry.RawHookPayload); got != tt.wantRaw {
 				t.Fatalf("unexpected raw payload:\n got: %s\nwant: %s", got, tt.wantRaw)
+			}
+		})
+	}
+}
+
+func TestCursorJSONStringOutputSurvivesSubmission(t *testing.T) {
+	// The output is submitted, and spooled, as JSON. Whatever the raw payload
+	// omits must be recoverable from what that encoding carries.
+	tests := []struct {
+		name        string
+		toolOutput  string
+		wantOmitted bool
+	}{
+		{
+			name:        "compact JSON is omitted and rebuilt from the submitted output",
+			toolOutput:  `{"output":"hi\n","exitCode":0}`,
+			wantOmitted: true,
+		},
+		{
+			name:        "formatted JSON is kept because submission compacts it",
+			toolOutput:  "{\n  \"output\": \"hi\"\n}",
+			wantOmitted: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			encoded, err := json.Marshal(tt.toolOutput)
+			if err != nil {
+				t.Fatal(err)
+			}
+			payload := `{"tool_name":"Shell","tool_input":{"c":1},"tool_output":` + string(encoded) + `}`
+			result, err := Process([]byte(payload), ProcessOptions{
+				Agent:      localagent.Cursor,
+				Phase:      PhasePostTool,
+				Now:        fixedNow,
+				Enrichment: &Enrichment{},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			// Round-trip the entry the way submission and the spool do.
+			wire, err := json.Marshal(result.Entries[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			var entry Entry
+			if err := json.Unmarshal(wire, &entry); err != nil {
+				t.Fatal(err)
+			}
+
+			raw := decodeRawPayload(t, entry.RawHookPayload)
+			if !tt.wantOmitted {
+				var kept string
+				if err := json.Unmarshal(raw["tool_output"], &kept); err != nil || kept != tt.toolOutput {
+					t.Fatalf("expected the raw payload to keep the output string, got %s", raw["tool_output"])
+				}
+				return
+			}
+			assertJSONEqual(t, raw["tool_output"], `{"obot_sentry_omitted": "details.response.body", "encoding": "json_string"}`)
+			if got := string(entry.ToolOutput); got != tt.toolOutput {
+				t.Fatalf("submitted output does not rebuild the string:\n got: %s\nwant: %s", got, tt.toolOutput)
 			}
 		})
 	}

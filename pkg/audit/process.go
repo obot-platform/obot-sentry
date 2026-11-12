@@ -291,7 +291,8 @@ const (
 	// not the bytes the entry carries but an encoding of them, and names it.
 	rawOmittedEncodingKey = "encoding"
 	// rawOmittedJSONString says the removed value was a JSON string whose
-	// content is the JSON the entry carries.
+	// content is the JSON the entry carries, with no whitespace added or
+	// removed. Escape sequences inside it may be spelled differently.
 	rawOmittedJSONString = "json_string"
 
 	rawToolInputKey      = "tool_input"
