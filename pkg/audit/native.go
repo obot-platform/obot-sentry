@@ -25,9 +25,8 @@ type sharedToolHookCommon struct {
 // harnesses that read the same hook file: the Local harness reports the tool's
 // output as tool_response, and the Copilot harness reports it as tool_result,
 // an object holding result_type and text_result_for_llm, with no
-// tool_response. The tool_result shape was observed from Copilot CLI, which
-// GitHub documents as sharing the Copilot harness; it has not been observed
-// from VS Code itself.
+// tool_response. VS Code 1.146 in agent mode and Copilot CLI both send the
+// tool_result shape.
 type sharedSingleToolHook struct {
 	sharedToolHookCommon
 
