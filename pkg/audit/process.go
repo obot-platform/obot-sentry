@@ -345,6 +345,11 @@ func slimRawPayload(payload []byte, input, output payloadField) json.RawMessage 
 		}
 		spans = append(spans, span{start: end - len(value), end: end, marker: marker})
 	}
+	// The object has to close: json.Decoder.More reports false at the end of
+	// the input as well as at the closing brace.
+	if tok, err := dec.Token(); err != nil || tok != json.Delim('}') {
+		return cloneRaw(payload)
+	}
 	if len(spans) == 0 {
 		return cloneRaw(payload)
 	}
