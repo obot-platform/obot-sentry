@@ -287,6 +287,13 @@ const (
 	// that holds the removed value.
 	rawOmittedKey = "obot_sentry_omitted"
 
+	// rawOmittedEncodingKey is added to the marker when the removed value was
+	// not the bytes the entry carries but an encoding of them, and names it.
+	rawOmittedEncodingKey = "encoding"
+	// rawOmittedJSONString says the removed value was a JSON string whose
+	// content is the JSON the entry carries.
+	rawOmittedJSONString = "json_string"
+
 	rawToolInputKey      = "tool_input"
 	rawOmittedToolInput  = "details.request.body"
 	rawOmittedToolOutput = "details.response.body"
@@ -299,11 +306,13 @@ const (
 //
 // input and output are the top-level fields the entry was built from. A value
 // is only replaced when its key matches the way encoding/json matched it and
-// its bytes are exactly what the entry carries, so nothing is removed that is
-// not submitted elsewhere: output in a field this parser does not read, and
-// the other values of a repeated key, stay in the raw payload. output is zero
-// when no output was found. A payload that is not a JSON object is returned
-// unchanged.
+// its bytes are exactly the ones the entry was built from, so nothing is
+// removed that is not submitted elsewhere: output in a field this parser does
+// not read, and the other values of a repeated key, stay in the raw payload.
+// Where the entry carries a decoded form of the value rather than its bytes,
+// the marker names the encoding, so the original can still be told apart from
+// a value that was sent undecoded. output is zero when no output was found. A
+// payload that is not a JSON object is returned unchanged.
 func slimRawPayload(payload []byte, input, output payloadField) json.RawMessage {
 	type span struct {
 		start, end int
@@ -330,18 +339,14 @@ func slimRawPayload(payload []byte, input, output payloadField) json.RawMessage 
 		}
 		end := int(dec.InputOffset())
 
-		var movedTo string
+		var marker []byte
 		switch {
 		case sameField(key, value, input):
-			movedTo = rawOmittedToolInput
+			marker = omittedMarker(rawOmittedToolInput, input)
 		case sameField(key, value, output):
-			movedTo = rawOmittedToolOutput
+			marker = omittedMarker(rawOmittedToolOutput, output)
 		default:
 			continue
-		}
-		marker, err := json.Marshal(map[string]string{rawOmittedKey: movedTo})
-		if err != nil {
-			return cloneRaw(payload)
 		}
 		spans = append(spans, span{start: end - len(value), end: end, marker: marker})
 	}
@@ -362,6 +367,16 @@ func slimRawPayload(payload []byte, input, output payloadField) json.RawMessage 
 		next = s.end
 	}
 	return append(slim, payload[next:]...)
+}
+
+// omittedMarker returns the JSON object that stands in for a removed value.
+// Its keys and values are fixed identifiers that need no escaping.
+func omittedMarker(movedTo string, field payloadField) []byte {
+	marker := `{"` + rawOmittedKey + `":"` + movedTo + `"`
+	if field.jsonString {
+		marker += `,"` + rawOmittedEncodingKey + `":"` + rawOmittedJSONString + `"`
+	}
+	return []byte(marker + `}`)
 }
 
 // sameField reports whether a top-level key and value of the payload are the

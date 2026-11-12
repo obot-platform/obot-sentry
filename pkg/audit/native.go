@@ -75,6 +75,9 @@ type cursorToolHook struct {
 type payloadField struct {
 	key string
 	raw json.RawMessage
+	// jsonString is set when raw is a JSON-encoded string and the entry carries
+	// the JSON inside it rather than the string, as with Cursor's tool_output.
+	jsonString bool
 }
 
 // nativeEvent is the small adapter surface the normalizer needs after
@@ -151,7 +154,9 @@ func (e cursorToolHook) toolOutput(phase Phase) (json.RawMessage, payloadField) 
 		if isJSONNullOrEmpty(field.raw) {
 			continue
 		}
-		return parseJSONString(field.raw), field
+		output := parseJSONString(field.raw)
+		field.jsonString = !bytes.Equal(output, field.raw)
+		return output, field
 	}
 	// A completed tool call that reported no output still gets an audit entry
 	// with an explicit null output rather than being dropped.

@@ -88,7 +88,10 @@ func TestProcessRawPayloadOmitsExtractedInputAndOutput(t *testing.T) {
 		phase     Phase
 		payload   string
 		outputKey string
-		wantKept  map[string]string
+		// outputJSONString is set when the output was a JSON-encoded string
+		// that the entry carries decoded.
+		outputJSONString bool
+		wantKept         map[string]string
 	}{
 		{
 			name:  "claude code post tool",
@@ -184,7 +187,8 @@ func TestProcessRawPayloadOmitsExtractedInputAndOutput(t *testing.T) {
 				"user_email": "user@example.com",
 				"transcript_path": "/tmp/transcript.jsonl"
 			}`,
-			outputKey: "tool_output",
+			outputKey:        "tool_output",
+			outputJSONString: true,
 			wantKept: map[string]string{
 				"hook_event_name": `"postToolUse"`,
 				"session_id":      `"conversation-1"`,
@@ -232,7 +236,10 @@ func TestProcessRawPayloadOmitsExtractedInputAndOutput(t *testing.T) {
 			}
 
 			assertOmitted(t, raw, "tool_input", rawOmittedToolInput)
-			if tt.outputKey != "" {
+			switch {
+			case tt.outputJSONString:
+				assertJSONEqual(t, raw[tt.outputKey], `{"obot_sentry_omitted": "details.response.body", "encoding": "json_string"}`)
+			case tt.outputKey != "":
 				assertOmitted(t, raw, tt.outputKey, rawOmittedToolOutput)
 			}
 			for key, want := range tt.wantKept {
@@ -375,7 +382,25 @@ func TestProcessRawPayloadOnlyOmitsValuesTheEntryCarries(t *testing.T) {
 			payload:    `{"tool_name":"MCP:echo","tool_input":{"c":1},"tool_output":null,"result_json":"{\"r\":1}"}`,
 			wantInput:  `{"c":1}`,
 			wantOutput: `{"r":1}`,
-			wantRaw:    `{"tool_name":"MCP:echo","tool_input":{"obot_sentry_omitted":"details.request.body"},"tool_output":null,"result_json":{"obot_sentry_omitted":"details.response.body"}}`,
+			wantRaw:    `{"tool_name":"MCP:echo","tool_input":{"obot_sentry_omitted":"details.request.body"},"tool_output":null,"result_json":{"obot_sentry_omitted":"details.response.body","encoding":"json_string"}}`,
+		},
+		{
+			name:       "cursor output that is a JSON-encoded null is told apart from a null",
+			agent:      localagent.Cursor,
+			phase:      PhasePostTool,
+			payload:    `{"tool_name":"Shell","tool_input":{"c":1},"tool_output":"null"}`,
+			wantInput:  `{"c":1}`,
+			wantOutput: `null`,
+			wantRaw:    `{"tool_name":"Shell","tool_input":{"obot_sentry_omitted":"details.request.body"},"tool_output":{"obot_sentry_omitted":"details.response.body","encoding":"json_string"}}`,
+		},
+		{
+			name:       "cursor output that is not JSON-encoded is omitted without an encoding",
+			agent:      localagent.Cursor,
+			phase:      PhasePostTool,
+			payload:    `{"tool_name":"Shell","tool_input":{"c":1},"tool_output":"plain text"}`,
+			wantInput:  `{"c":1}`,
+			wantOutput: `"plain text"`,
+			wantRaw:    `{"tool_name":"Shell","tool_input":{"obot_sentry_omitted":"details.request.body"},"tool_output":{"obot_sentry_omitted":"details.response.body"}}`,
 		},
 	}
 
