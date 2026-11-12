@@ -127,10 +127,7 @@ func normalizeEvent(agent Agent, phase Phase, event nativeEvent, payload []byte,
 	}
 
 	status, failureType := statusFor(phase, event)
-	output, ok := event.toolOutput(phase)
-	if !ok {
-		return Entry{}, fmt.Errorf("missing terminal tool output for %s", toolName)
-	}
+	output, outputKey := event.toolOutput(phase)
 
 	occurredAt := occurredAt(event, now)
 	cwd := firstNonEmpty(event.cwd(), enrichment.CWD)
@@ -166,7 +163,7 @@ func normalizeEvent(agent Agent, phase Phase, event nativeEvent, payload []byte,
 		GitBranch:         enrichment.GitBranch,
 		GitCommitSHA:      enrichment.GitCommitSHA,
 		TranscriptPath:    event.transcriptPath(),
-		RawHookPayload:    cloneRaw(payload),
+		RawHookPayload:    slimRawPayload(payload, outputKey),
 	}
 
 	entry.ToolKind, entry.MCPServerHint, entry.MCPToolName = classifyTool(agent, toolName)
@@ -282,6 +279,59 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+const (
+	// rawOmittedKey marks a top-level value in RawHookPayload that was removed
+	// because the entry already carries it. Its value names the audit log field
+	// that holds the removed value.
+	rawOmittedKey = "obot_sentry_omitted"
+
+	rawToolInputKey      = "tool_input"
+	rawOmittedToolInput  = "details.request.body"
+	rawOmittedToolOutput = "details.response.body"
+)
+
+// slimRawPayload returns the hook payload with the tool input and the tool
+// output replaced by a small marker, because the entry submits both in their
+// own fields and they are most of the payload's bytes. Every other field is
+// kept as the agent sent it.
+//
+// Only the keys the entry was actually built from are replaced. outputKey is
+// the top-level key the output was read from, or empty when none was found, so
+// output in a field this parser does not know about stays in the raw payload
+// rather than being dropped. A payload that is not a JSON object is returned
+// unchanged.
+func slimRawPayload(payload []byte, outputKey string) json.RawMessage {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &fields); err != nil || fields == nil {
+		return cloneRaw(payload)
+	}
+
+	replaced := false
+	for key, movedTo := range map[string]string{
+		rawToolInputKey: rawOmittedToolInput,
+		outputKey:       rawOmittedToolOutput,
+	} {
+		if _, ok := fields[key]; !ok {
+			continue
+		}
+		marker, err := json.Marshal(map[string]string{rawOmittedKey: movedTo})
+		if err != nil {
+			return cloneRaw(payload)
+		}
+		fields[key] = marker
+		replaced = true
+	}
+	if !replaced {
+		return cloneRaw(payload)
+	}
+
+	slim, err := json.Marshal(fields)
+	if err != nil {
+		return cloneRaw(payload)
+	}
+	return slim
 }
 
 func cloneRaw(payload []byte) json.RawMessage {
