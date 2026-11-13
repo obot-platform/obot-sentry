@@ -1,6 +1,7 @@
 package audit
 
 import (
+	"bytes"
 	"encoding/json"
 	"math"
 )
@@ -19,6 +20,13 @@ type sharedToolHookCommon struct {
 // common core is tool_name/tool_input/tool_use_id plus tool_response on
 // post-success; product-specific fields such as VS Code timestamp, Codex
 // turn_id/model, and Claude duration_ms/error remain optional.
+//
+// The output is not always in tool_response. VS Code documents two hook
+// harnesses that read the same hook file: the Local harness reports the tool's
+// output as tool_response, and the Copilot harness reports it as tool_result,
+// an object holding result_type and text_result_for_llm, with no
+// tool_response. VS Code 1.146 in agent mode and Copilot CLI both send the
+// tool_result shape.
 type sharedSingleToolHook struct {
 	sharedToolHookCommon
 
@@ -27,6 +35,7 @@ type sharedSingleToolHook struct {
 	ToolUseID    string          `json:"tool_use_id,omitempty"`
 	ToolInput    json.RawMessage `json:"tool_input"`
 	ToolResponse json.RawMessage `json:"tool_response,omitempty"`
+	ToolResult   json.RawMessage `json:"tool_result,omitempty"`
 	DurationMs   int64           `json:"duration_ms,omitempty"`
 	Error        string          `json:"error,omitempty"`
 	Timestamp    string          `json:"timestamp,omitempty"`
@@ -60,12 +69,25 @@ type cursorToolHook struct {
 	AgentMessage   string          `json:"agent_message,omitempty"`
 }
 
+// payloadField is a top-level field of a hook payload: its key and its value
+// exactly as the agent sent it.
+type payloadField struct {
+	key string
+	raw json.RawMessage
+	// jsonString is set when raw is a JSON-encoded string and the entry carries
+	// the JSON inside it rather than the string, as with Cursor's tool_output.
+	jsonString bool
+}
+
 // nativeEvent is the small adapter surface the normalizer needs after
 // unmarshalling an agent-specific native hook payload.
 type nativeEvent interface {
 	toolName() string
 	toolInput() json.RawMessage
-	toolOutput(phase Phase) (json.RawMessage, bool)
+	// toolOutput returns the tool's output and the top-level payload field it
+	// was read from. The source is zero when the event reported no output, in
+	// which case the output is an explicit JSON null.
+	toolOutput(phase Phase) (output json.RawMessage, source payloadField)
 	toolUseID() string
 	sessionID() string
 	turnID() string
@@ -84,14 +106,23 @@ type nativeEvent interface {
 
 func (e sharedSingleToolHook) toolName() string           { return e.ToolName }
 func (e sharedSingleToolHook) toolInput() json.RawMessage { return e.ToolInput }
-func (e sharedSingleToolHook) toolOutput(phase Phase) (json.RawMessage, bool) {
+func (e sharedSingleToolHook) toolOutput(phase Phase) (json.RawMessage, payloadField) {
 	// A terminal event with no reported output (a failure, or a success that
 	// simply produced nothing) is still a completed tool call: submit an
 	// explicit null rather than dropping the audit entry.
-	if phase == PhaseFailure || len(e.ToolResponse) == 0 {
-		return json.RawMessage("null"), true
+	if phase == PhaseFailure {
+		return json.RawMessage("null"), payloadField{}
 	}
-	return cloneRaw(e.ToolResponse), true
+	for _, field := range []payloadField{
+		{key: "tool_response", raw: e.ToolResponse},
+		{key: "tool_result", raw: e.ToolResult},
+	} {
+		if isJSONNullOrEmpty(field.raw) {
+			continue
+		}
+		return cloneRaw(field.raw), field
+	}
+	return json.RawMessage("null"), payloadField{}
 }
 func (e sharedSingleToolHook) toolUseID() string         { return e.ToolUseID }
 func (e sharedSingleToolHook) sessionID() string         { return e.SessionID }
@@ -110,19 +141,36 @@ func (e sharedSingleToolHook) timestamp() string         { return e.Timestamp }
 
 func (e cursorToolHook) toolName() string           { return e.ToolName }
 func (e cursorToolHook) toolInput() json.RawMessage { return e.ToolInput }
-func (e cursorToolHook) toolOutput(phase Phase) (json.RawMessage, bool) {
+func (e cursorToolHook) toolOutput(phase Phase) (json.RawMessage, payloadField) {
 	if phase == PhaseFailure {
-		return json.RawMessage("null"), true
+		return json.RawMessage("null"), payloadField{}
 	}
-	for _, raw := range []json.RawMessage{e.ToolOutput, e.ResultJSON, e.ToolResponse} {
-		if len(raw) == 0 {
+	for _, field := range []payloadField{
+		{key: "tool_output", raw: e.ToolOutput},
+		{key: "result_json", raw: e.ResultJSON},
+		{key: "tool_response", raw: e.ToolResponse},
+	} {
+		if isJSONNullOrEmpty(field.raw) {
 			continue
 		}
-		return parseJSONString(raw), true
+		output := parseJSONString(field.raw)
+		if bytes.Equal(output, field.raw) {
+			return output, field
+		}
+		// The entry carries the JSON inside the string. It is submitted
+		// compacted, so the string can only be rebuilt from it when its
+		// content was compact to begin with; otherwise the raw payload keeps
+		// the string.
+		var content string
+		if err := json.Unmarshal(field.raw, &content); err != nil || !isCompactJSON([]byte(content)) {
+			return output, payloadField{}
+		}
+		field.jsonString = true
+		return output, field
 	}
 	// A completed tool call that reported no output still gets an audit entry
 	// with an explicit null output rather than being dropped.
-	return json.RawMessage("null"), true
+	return json.RawMessage("null"), payloadField{}
 }
 func (e cursorToolHook) toolUseID() string         { return e.ToolUseID }
 func (e cursorToolHook) sessionID() string         { return e.ConversationID }
@@ -143,3 +191,19 @@ func (e cursorToolHook) durationMs() int64      { return int64(math.Round(e.Dura
 func (e cursorToolHook) errorText() string      { return e.ErrorMessage }
 func (e cursorToolHook) failureType() string    { return e.FailureType }
 func (e cursorToolHook) timestamp() string      { return "" }
+
+// isJSONNullOrEmpty reports whether raw carries no value: the key was absent or
+// its value was a JSON null.
+func isJSONNullOrEmpty(raw json.RawMessage) bool {
+	trimmed := bytes.TrimSpace(raw)
+	return len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null"))
+}
+
+// isCompactJSON reports whether raw is JSON with no insignificant whitespace.
+func isCompactJSON(raw []byte) bool {
+	var compact bytes.Buffer
+	if err := json.Compact(&compact, raw); err != nil {
+		return false
+	}
+	return bytes.Equal(compact.Bytes(), raw)
+}

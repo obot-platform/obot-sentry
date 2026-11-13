@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -127,10 +128,7 @@ func normalizeEvent(agent Agent, phase Phase, event nativeEvent, payload []byte,
 	}
 
 	status, failureType := statusFor(phase, event)
-	output, ok := event.toolOutput(phase)
-	if !ok {
-		return Entry{}, fmt.Errorf("missing terminal tool output for %s", toolName)
-	}
+	output, outputSource := event.toolOutput(phase)
 
 	occurredAt := occurredAt(event, now)
 	cwd := firstNonEmpty(event.cwd(), enrichment.CWD)
@@ -166,7 +164,7 @@ func normalizeEvent(agent Agent, phase Phase, event nativeEvent, payload []byte,
 		GitBranch:         enrichment.GitBranch,
 		GitCommitSHA:      enrichment.GitCommitSHA,
 		TranscriptPath:    event.transcriptPath(),
-		RawHookPayload:    cloneRaw(payload),
+		RawHookPayload:    slimRawPayload(payload, payloadField{key: rawToolInputKey, raw: input}, outputSource),
 	}
 
 	entry.ToolKind, entry.MCPServerHint, entry.MCPToolName = classifyTool(agent, toolName)
@@ -282,6 +280,119 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+const (
+	// rawOmittedKey marks a top-level value in RawHookPayload that was removed
+	// because the entry already carries it. Its value names the audit log field
+	// that holds the removed value.
+	rawOmittedKey = "obot_sentry_omitted"
+
+	// rawOmittedEncodingKey is added to the marker when the removed value was
+	// not the bytes the entry carries but an encoding of them, and names it.
+	rawOmittedEncodingKey = "encoding"
+	// rawOmittedJSONString says the removed value was a JSON string whose
+	// content is the JSON the entry carries, with no whitespace added or
+	// removed. Escape sequences inside it may be spelled differently.
+	rawOmittedJSONString = "json_string"
+
+	rawToolInputKey      = "tool_input"
+	rawOmittedToolInput  = "details.request.body"
+	rawOmittedToolOutput = "details.response.body"
+)
+
+// slimRawPayload returns the hook payload with the tool input and the tool
+// output replaced by a small marker, because the entry submits both in their
+// own fields and they are most of the payload's bytes. Everything else,
+// including key order and formatting, is kept as the agent sent it.
+//
+// input and output are the top-level fields the entry was built from. A value
+// is only replaced when its key matches the way encoding/json matched it and
+// its bytes are exactly the ones the entry was built from, so nothing is
+// removed that is not submitted elsewhere: output in a field this parser does
+// not read, and every other occurrence of a repeated key, stay in the raw
+// payload.
+// Where the entry carries a decoded form of the value rather than its bytes,
+// the marker names the encoding, so the original can still be told apart from
+// a value that was sent undecoded. output is zero when no output was found. A
+// payload that is not a JSON object is returned unchanged.
+func slimRawPayload(payload []byte, input, output payloadField) json.RawMessage {
+	type span struct {
+		start, end int
+		marker     []byte
+	}
+	// One span per field at most. The parser keeps the last value of a
+	// repeated key, so that is the occurrence the entry was built from, even
+	// when an earlier one holds the same bytes.
+	var inputSpan, outputSpan *span
+
+	dec := json.NewDecoder(bytes.NewReader(payload))
+	if tok, err := dec.Token(); err != nil || tok != json.Delim('{') {
+		return cloneRaw(payload)
+	}
+	for dec.More() {
+		tok, err := dec.Token()
+		if err != nil {
+			return cloneRaw(payload)
+		}
+		key, ok := tok.(string)
+		if !ok {
+			return cloneRaw(payload)
+		}
+		var value json.RawMessage
+		if err := dec.Decode(&value); err != nil {
+			return cloneRaw(payload)
+		}
+		end := int(dec.InputOffset())
+		start := end - len(value)
+
+		switch {
+		case sameField(key, value, input):
+			inputSpan = &span{start: start, end: end, marker: omittedMarker(rawOmittedToolInput, input)}
+		case sameField(key, value, output):
+			outputSpan = &span{start: start, end: end, marker: omittedMarker(rawOmittedToolOutput, output)}
+		}
+	}
+	// The object has to close: json.Decoder.More reports false at the end of
+	// the input as well as at the closing brace.
+	if tok, err := dec.Token(); err != nil || tok != json.Delim('}') {
+		return cloneRaw(payload)
+	}
+	var spans []span
+	for _, s := range []*span{inputSpan, outputSpan} {
+		if s != nil {
+			spans = append(spans, *s)
+		}
+	}
+	if len(spans) == 0 {
+		return cloneRaw(payload)
+	}
+	slices.SortFunc(spans, func(a, b span) int { return a.start - b.start })
+
+	slim := make([]byte, 0, len(payload))
+	next := 0
+	for _, s := range spans {
+		slim = append(slim, payload[next:s.start]...)
+		slim = append(slim, s.marker...)
+		next = s.end
+	}
+	return append(slim, payload[next:]...)
+}
+
+// omittedMarker returns the JSON object that stands in for a removed value.
+// Its keys and values are fixed identifiers that need no escaping.
+func omittedMarker(movedTo string, field payloadField) []byte {
+	marker := `{"` + rawOmittedKey + `":"` + movedTo + `"`
+	if field.jsonString {
+		marker += `,"` + rawOmittedEncodingKey + `":"` + rawOmittedJSONString + `"`
+	}
+	return []byte(marker + `}`)
+}
+
+// sameField reports whether a top-level key and value of the payload are the
+// field the entry was built from.
+func sameField(key string, value json.RawMessage, field payloadField) bool {
+	return field.key != "" && strings.EqualFold(key, field.key) && bytes.Equal(value, field.raw)
 }
 
 func cloneRaw(payload []byte) json.RawMessage {
