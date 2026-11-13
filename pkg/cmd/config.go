@@ -1,8 +1,10 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 
+	"github.com/obot-platform/obot-sentry/pkg/client"
 	"github.com/obot-platform/obot-sentry/pkg/mdmconfig"
 )
 
@@ -39,8 +41,8 @@ func (f ConfigFlags) resolve() (mdmconfig.Config, error) {
 }
 
 // ExitCodeError carries a specific process exit code so MDM scripts can
-// distinguish configuration problems (exit 2) from runtime failures
-// (exit 1).
+// distinguish configuration problems (exit 2) and server rejections
+// (exit 3) from runtime failures (exit 1).
 type ExitCodeError struct {
 	Code int
 	Err  error
@@ -52,7 +54,25 @@ type ExitCodeError struct {
 func (e *ExitCodeError) Error() string { return e.Err.Error() }
 func (e *ExitCodeError) Unwrap() error { return e.Err }
 
+// Exit codes surface in Task Scheduler's LastTaskResult and the MSI log, and the Windows install instructions
+// document both of them.
+const (
+	exitCodeConfig   = 2
+	exitCodeRejected = 3
+)
+
 // NewConfigError wraps err as a configuration error (exit code 2).
 func NewConfigError(err error) error {
-	return &ExitCodeError{Code: 2, Err: err}
+	return &ExitCodeError{Code: exitCodeConfig, Err: err}
+}
+
+// rejectedExitCode gives err exit code 3 when the server rejected the request (see client.IsRejected).
+// Errors that already carry an exit code keep it, and every other error passes through unchanged.
+func rejectedExitCode(err error) error {
+	if client.IsRejected(err) {
+		if _, ok := errors.AsType[*ExitCodeError](err); !ok {
+			return &ExitCodeError{Code: exitCodeRejected, Err: err}
+		}
+	}
+	return err
 }
