@@ -167,6 +167,26 @@ func TestProcessRawPayloadOmitsExtractedInputAndOutput(t *testing.T) {
 			},
 		},
 		{
+			name:  "kiro post tool",
+			agent: localagent.Kiro,
+			phase: PhasePostTool,
+			payload: `{
+				"session_id": "kiro-session",
+				"hook_event_name": "PostToolUse",
+				"cwd": "/work/repo",
+				"tool_name": "execute_bash",
+				"tool_input": {"command": "go test ./..."},
+				"tool_response": {"exitCode": 0, "stdout": "ok"}
+			}`,
+			outputKey: "tool_response",
+			wantKept: map[string]string{
+				"session_id":      `"kiro-session"`,
+				"hook_event_name": `"PostToolUse"`,
+				"cwd":             `"/work/repo"`,
+				"tool_name":       `"execute_bash"`,
+			},
+		},
+		{
 			name:  "cursor post tool",
 			agent: localagent.Cursor,
 			phase: PhasePostTool,
