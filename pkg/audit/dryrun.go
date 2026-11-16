@@ -3,7 +3,6 @@ package audit
 import (
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"time"
@@ -44,11 +43,10 @@ func WriteDryRunLogs(logs []types.LocalAgentToolCallAuditLogInput) ([]string, er
 
 	paths := make([]string, 0, len(logs))
 	for _, log := range logs {
-		data, err := json.MarshalIndent(log, "", "  ")
+		data, err := marshalIndentUnescaped(log)
 		if err != nil {
 			return paths, err
 		}
-		data = append(data, '\n')
 
 		name, err := nextDryRunLogName()
 		if err != nil {

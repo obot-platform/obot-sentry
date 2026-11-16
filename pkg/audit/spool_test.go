@@ -249,6 +249,47 @@ func TestSpoolEnqueueEmptyBatchIsNoOp(t *testing.T) {
 	}
 }
 
+// TestSpoolKeepsPayloadBytesUnescaped pins that a spooled payload is replayed with the bytes the
+// agent sent: the server rebuilds the raw event from the submitted bodies, so a < or & that came
+// back as a \u escape would show up in it.
+func TestSpoolKeepsPayloadBytesUnescaped(t *testing.T) {
+	spool := &Spool{Dir: t.TempDir() + "/spool", MaxBytes: 50 * 1024 * 1024, MaxAge: time.Hour, Now: time.Now}
+	log := validSpoolLog("unescaped")
+	body := json.RawMessage(`{"output":"a && b <x> -> c"}`)
+	log.Details.Response.Body = body
+	log.Details.RawEvent = json.RawMessage(`{"tool_output":"<html>&amp;"}`)
+
+	if err := spool.Enqueue([]types.LocalAgentToolCallAuditLogInput{log}); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+	var replayed []types.LocalAgentToolCallAuditLogInput
+	if _, err := spool.Drain(1, func(logs []types.LocalAgentToolCallAuditLogInput) error {
+		replayed = logs
+		return nil
+	}, nil); err != nil {
+		t.Fatalf("drain: %v", err)
+	}
+	if len(replayed) != 1 {
+		t.Fatalf("replayed %d logs, want 1", len(replayed))
+	}
+	// Spooling indents the JSON, as submitting compacts it; only the escaping matters here.
+	for _, tt := range []struct {
+		name      string
+		got, want json.RawMessage
+	}{
+		{name: "response body", got: replayed[0].Details.Response.Body, want: body},
+		{name: "raw event", got: replayed[0].Details.RawEvent, want: log.Details.RawEvent},
+	} {
+		var compact bytes.Buffer
+		if err := json.Compact(&compact, tt.got); err != nil {
+			t.Fatal(err)
+		}
+		if compact.String() != string(tt.want) {
+			t.Fatalf("replayed %s = %s, want %s", tt.name, compact.String(), tt.want)
+		}
+	}
+}
+
 func validSpoolLog(id string) types.LocalAgentToolCallAuditLogInput {
 	return types.LocalAgentToolCallAuditLogInput{
 		// A fixed, whole-second timestamp keeps every seeded log the same
