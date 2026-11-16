@@ -293,7 +293,9 @@ const (
 	rawOmittedEncodingKey = "encoding"
 	// rawOmittedJSONString says the removed value was a JSON string whose
 	// content is the JSON the entry carries, with no whitespace added or
-	// removed. Escape sequences inside it may be spelled differently.
+	// removed. The entry is submitted without HTML escaping, so the server
+	// can rebuild the string from it; only U+2028 and U+2029, which
+	// encoding/json always escapes, come back spelled differently.
 	rawOmittedJSONString = "json_string"
 
 	rawToolInputKey      = "tool_input"

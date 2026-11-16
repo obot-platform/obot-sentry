@@ -1,6 +1,7 @@
 package audit
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -62,11 +63,10 @@ func (s *Spool) Enqueue(logs []types.LocalAgentToolCallAuditLogInput) error {
 	if err := fileutil.MkdirAllPrivate(s.Dir); err != nil {
 		return err
 	}
-	data, err := json.MarshalIndent(logs, "", "  ")
+	data, err := marshalIndentUnescaped(logs)
 	if err != nil {
 		return err
 	}
-	data = append(data, '\n')
 
 	name, err := s.nextName()
 	if err != nil {
@@ -76,6 +76,21 @@ func (s *Spool) Enqueue(logs []types.LocalAgentToolCallAuditLogInput) error {
 		return err
 	}
 	return s.enforceLimits()
+}
+
+// marshalIndentUnescaped is json.MarshalIndent without HTML escaping, with a trailing newline.
+// json.MarshalIndent rewrites <, > and & as \u escapes, inside a json.RawMessage too, so a
+// spooled payload would reach the server spelled differently from the one the agent sent, and the
+// server rebuilds the raw event from those bytes.
+func marshalIndentUnescaped(v any) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(v); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }
 
 // Drain submits up to limit oldest batches in order and removes each batch after
