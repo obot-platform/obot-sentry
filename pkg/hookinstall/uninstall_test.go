@@ -277,3 +277,59 @@ func TestRunUninstallMalformedConfigAbortsBeforeWriting(t *testing.T) {
 		t.Fatalf("later destination was written despite preflight failure: %v", err)
 	}
 }
+
+// TestUninstallRemovesFromEachClaudeDestinationIndependently covers an uninstall
+// that cannot update managed settings. There is no replacement to wait for on
+// uninstall, so the hooks in user settings are still removed.
+func TestUninstallRemovesFromEachClaudeDestinationIndependently(t *testing.T) {
+	home := t.TempDir()
+	machineRoot := realTempDir(t)
+	user := &TargetUser{Username: "alice", HomeDir: home, UID: os.Getuid(), GID: os.Getgid()}
+
+	hooks, err := mergeClaude(nil, macExe, "darwin", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var (
+		userFile    = filepath.Join(home, ".claude", "settings.json")
+		managedFile = filepath.Join(machineRoot, "ClaudeCode/managed-settings.json")
+	)
+	for path, perm := range map[string]os.FileMode{userFile: 0o600, managedFile: 0o644} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, hooks.data, perm); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	plan := Plan{
+		GOOS:      "darwin",
+		User:      user,
+		Uninstall: true,
+		Destinations: []Destination{
+			{Agent: localagent.ClaudeCode, Label: "Claude Code", Scope: ScopeMachine, Format: FormatJSON, Abs: managedFile},
+			{Agent: localagent.ClaudeCode, Label: "Claude Code (user settings)", Scope: ScopeUser, Format: FormatJSON, Rel: ".claude/settings.json", Retired: true},
+		},
+	}
+	changes, err := buildChanges(t.Context(), plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The managed file changes between preflight and commit, so its removal is
+	// refused.
+	if err := os.WriteFile(managedFile, append(bytes.Clone(hooks.data), '\n'), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	results := commitChanges(t.Context(), plan, changes)
+	if results[0].Status != StatusFailed {
+		t.Fatalf("managed settings result = %+v, want a failure", results[0])
+	}
+	if results[1].Status != StatusRemoved || results[1].HooksRemoved == 0 {
+		t.Fatalf("user settings result = %+v, want the hooks removed", results[1])
+	}
+	if data, err := os.ReadFile(userFile); err != nil || strings.Contains(string(data), managedMarker) {
+		t.Fatalf("user settings still hold owned hooks: err=%v\n%s", err, data)
+	}
+}

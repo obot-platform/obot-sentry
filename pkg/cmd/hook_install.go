@@ -42,9 +42,7 @@ func (h *HookInstall) Customize(cmd *cobra.Command) {
 
 Requires root on macOS or an elevated Administrator/SYSTEM token on Windows.
 Installs machine policy for Claude Code, Codex, and Cursor and user hooks for
-the active console user's Visual Studio Code and Kiro installations. Claude
-Code is reported as failed when an MDM policy makes Claude Code ignore its
-managed settings file.
+the active console user's Visual Studio Code and Kiro installations.
 
 With enforcement enabled, also installs the pre-tool hooks that check each tool
 call against Obot's allowlist, for Claude Code, Codex, and Cursor. A run without

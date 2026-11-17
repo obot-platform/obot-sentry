@@ -53,13 +53,6 @@ type Installer struct {
 	// to Destinations. Tests inject a set rooted under a temporary directory so
 	// the anchored commit can be exercised without writing to real system paths.
 	ResolveDestinations func(goos string) []Destination
-	// ClaudePolicy reports the MDM-delivered Claude Code policy for the console
-	// user. When it supersedes managed-settings.json, Claude Code's hooks are
-	// still written there but the destination is reported as failed, because
-	// Claude Code does not read them. Unlike the other seams, nil means no
-	// detection rather than the platform default, so a test never depends on the
-	// policy of the machine it runs on.
-	ClaudePolicy func(*TargetUser) ClaudePolicy
 	// Enforce installs the pre-tool enforcement hooks in addition to the
 	// post-tool audit hooks. It is resolved by the command layer from the
 	// --enforce flag, the environment, and the MDM store, in that order.
@@ -111,7 +104,6 @@ func New() *Installer {
 		ResolveUser:         resolveTargetUser,
 		ProvisionIdentity:   defaultProvisionIdentity,
 		ResolveDestinations: Destinations,
-		ClaudePolicy:        detectClaudePolicy,
 		Out:                 os.Stdout,
 	}
 }
@@ -125,8 +117,6 @@ type Plan struct {
 	User         *TargetUser
 	IdentityDir  string
 	Destinations []Destination
-	// ClaudePolicy is the detected Claude Code MDM policy; see Installer.
-	ClaudePolicy ClaudePolicy
 	Enforce      bool
 	Uninstall    bool
 }
@@ -191,18 +181,12 @@ func (i *Installer) Run(ctx context.Context) error {
 	if resolveDests == nil {
 		resolveDests = Destinations
 	}
-	// Uninstall removes the hooks whether or not Claude Code was reading them.
-	var policy ClaudePolicy
-	if !i.Uninstall && i.ClaudePolicy != nil {
-		policy = i.ClaudePolicy(user)
-	}
 	plan := Plan{
 		GOOS:         goos,
 		Executable:   exe,
 		User:         user,
 		IdentityDir:  identityDir,
 		Destinations: resolveDests(goos),
-		ClaudePolicy: policy,
 		Enforce:      i.Enforce,
 		Uninstall:    i.Uninstall,
 	}
@@ -309,10 +293,6 @@ func buildChanges(ctx context.Context, plan Plan) ([]plannedChange, error) {
 // ones failed to land would leave an agent that had working hooks with none.
 // Uninstall has no replacement to wait for, so it removes from each destination
 // independently.
-//
-// Claude Code's managed settings count as failed when an MDM policy makes
-// Claude Code ignore them, even though the write succeeded: the hooks are not
-// running, and a run that reported otherwise would hide that.
 func commitChanges(ctx context.Context, plan Plan, changes []plannedChange) []Result {
 	var (
 		results    = make([]Result, len(changes))
@@ -323,9 +303,6 @@ func commitChanges(ctx context.Context, plan Plan, changes []plannedChange) []Re
 			continue
 		}
 		results[i] = commitChange(ctx, plan, c)
-		if results[i].Status != StatusFailed && c.dest.Agent == AgentClaudeCode && plan.ClaudePolicy.SupersedesFile {
-			results[i] = failedResult(c, errClaudePolicySupersedesFile(plan.ClaudePolicy))
-		}
 		if results[i].Status == StatusFailed {
 			liveFailed[c.dest.Agent] = true
 		}
@@ -335,7 +312,7 @@ func commitChanges(ctx context.Context, plan Plan, changes []plannedChange) []Re
 			continue
 		}
 		if !plan.Uninstall && c.write && liveFailed[c.dest.Agent] {
-			results[i] = failedResult(c, errors.New("hooks left in place until their replacement is in effect"))
+			results[i] = failedResult(c, errors.New("hooks left in place because their replacement was not installed"))
 			continue
 		}
 		results[i] = commitChange(ctx, plan, c)
