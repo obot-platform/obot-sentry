@@ -183,7 +183,7 @@ func TestRunUninstallEndToEnd(t *testing.T) {
 	}
 
 	for _, path := range []string{
-		filepath.Join(home, ".claude/settings.json"),
+		filepath.Join(machineRoot, "ClaudeCode/managed-settings.json"),
 		filepath.Join(machineRoot, "etc/codex/requirements.toml"),
 		filepath.Join(home, ".copilot/hooks/obot-sentry.json"),
 		filepath.Join(machineRoot, "Cursor/hooks.json"),
@@ -237,6 +237,7 @@ func TestRunUninstallDoesNotCreateMissingFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, path := range []string{
+		filepath.Join(machineRoot, "ClaudeCode/managed-settings.json"),
 		filepath.Join(home, ".claude/settings.json"),
 		filepath.Join(machineRoot, "etc/codex/requirements.toml"),
 		filepath.Join(home, ".copilot/hooks/obot-sentry.json"),

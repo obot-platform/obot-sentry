@@ -37,7 +37,8 @@ func TestDestinationsModel(t *testing.T) {
 	t.Run("darwin", func(t *testing.T) {
 		dests := Destinations("darwin")
 		want := []Destination{
-			{Agent: localagent.ClaudeCode, Label: "Claude Code", Scope: ScopeUser, Format: FormatJSON, Rel: ".claude/settings.json"},
+			{Agent: localagent.ClaudeCode, Label: "Claude Code", Scope: ScopeMachine, Format: FormatJSON, Abs: "/Library/Application Support/ClaudeCode/managed-settings.json"},
+			{Agent: localagent.ClaudeCode, Label: "Claude Code (user settings)", Scope: ScopeUser, Format: FormatJSON, Rel: ".claude/settings.json", Retired: true},
 			{Agent: localagent.Codex, Label: "Codex", Scope: ScopeMachine, Format: FormatTOML, Abs: "/etc/codex/requirements.toml"},
 			{Agent: localagent.VSCode, Label: "Visual Studio Code", Scope: ScopeUser, Format: FormatJSON, Rel: ".copilot/hooks/obot-sentry.json"},
 			{Agent: localagent.Cursor, Label: "Cursor", Scope: ScopeMachine, Format: FormatJSON, Abs: "/Library/Application Support/Cursor/hooks.json"},
@@ -48,10 +49,12 @@ func TestDestinationsModel(t *testing.T) {
 	})
 	t.Run("windows", func(t *testing.T) {
 		t.Setenv("ProgramData", `C:\ProgramData`)
+		t.Setenv("ProgramFiles", `C:\Program Files`)
 		programData := windowsProgramData()
 		dests := Destinations("windows")
 		want := []Destination{
-			{Agent: localagent.ClaudeCode, Label: "Claude Code", Scope: ScopeUser, Format: FormatJSON, Rel: ".claude/settings.json"},
+			{Agent: localagent.ClaudeCode, Label: "Claude Code", Scope: ScopeMachine, Format: FormatJSON, Abs: `C:\Program Files\ClaudeCode\managed-settings.json`},
+			{Agent: localagent.ClaudeCode, Label: "Claude Code (user settings)", Scope: ScopeUser, Format: FormatJSON, Rel: ".claude/settings.json", Retired: true},
 			{Agent: localagent.Codex, Label: "Codex", Scope: ScopeMachine, Format: FormatTOML, Abs: winJoin(programData, "OpenAI", "Codex", "requirements.toml")},
 			{Agent: localagent.VSCode, Label: "Visual Studio Code", Scope: ScopeUser, Format: FormatJSON, Rel: ".copilot/hooks/obot-sentry.json"},
 			{Agent: localagent.Cursor, Label: "Cursor", Scope: ScopeMachine, Format: FormatJSON, Abs: winJoin(programData, "Cursor", "hooks.json")},

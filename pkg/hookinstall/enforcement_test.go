@@ -482,7 +482,7 @@ func TestRunEnforceEndToEnd(t *testing.T) {
 		}
 	}
 
-	claudeFile := filepath.Join(home, ".claude/settings.json")
+	claudeFile := filepath.Join(machineRoot, "ClaudeCode/managed-settings.json")
 	codexFile := filepath.Join(machineRoot, "etc/codex/requirements.toml")
 	cursorFile := filepath.Join(machineRoot, "Cursor/hooks.json")
 	vscodeFile := filepath.Join(home, ".copilot/hooks/obot-sentry.json")

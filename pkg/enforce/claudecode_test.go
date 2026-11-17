@@ -90,6 +90,62 @@ func TestClaudeCodeManagedConfigWindows(t *testing.T) {
 	assertURL(t, Resolve(f.Env, claudeCodeReq("myserver", f.path("proj"))), "https://managed.example.com/sse")
 }
 
+// TestClaudeCodeConfigDirRelocatesClaudeJSON covers a session started with
+// CLAUDE_CONFIG_DIR. Claude Code then reads .claude.json from that directory and
+// ignores the one in the home directory, so the resolver has to as well: the
+// home file can hold an allowed server while the session runs a different one
+// under the same name.
+func TestClaudeCodeConfigDirRelocatesClaudeJSON(t *testing.T) {
+	f := newFixture(t, "darwin")
+	project := f.path("proj")
+	configDir := f.path("alt-claude")
+	f.write(f.homePath(".claude.json"), `{"mcpServers":{"myserver":{"url":"https://home.example.com/sse"}}}`)
+
+	// Unset, the home file answers.
+	assertURL(t, Resolve(f.Env, claudeCodeReq("myserver", project)), "https://home.example.com/sse")
+
+	// Set, the relocated file answers and the home file is never consulted.
+	f.setenv(claudeConfigDirEnv, configDir)
+	f.write(filepath.Join(configDir, ".claude.json"), `{"mcpServers":{"myserver":{"url":"https://alt.example.com/sse"}}}`)
+	res := Resolve(f.Env, claudeCodeReq("myserver", project))
+	assertURL(t, res, "https://alt.example.com/sse")
+	if slices.Contains(consultedPaths(res), f.homePath(".claude.json")) {
+		t.Fatalf("consulted the home .claude.json despite %s:\n%s", claudeConfigDirEnv, resolveTrace(res))
+	}
+
+	// A server only the home file defines is not one this session can run.
+	f.write(f.homePath(".claude.json"), `{"mcpServers":{"homeonly":{"url":"https://home.example.com/sse"}}}`)
+	res = Resolve(f.Env, claudeCodeReq("homeonly", project))
+	assertUnresolved(t, res, `MCP server "homeonly" was not found in any Claude Code MCP configuration`)
+	want := []string{
+		f.machinePath(claudeManagedMCPDarwin),
+		filepath.Join(project, ".mcp.json"),
+		filepath.Join(configDir, ".claude.json"),
+	}
+	if got := consultedPaths(res); !slices.Equal(got, want) {
+		t.Fatalf("consulted\n%v\nwant\n%v\n%s", got, want, resolveTrace(res))
+	}
+}
+
+// TestClaudeCodeConfigDirRelocatesProjectsAndConnectors covers the two other
+// things the resolver reads from .claude.json, which move with it.
+func TestClaudeCodeConfigDirRelocatesProjectsAndConnectors(t *testing.T) {
+	f := newFixture(t, "darwin")
+	project := f.mkdir(f.path("proj"))
+	configDir := f.path("alt-claude")
+	f.setenv(claudeConfigDirEnv, configDir)
+	f.write(filepath.Join(configDir, ".claude.json"), `{`+
+		`"projects":{`+quote(project)+`:{"mcpServers":{"myserver":{"url":"https://project.example.com/sse"}}}},`+
+		`"claudeAiMcpEverConnected":["claude.ai Linear"]}`)
+
+	assertURL(t, Resolve(f.Env, claudeCodeReq("myserver", project)), "https://project.example.com/sse")
+
+	res := Resolve(f.Env, claudeCodeReq("claude_ai_Linear", project))
+	if res.Identity.Connector != "claude.ai Linear" {
+		t.Fatalf("connector = %q, want %q\n%s", res.Identity.Connector, "claude.ai Linear", resolveTrace(res))
+	}
+}
+
 // TestClaudeCodeProjectBeatsGlobal covers the ordinary precedence case.
 func TestClaudeCodeProjectBeatsGlobal(t *testing.T) {
 	f := newFixture(t, "darwin")

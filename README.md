@@ -68,7 +68,7 @@ unless the answer is an explicit allow.
 
 | Agent | File | Events added |
 |---|---|---|
-| Claude Code | `~/.claude/settings.json` | `PreToolUse` |
+| Claude Code | `/Library/Application Support/ClaudeCode/managed-settings.json` (macOS), `%ProgramFiles%\ClaudeCode\managed-settings.json` | `PreToolUse` |
 | Codex | `/etc/codex/requirements.toml` (macOS), `%ProgramData%\OpenAI\Codex\requirements.toml` | `PreToolUse` |
 | Cursor | `/Library/Application Support/Cursor/hooks.json` (macOS), `%ProgramData%\Cursor\hooks.json` | `beforeMCPExecution`, `preToolUse` |
 | Kiro | `~/.kiro/hooks/obot-sentry.json` | `PreToolUse` |
@@ -197,12 +197,30 @@ unresolved: stdio command "/opt/homebrew/bin/some-server" is a path, not a bare 
 
 ### Tamper resistance, stated plainly
 
-The Codex and Cursor hook files are machine-scoped and administrator-owned. The
-Claude Code and Kiro hook files are **user-scoped** (`~/.claude/settings.json`,
-`~/.kiro/hooks/obot-sentry.json`), so the user whose calls are being enforced can
-delete them. The hourly `hook-install` task re-converges them, so the bypass
-window is bounded by that interval rather than permanent. We intend to find a
-machine-scoped solution for Claude Code in the future.
+The Claude Code, Codex, and Cursor hook files are machine-scoped and
+administrator-owned. The Kiro hook file is **user-scoped**
+(`~/.kiro/hooks/obot-sentry.json`), so the user whose calls are being enforced
+can delete it. The hourly `hook-install` task re-converges it, so the bypass
+window is bounded by that interval rather than permanent.
+
+Claude Code's hooks are installed in its managed settings file, which Claude
+Code reads from a fixed path. Starting Claude Code with a different
+`CLAUDE_CONFIG_DIR` therefore does not skip them, and they keep running when an
+administrator sets `allowManagedHooksOnly`. MCP servers are resolved against
+`$CLAUDE_CONFIG_DIR/.claude.json` when the session sets that variable, which is
+the file Claude Code itself reads in that case.
+
+Claude Code uses only one managed settings source by default. If the machine
+also receives server-managed settings or an MDM policy (the
+`com.anthropic.claudecode` preference domain on macOS,
+`HKLM\SOFTWARE\Policies\ClaudeCode` on Windows), Claude Code ignores the
+managed settings file and Obot Sentry's hooks do not run. Set
+`managedSourcesBehavior` to `merge` in that higher-ranked source so the file is
+applied as well.
+
+Releases before this one installed Claude Code's hooks in
+`~/.claude/settings.json`. `hook-install` removes those entries when it installs
+the managed ones.
 
 Kiro runs no hooks in a workspace the user hasn't trusted, or in a window with
 no folder open, so calls made there are neither enforced nor audited. A folder
@@ -243,7 +261,8 @@ are:
 
 | Agent | macOS | Windows |
 |---|---|---|
-| Claude Code | `~/.claude/settings.json` | `%USERPROFILE%\.claude\settings.json` |
+| Claude Code | `/Library/Application Support/ClaudeCode/managed-settings.json` | `%ProgramFiles%\ClaudeCode\managed-settings.json` |
+| Claude Code (user settings, earlier releases) | `~/.claude/settings.json` | `%USERPROFILE%\.claude\settings.json` |
 | Codex | `/etc/codex/requirements.toml` | `%ProgramData%\OpenAI\Codex\requirements.toml` |
 | Copilot (VS Code) hook | `~/.copilot/hooks/obot-sentry.json` | `%USERPROFILE%\.copilot\hooks\obot-sentry.json` |
 | Cursor | `/Library/Application Support/Cursor/hooks.json` | `%ProgramData%\Cursor\hooks.json` |

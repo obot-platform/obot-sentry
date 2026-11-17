@@ -12,3 +12,11 @@ func windowsProgramData() string {
 	}
 	return `C:\ProgramData`
 }
+
+// windowsProgramFiles is the Program Files counterpart of windowsProgramData.
+func windowsProgramFiles() string {
+	if path := os.Getenv("ProgramFiles"); path != "" {
+		return path
+	}
+	return `C:\Program Files`
+}

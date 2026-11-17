@@ -259,7 +259,7 @@ func buildChanges(ctx context.Context, plan Plan) ([]plannedChange, error) {
 			return nil, fmt.Errorf("%s (%s): %w", d.Label, abs, err)
 		}
 		var outcome mergeOutcome
-		if plan.Uninstall {
+		if plan.Uninstall || d.Retired {
 			outcome, err = removeConfig(d, existing)
 		} else {
 			outcome, err = mergeConfig(d, existing, plan.Executable, plan.GOOS, plan.Enforce)

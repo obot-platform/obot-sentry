@@ -178,7 +178,8 @@ func realTempDir(t *testing.T) string {
 func tempDestinations(machineRoot string) func(string) []Destination {
 	return func(string) []Destination {
 		return []Destination{
-			{Agent: localagent.ClaudeCode, Label: "Claude Code", Scope: ScopeUser, Format: FormatJSON, Rel: ".claude/settings.json"},
+			{Agent: localagent.ClaudeCode, Label: "Claude Code", Scope: ScopeMachine, Format: FormatJSON, Abs: filepath.Join(machineRoot, "ClaudeCode/managed-settings.json")},
+			{Agent: localagent.ClaudeCode, Label: "Claude Code (user settings)", Scope: ScopeUser, Format: FormatJSON, Rel: ".claude/settings.json", Retired: true},
 			{Agent: localagent.Codex, Label: "Codex", Scope: ScopeMachine, Format: FormatTOML, Abs: filepath.Join(machineRoot, "etc/codex/requirements.toml")},
 			{Agent: localagent.VSCode, Label: "Visual Studio Code", Scope: ScopeUser, Format: FormatJSON, Rel: ".copilot/hooks/obot-sentry.json"},
 			{Agent: localagent.Cursor, Label: "Cursor", Scope: ScopeMachine, Format: FormatJSON, Abs: filepath.Join(machineRoot, "Cursor/hooks.json")},
@@ -229,7 +230,7 @@ func TestRunConvergesAndIsIdempotent(t *testing.T) {
 	assertNoSecrets(t, got)
 
 	files := []string{
-		filepath.Join(home, ".claude/settings.json"),
+		filepath.Join(machineRoot, "ClaudeCode/managed-settings.json"),
 		filepath.Join(machineRoot, "etc/codex/requirements.toml"),
 		filepath.Join(home, ".copilot/hooks/obot-sentry.json"),
 		filepath.Join(machineRoot, "Cursor/hooks.json"),
@@ -245,6 +246,10 @@ func TestRunConvergesAndIsIdempotent(t *testing.T) {
 			t.Fatalf("%s missing managed content:\n%s", f, data)
 		}
 		before[f] = data
+	}
+	// The retired user settings file had nothing to remove, so it is not created.
+	if _, err := os.Stat(filepath.Join(home, ".claude")); !os.IsNotExist(err) {
+		t.Fatalf("retired Claude Code user settings were created (err=%v)", err)
 	}
 
 	// Second run must report every destination unchanged and rewrite nothing.
@@ -446,5 +451,98 @@ func TestCommitRefusesConcurrentConfigEdit(t *testing.T) {
 	}
 	if got, err := os.ReadFile(abs); err != nil || string(got) != concurrent {
 		t.Fatalf("concurrent edit was overwritten: got=%q err=%v", got, err)
+	}
+}
+
+// TestRunMovesClaudeHooksOutOfUserSettings covers an upgrade from a release that
+// installed Claude Code's hooks in ~/.claude/settings.json. The hooks have to end
+// up in managed settings only: left in both places, every call would be audited
+// and enforced twice.
+func TestRunMovesClaudeHooksOutOfUserSettings(t *testing.T) {
+	home := t.TempDir()
+	machineRoot := realTempDir(t)
+	user := &TargetUser{Username: "alice", HomeDir: home, UID: os.Getuid(), GID: os.Getgid()}
+
+	// Seed the user settings the way the earlier release left them: its own
+	// hooks next to a setting and a hook the user wrote.
+	old, err := mergeClaude([]byte(`{"model":"opus","hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"/usr/local/bin/my-own-hook"}]}]}}`), macExe, "darwin", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	userFile := filepath.Join(home, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(userFile), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(userFile, old.data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	newInstaller := func(uninstall bool, out *bytes.Buffer) *Installer {
+		return &Installer{
+			GOOS:                "darwin",
+			Privilege:           func() error { return nil },
+			ResolveExe:          func() (string, error) { return macExe, nil },
+			ResolveUser:         func() (*TargetUser, error) { return user, nil },
+			ProvisionIdentity:   func() (string, error) { return "/id", nil },
+			ResolveDestinations: tempDestinations(machineRoot),
+			Enforce:             true,
+			Uninstall:           uninstall,
+			Out:                 out,
+		}
+	}
+
+	var out bytes.Buffer
+	if err := newInstaller(false, &out).Run(t.Context()); err != nil {
+		t.Fatalf("install: %v\n%s", err, out.String())
+	}
+	if !strings.Contains(out.String(), "3 hooks removed") {
+		t.Fatalf("summary does not report the hooks removed from user settings:\n%s", out.String())
+	}
+
+	managedFile := filepath.Join(machineRoot, "ClaudeCode/managed-settings.json")
+	managed, err := os.ReadFile(managedFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"PostToolUse"`, `"PostToolUseFailure"`, `"PreToolUse"`, managedMarker} {
+		if !strings.Contains(string(managed), want) {
+			t.Fatalf("managed settings missing %q:\n%s", want, managed)
+		}
+	}
+
+	userAfter, err := os.ReadFile(userFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(userAfter), managedMarker) {
+		t.Fatalf("owned hooks survived in user settings:\n%s", userAfter)
+	}
+	for _, want := range []string{`"model"`, "/usr/local/bin/my-own-hook"} {
+		if !strings.Contains(string(userAfter), want) {
+			t.Fatalf("user settings lost %q:\n%s", want, userAfter)
+		}
+	}
+
+	// A second install has nothing left to move.
+	var again bytes.Buffer
+	if err := newInstaller(false, &again).Run(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(again.String(), string(StatusRemoved)) {
+		t.Fatalf("second install removed hooks again:\n%s", again.String())
+	}
+	if got, err := os.ReadFile(userFile); err != nil || !bytes.Equal(got, userAfter) {
+		t.Fatalf("second install rewrote user settings: err=%v\n%s", err, got)
+	}
+
+	// Uninstall clears the managed file and leaves the user's own hook alone.
+	if err := newInstaller(true, &bytes.Buffer{}).Run(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.ReadFile(managedFile); err != nil || strings.Contains(string(got), managedMarker) {
+		t.Fatalf("uninstall left owned hooks in managed settings: err=%v\n%s", err, got)
+	}
+	if got, err := os.ReadFile(userFile); err != nil || !bytes.Equal(got, userAfter) {
+		t.Fatalf("uninstall changed user settings: err=%v\n%s", err, got)
 	}
 }

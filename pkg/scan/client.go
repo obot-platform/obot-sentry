@@ -34,7 +34,7 @@ type Client struct {
 	//
 	// Entries must be things ONLY the client produces. Hand-authorable
 	// config does not qualify, and neither does anything hook-install
-	// creates (~/.claude/settings.json, the VS Code user settings file):
+	// creates (Claude Code's managed settings, the VS Code user settings file):
 	// those would make the scanner report its own footprint as an
 	// installed client. Use * only for version segments, never as a bare
 	// wildcard over a client's own directory.
@@ -42,7 +42,7 @@ type Client struct {
 
 	// Config are globs for the client's configuration directories. They
 	// report ConfigPath and nothing else: a user can create one, another
-	// client can read one, and hook-install creates ~/.claude itself.
+	// client can read one, and earlier hook-install releases created ~/.claude.
 	Config []string
 }
 
