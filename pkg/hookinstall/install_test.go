@@ -546,3 +546,84 @@ func TestRunMovesClaudeHooksOutOfUserSettings(t *testing.T) {
 		t.Fatalf("uninstall changed user settings: err=%v\n%s", err, got)
 	}
 }
+
+// TestRunKeepsClaudeUserHooksWhenManagedInstallFails covers an upgrade whose
+// managed settings write does not land. The hooks in user settings are the only
+// ones Claude Code has at that point, so they have to stay until a later run
+// installs their replacement.
+func TestRunKeepsClaudeUserHooksWhenManagedInstallFails(t *testing.T) {
+	home := t.TempDir()
+	machineRoot := realTempDir(t)
+	user := &TargetUser{Username: "alice", HomeDir: home, UID: os.Getuid(), GID: os.Getgid()}
+
+	old, err := mergeClaude(nil, macExe, "darwin", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	userFile := filepath.Join(home, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(userFile), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(userFile, old.data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// The retired destination is listed first to show the outcome does not
+	// depend on the order destinations are declared in.
+	managedFile := filepath.Join(machineRoot, "ClaudeCode/managed-settings.json")
+	plan := Plan{
+		GOOS:       "darwin",
+		Executable: macExe,
+		User:       user,
+		Enforce:    true,
+		Destinations: []Destination{
+			{Agent: localagent.ClaudeCode, Label: "Claude Code (user settings)", Scope: ScopeUser, Format: FormatJSON, Rel: ".claude/settings.json", Retired: true},
+			{Agent: localagent.ClaudeCode, Label: "Claude Code", Scope: ScopeMachine, Format: FormatJSON, Abs: managedFile},
+		},
+	}
+	changes, err := buildChanges(t.Context(), plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// An administrator writes the managed file between preflight and commit, so
+	// its commit is refused.
+	if err := os.MkdirAll(filepath.Dir(managedFile), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(managedFile, []byte(`{"model":"opus"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	results := commitChanges(t.Context(), plan, changes)
+	if len(results) != 2 {
+		t.Fatalf("results = %+v, want one per destination", results)
+	}
+	for _, r := range results {
+		if r.Status != StatusFailed || r.Err == nil || r.HooksRemoved != 0 {
+			t.Fatalf("%s: result = %+v, want a failure that removed nothing", r.Label, r)
+		}
+	}
+	if !strings.Contains(results[0].Err.Error(), "left in place") {
+		t.Fatalf("retired destination error = %v", results[0].Err)
+	}
+	if got, err := os.ReadFile(userFile); err != nil || !bytes.Equal(got, old.data) {
+		t.Fatalf("user settings hooks were removed without a replacement: err=%v\n%s", err, got)
+	}
+
+	// The next run, with nothing in its way, completes the move.
+	changes, err = buildChanges(t.Context(), plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range commitChanges(t.Context(), plan, changes) {
+		if r.Status == StatusFailed {
+			t.Fatalf("%s: retry failed: %v", r.Label, r.Err)
+		}
+	}
+	if got, err := os.ReadFile(managedFile); err != nil || !strings.Contains(string(got), managedMarker) {
+		t.Fatalf("managed settings have no hooks after the retry: err=%v\n%s", err, got)
+	}
+	if got, err := os.ReadFile(userFile); err != nil || strings.Contains(string(got), managedMarker) {
+		t.Fatalf("user settings still hold owned hooks after the retry: err=%v\n%s", err, got)
+	}
+}

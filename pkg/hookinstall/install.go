@@ -283,58 +283,81 @@ func buildChanges(ctx context.Context, plan Plan) ([]plannedChange, error) {
 }
 
 // commitChanges writes each planned change that needs writing and returns a
-// result per destination. A write failure marks that destination failed and
-// leaves the others intact. If ctx is cancelled, the not-yet-committed
+// result per destination, in plan order. A write failure marks that destination
+// failed and leaves the others intact. If ctx is cancelled, the not-yet-committed
 // destinations are marked failed with the context error so the summary still
 // carries a row for every destination.
+//
+// Retired destinations are committed last, and only for an agent whose live
+// destinations all converged. Removing the old hooks after the new ones failed
+// to land would leave an agent that had working hooks with none.
 func commitChanges(ctx context.Context, plan Plan, changes []plannedChange) []Result {
-	results := make([]Result, 0, len(changes))
-	for _, c := range changes {
-		r := Result{
-			Agent:             c.dest.Agent,
-			Label:             c.dest.Label,
-			Scope:             c.dest.Scope,
-			Path:              c.absPath,
-			Status:            c.status,
-			DuplicatesRemoved: c.dupes,
-			HooksRemoved:      c.removed,
-		}
-		if err := ctx.Err(); err != nil {
-			r.Status = StatusFailed
-			r.Err = err
-			r.DuplicatesRemoved = 0
-			r.HooksRemoved = 0
-			results = append(results, r)
+	var (
+		results    = make([]Result, len(changes))
+		liveFailed = make(map[Agent]bool, len(changes))
+	)
+	for i, c := range changes {
+		if c.dest.Retired {
 			continue
 		}
-		if c.write {
-			current, exists, err := readConfigFile(c.dest.Scope, homeOf(plan.User), c.absPath)
-			if err != nil {
-				r.Status = StatusFailed
-				r.Err = fmt.Errorf("re-reading before commit: %w", err)
-				r.DuplicatesRemoved = 0
-				r.HooksRemoved = 0
-				results = append(results, r)
-				continue
-			}
-			if exists != c.existed || !bytes.Equal(current, c.original) {
-				r.Status = StatusFailed
-				r.Err = errors.New("config changed after preflight; refusing to overwrite concurrent edits")
-				r.DuplicatesRemoved = 0
-				r.HooksRemoved = 0
-				results = append(results, r)
-				continue
-			}
-			if err := commitConfigFile(c.dest.Scope, plan.User, c.absPath, c.data); err != nil {
-				r.Status = StatusFailed
-				r.Err = err
-				r.DuplicatesRemoved = 0
-				r.HooksRemoved = 0
-			}
+		results[i] = commitChange(ctx, plan, c)
+		if results[i].Status == StatusFailed {
+			liveFailed[c.dest.Agent] = true
 		}
-		results = append(results, r)
+	}
+	for i, c := range changes {
+		if !c.dest.Retired {
+			continue
+		}
+		if c.write && liveFailed[c.dest.Agent] {
+			results[i] = failedResult(c, errors.New("hooks left in place because their replacement was not installed"))
+			continue
+		}
+		results[i] = commitChange(ctx, plan, c)
 	}
 	return results
+}
+
+// commitChange writes one planned change, if it needs writing, and reports the
+// outcome.
+func commitChange(ctx context.Context, plan Plan, c plannedChange) Result {
+	if err := ctx.Err(); err != nil {
+		return failedResult(c, err)
+	}
+	if c.write {
+		current, exists, err := readConfigFile(c.dest.Scope, homeOf(plan.User), c.absPath)
+		if err != nil {
+			return failedResult(c, fmt.Errorf("re-reading before commit: %w", err))
+		}
+		if exists != c.existed || !bytes.Equal(current, c.original) {
+			return failedResult(c, errors.New("config changed after preflight; refusing to overwrite concurrent edits"))
+		}
+		if err := commitConfigFile(c.dest.Scope, plan.User, c.absPath, c.data); err != nil {
+			return failedResult(c, err)
+		}
+	}
+	return Result{
+		Agent:             c.dest.Agent,
+		Label:             c.dest.Label,
+		Scope:             c.dest.Scope,
+		Path:              c.absPath,
+		Status:            c.status,
+		DuplicatesRemoved: c.dupes,
+		HooksRemoved:      c.removed,
+	}
+}
+
+// failedResult reports a change that was not committed. It carries no counts:
+// nothing was removed or deduplicated on disk.
+func failedResult(c plannedChange, err error) Result {
+	return Result{
+		Agent:  c.dest.Agent,
+		Label:  c.dest.Label,
+		Scope:  c.dest.Scope,
+		Path:   c.absPath,
+		Status: StatusFailed,
+		Err:    err,
+	}
 }
 
 func homeOf(u *TargetUser) string {

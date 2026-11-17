@@ -208,7 +208,10 @@ Code reads from a fixed path. Starting Claude Code with a different
 `CLAUDE_CONFIG_DIR` therefore does not skip them, and they keep running when an
 administrator sets `allowManagedHooksOnly`. MCP servers are resolved against
 `$CLAUDE_CONFIG_DIR/.claude.json` when the session sets that variable, which is
-the file Claude Code itself reads in that case.
+the file Claude Code itself reads in that case. The variable has to hold an
+absolute path: Claude Code resolves a relative one against the directory it was
+started from, which the hook cannot determine, so MCP calls from such a session
+are blocked with a reason that says so.
 
 Claude Code uses only one managed settings source by default. If the machine
 also receives server-managed settings or an MDM policy (the

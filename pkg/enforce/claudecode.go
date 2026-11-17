@@ -66,17 +66,26 @@ func (e Env) managedMCPPath() string {
 }
 
 // claudeJSONPath returns the .claude.json the calling Claude Code session reads.
-func (e Env) claudeJSONPath() string {
-	if dir := strings.TrimSpace(e.getenv(claudeConfigDirEnv)); dir != "" {
-		return filepath.Join(dir, ".claude.json")
+func (e Env) claudeJSONPath() (string, bool) {
+	dir := e.getenv(claudeConfigDirEnv)
+	if dir == "" {
+		return e.homePath(".claude.json"), true
 	}
-	return e.homePath(".claude.json")
+	if !filepath.IsAbs(dir) {
+		return "", false
+	}
+	return filepath.Join(dir, ".claude.json"), true
 }
 
 // resolveClaudeCode resolves a Claude Code server name against its MCP
 // configuration, then against the claude.ai account connectors.
 func resolveClaudeCode(ctx context.Context, loader *configLoader, env Env, req ResolveRequest, serverName string, tr *tracer) Resolution {
-	claudePath := env.claudeJSONPath()
+	claudePath, ok := env.claudeJSONPath()
+	if !ok {
+		return unresolved(serverName, fmt.Sprintf(
+			"%s is set to a relative path (%q); set it to an absolute path",
+			claudeConfigDirEnv, env.getenv(claudeConfigDirEnv)))
+	}
 	claude, claudeRes := loader.loadClaudeJSON(ctx, claudePath)
 
 	// Most Claude Code keys survive namespacing untouched — hyphens and underscores

@@ -146,6 +146,44 @@ func TestClaudeCodeConfigDirRelocatesProjectsAndConnectors(t *testing.T) {
 	}
 }
 
+// TestClaudeCodeConfigDirIsUsedVerbatim covers values that only differ from
+// another directory, or from unset, by whitespace. Claude Code does not trim the
+// variable, so trimming it here would read a file the session does not.
+func TestClaudeCodeConfigDirIsUsedVerbatim(t *testing.T) {
+	f := newFixture(t, "darwin")
+	project := f.path("proj")
+	f.write(f.homePath(".claude.json"), `{"mcpServers":{"myserver":{"url":"https://home.example.com/sse"}}}`)
+	f.write(filepath.Join(f.path("alt"), ".claude.json"), `{"mcpServers":{"myserver":{"url":"https://alt.example.com/sse"}}}`)
+	f.write(filepath.Join(f.path("alt "), ".claude.json"), `{"mcpServers":{"myserver":{"url":"https://alt-space.example.com/sse"}}}`)
+
+	f.setenv(claudeConfigDirEnv, f.path("alt "))
+	assertURL(t, Resolve(f.Env, claudeCodeReq("myserver", project)), "https://alt-space.example.com/sse")
+
+	// Only spaces is a relative directory name to Claude Code, not unset, so it
+	// must not fall back to the home file.
+	f.setenv(claudeConfigDirEnv, " ")
+	assertUnresolved(t, Resolve(f.Env, claudeCodeReq("myserver", project)), "relative path")
+}
+
+// TestClaudeCodeRelativeConfigDirIsDenied covers a relative CLAUDE_CONFIG_DIR.
+// Claude Code resolves it against its launch directory, which the hook cannot
+// know, so nothing is resolved and the reason says what to change.
+func TestClaudeCodeRelativeConfigDirIsDenied(t *testing.T) {
+	f := newFixture(t, "darwin")
+	project := f.path("proj")
+	f.write(f.homePath(".claude.json"), `{"mcpServers":{"myserver":{"url":"https://home.example.com/sse"}}}`)
+	f.write(filepath.Join(project, ".mcp.json"), `{"mcpServers":{"myserver":{"url":"https://project.example.com/sse"}}}`)
+	f.write(filepath.Join(project, "alt-claude", ".claude.json"), `{"mcpServers":{"myserver":{"url":"https://alt.example.com/sse"}}}`)
+
+	f.setenv(claudeConfigDirEnv, "./alt-claude")
+	res := Resolve(f.Env, claudeCodeReq("myserver", project))
+	assertUnresolved(t, res, `CLAUDE_CONFIG_DIR is set to a relative path ("./alt-claude")`)
+	assertUnresolved(t, res, "set it to an absolute path")
+	if len(res.Trace) != 0 {
+		t.Fatalf("resolution consulted configuration despite a relative %s:\n%s", claudeConfigDirEnv, resolveTrace(res))
+	}
+}
+
 // TestClaudeCodeProjectBeatsGlobal covers the ordinary precedence case.
 func TestClaudeCodeProjectBeatsGlobal(t *testing.T) {
 	f := newFixture(t, "darwin")
