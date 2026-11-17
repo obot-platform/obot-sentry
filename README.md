@@ -217,13 +217,25 @@ Claude Code uses only one managed settings source by default. If the machine
 also receives server-managed settings or an MDM policy (the
 `com.anthropic.claudecode` preference domain on macOS,
 `HKLM\SOFTWARE\Policies\ClaudeCode` on Windows), Claude Code ignores the
-managed settings file and Obot Sentry's hooks do not run. Set
-`managedSourcesBehavior` to `merge` in that higher-ranked source so the file is
-applied as well.
+managed settings file, hooks included.
+
+`hook-install` checks for the Claude Code MDM policy. When one is present and
+does not set `managedSourcesBehavior` to `merge`, it still writes the hooks to
+the managed settings file, but reports Claude Code as failed, names the policy,
+and exits non-zero, because the hooks are not running. The other agents are
+converged as usual. Set `managedSourcesBehavior` to `merge` in the policy and the
+hooks take effect; the next `hook-install` then succeeds. Obot Sentry never
+installs Claude Code hooks in the user's settings.
+
+Server-managed settings cannot be detected, because Claude Code fetches them per
+account while it runs. An organization that uses them has to set
+`managedSourcesBehavior` to `merge` there, or Obot Sentry's hooks do not run in
+Claude Code.
 
 Releases before this one installed Claude Code's hooks in
-`~/.claude/settings.json`. `hook-install` removes those entries when it installs
-the managed ones.
+`~/.claude/settings.json`. `hook-install` removes those entries once the managed
+ones are in effect. While an MDM policy keeps the managed file from being read,
+it leaves them as they are, since they are the only hooks running.
 
 Kiro runs no hooks in a workspace the user hasn't trusted, or in a window with
 no folder open, so calls made there are neither enforced nor audited. A folder
