@@ -51,9 +51,10 @@ func TestDestinationsModel(t *testing.T) {
 		t.Setenv("ProgramData", `C:\ProgramData`)
 		t.Setenv("ProgramFiles", `C:\Program Files`)
 		programData := windowsProgramData()
+		programFiles := windowsProgramFiles()
 		dests := Destinations("windows")
 		want := []Destination{
-			{Agent: localagent.ClaudeCode, Label: "Claude Code", Scope: ScopeMachine, Format: FormatJSON, Abs: `C:\Program Files\ClaudeCode\managed-settings.json`},
+			{Agent: localagent.ClaudeCode, Label: "Claude Code", Scope: ScopeMachine, Format: FormatJSON, Abs: winJoin(programFiles, "ClaudeCode", "managed-settings.json")},
 			{Agent: localagent.ClaudeCode, Label: "Claude Code (user settings)", Scope: ScopeUser, Format: FormatJSON, Rel: ".claude/settings.json", Retired: true},
 			{Agent: localagent.Codex, Label: "Codex", Scope: ScopeMachine, Format: FormatTOML, Abs: winJoin(programData, "OpenAI", "Codex", "requirements.toml")},
 			{Agent: localagent.VSCode, Label: "Visual Studio Code", Scope: ScopeUser, Format: FormatJSON, Rel: ".copilot/hooks/obot-sentry.json"},
