@@ -15,6 +15,7 @@ import (
 
 	"github.com/obot-platform/obot-sentry/pkg/agent"
 	"github.com/obot-platform/obot-sentry/pkg/datadir"
+	"github.com/obot-platform/obot-sentry/pkg/eventlog"
 	"github.com/obot-platform/obot-sentry/pkg/mdmconfig"
 	"github.com/obot-platform/obot-sentry/pkg/scan"
 	"github.com/obot-platform/obot-sentry/pkg/state"
@@ -103,8 +104,11 @@ func (s *Scan) Run(cmd *cobra.Command, _ []string) error {
 	}
 
 	submitErr := s.submit(ctx, cmd, cfg, &manifest)
+	var previous state.ScanState
 	if cacheErr == nil {
 		scanState, _ := state.LoadScanState(cacheDir)
+		// Keep the last outcome to compare against; reportScanEvent only logs changes.
+		previous = scanState
 		now := time.Now().UTC()
 		scanState.LastScanAt = &now
 		scanState.DeviceID = manifest.DeviceID
@@ -121,7 +125,40 @@ func (s *Scan) Run(cmd *cobra.Command, _ []string) error {
 		}
 		s.recordScanOutcome(cmd, cacheDir, scanState, startedAt, outcome, submitErr)
 	}
-	return submitErr
+	reportScanEvent(previous, manifest.Username, submitErr)
+	return rejectedExitCode(submitErr)
+}
+
+// scanEventID returns the event to log for a submission whose result is submitErr, given the previous scan's state,
+// or 0 when there's nothing new to report.
+// The scan task runs every 10 minutes and a failing submission isn't throttled, so logging every failure would
+// repeat the same error all day. Instead, log:
+// - The first failure, and any failure whose error differs from the last one
+// - The first success after a failure
+func scanEventID(previous state.ScanState, submitErr error) uint32 {
+	switch {
+	case submitErr != nil && (previous.LastStatus != "error" || previous.LastError != submitErr.Error()):
+		return eventlog.ScanFailed
+	case submitErr == nil && previous.LastStatus == "error":
+		return eventlog.ScanRecovered
+	default:
+		return 0
+	}
+}
+
+// reportScanEvent writes a scan submission's failure, or its recovery from one, to the OS event log.
+// Scheduled scans run as each signed-in user with their output discarded, and their scan state lives in that user's
+// profile. The event log lets an administrator see every user's failures from any account.
+func reportScanEvent(previous state.ScanState, username string, submitErr error) {
+	if username == "" {
+		username = "the current user"
+	}
+	switch scanEventID(previous, submitErr) {
+	case eventlog.ScanFailed:
+		eventlog.Error(eventlog.ScanFailed, fmt.Sprintf("Obot Sentry scan submission failed for %s: %v", username, submitErr))
+	case eventlog.ScanRecovered:
+		eventlog.Info(eventlog.ScanRecovered, fmt.Sprintf("Obot Sentry scan submission succeeded for %s after earlier failures.", username))
+	}
 }
 
 // submit enrolls (if needed) and uploads the manifest, filling in the
