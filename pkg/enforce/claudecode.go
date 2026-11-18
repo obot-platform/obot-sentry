@@ -19,9 +19,12 @@ const (
 	windowsProgramFilesDefault = `C:\Program Files`
 	// claudeAIConnectorPrefix namespaces a claude.ai account connector's tools.
 	claudeAIConnectorPrefix = "claude_ai_"
+	// claudeConfigDirEnv relocates Claude Code's user configuration, .claude.json
+	// included, away from the home directory.
+	claudeConfigDirEnv = "CLAUDE_CONFIG_DIR"
 )
 
-// claudeJSON is the part of ~/.claude.json the resolver reads.
+// claudeJSON is the part of .claude.json the resolver reads.
 type claudeJSON struct {
 	MCPServers map[string]json.RawMessage `json:"mcpServers"`
 	Projects   map[string]struct {
@@ -62,10 +65,27 @@ func (e Env) managedMCPPath() string {
 	return e.machinePath(claudeManagedMCPDarwin)
 }
 
+// claudeJSONPath returns the .claude.json the calling Claude Code session reads.
+func (e Env) claudeJSONPath() (string, bool) {
+	dir := e.getenv(claudeConfigDirEnv)
+	if dir == "" {
+		return e.homePath(".claude.json"), true
+	}
+	if !filepath.IsAbs(dir) {
+		return "", false
+	}
+	return filepath.Join(dir, ".claude.json"), true
+}
+
 // resolveClaudeCode resolves a Claude Code server name against its MCP
 // configuration, then against the claude.ai account connectors.
 func resolveClaudeCode(ctx context.Context, loader *configLoader, env Env, req ResolveRequest, serverName string, tr *tracer) Resolution {
-	claudePath := env.homePath(".claude.json")
+	claudePath, ok := env.claudeJSONPath()
+	if !ok {
+		return unresolved(serverName, fmt.Sprintf(
+			"%s is set to a relative path (%q); set it to an absolute path",
+			claudeConfigDirEnv, env.getenv(claudeConfigDirEnv)))
+	}
 	claude, claudeRes := loader.loadClaudeJSON(ctx, claudePath)
 
 	// Most Claude Code keys survive namespacing untouched — hyphens and underscores

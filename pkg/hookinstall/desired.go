@@ -387,10 +387,12 @@ const claudeHookSourcePrefix = "claude-"
 // listed out: enable the location holding our hook file, and disable every
 // default location that holds Claude Code's.
 //
-// The exclusions are not a preference. obot-sentry installs a Claude Code hook
-// into ~/.claude/settings.json, which VS Code reads by default — so left alone,
-// VS Code fires our Claude Code hook as well as our VS Code one, and the same
-// call is audited twice, once under the wrong agent. VS Code ships this same
+// The exclusions are not a preference. Earlier releases installed the Claude
+// Code hook into ~/.claude/settings.json, which VS Code reads by default — so
+// left alone, VS Code fires that Claude Code hook as well as our VS Code one, and
+// the same call is audited twice, once under the wrong agent. The hook now lives
+// in Claude Code's managed settings, but a machine keeps the old entry until its
+// next hook-install, so the exclusions stay. VS Code ships this same
 // override for its own Agents Window, as the agentsWindow default of
 // chat.hookFilesLocations.
 //
