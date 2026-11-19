@@ -253,6 +253,64 @@ func TestClaudeCodeManagedSettingsUnreadableDropIns(t *testing.T) {
 	})
 }
 
+// padJSON pads a JSON document with trailing whitespace to exactly size bytes.
+func padJSON(t *testing.T, doc string, size int) string {
+	t.Helper()
+	if len(doc) > size {
+		t.Fatalf("document is already %d bytes, over %d", len(doc), size)
+	}
+	return doc + strings.Repeat(" ", size-len(doc))
+}
+
+// TestClaudeCodeProjectFileSizeCap covers Claude Code's 2 MiB cap on .mcp.json
+// and managed-mcp.json. A project file over it is skipped, so the name falls
+// through; a managed file over it still locks while contributing nothing.
+func TestClaudeCodeProjectFileSizeCap(t *testing.T) {
+	f := newFixture(t, "darwin")
+	project := f.mkdir(f.path("proj"))
+	f.write(f.homePath(".claude.json"), `{"mcpServers":{"myserver":{"command":"/opt/tools/real-server"}}}`)
+	doc := `{"mcpServers":{"myserver":{"type":"http","url":"https://project.example.com/mcp"}}}`
+
+	f.write(filepath.Join(project, ".mcp.json"), padJSON(t, doc, claudeMCPConfigMaxBytes))
+	assertURL(t, Resolve(f.Env, claudeCodeReq("myserver", project)), "https://project.example.com/mcp")
+
+	f.write(filepath.Join(project, ".mcp.json"), padJSON(t, doc, claudeMCPConfigMaxBytes+1))
+	res := Resolve(f.Env, claudeCodeReq("myserver", project))
+	if res.Identity.Command != "/opt/tools/real-server" {
+		t.Fatalf("Identity = %+v, want the user command once the project file is over the cap\n%s", res.Identity, resolveTrace(res))
+	}
+
+	f.write(f.Env.managedMCPPath(), padJSON(t, doc, claudeMCPConfigMaxBytes+1))
+	res = Resolve(f.Env, claudeCodeReq("myserver", project))
+	assertUnresolved(t, res, "managed MCP configuration, which cannot be overridden")
+}
+
+// TestClaudeCodeClaudeJSONMustBeRead covers .claude.json, which holds the local
+// and user scopes. Claude Code reads it whole however large it grows, so the
+// resolver reads past its general limit; and when the file is there but cannot be
+// read, no project file may answer in its place.
+func TestClaudeCodeClaudeJSONMustBeRead(t *testing.T) {
+	f := newFixture(t, "darwin")
+	project := f.mkdir(f.path("proj"))
+	f.write(filepath.Join(project, ".mcp.json"), `{"mcpServers":{"myserver":{"type":"http","url":"https://decoy.example.com/mcp"}}}`)
+	local := `{"projects":{` + quote(project) + `:{"mcpServers":{"myserver":{"command":"/opt/tools/real-server"}}}}}`
+
+	f.write(f.homePath(".claude.json"), padJSON(t, local, maxConfigBytes+1))
+	res := Resolve(f.Env, claudeCodeReq("myserver", project))
+	if res.Identity.Command != "/opt/tools/real-server" {
+		t.Fatalf("Identity = %+v, want the local command from a large .claude.json\n%s", res.Identity, resolveTrace(res))
+	}
+
+	f.write(f.homePath(".claude.json"), `{"projects":`)
+	assertUnresolved(t, Resolve(f.Env, claudeCodeReq("myserver", project)), "could not be read")
+
+	f.write(f.homePath(".claude.json"), local)
+	if err := os.Truncate(f.homePath(".claude.json"), claudeJSONMaxBytes+1); err != nil {
+		t.Fatal(err)
+	}
+	assertUnresolved(t, Resolve(f.Env, claudeCodeReq("myserver", project)), "could not be read")
+}
+
 // TestClaudeCodeConfigDirRelocatesClaudeJSON covers a session started with
 // CLAUDE_CONFIG_DIR. Claude Code then reads .claude.json from that directory and
 // ignores the one in the home directory, so the resolver has to as well: the
@@ -599,6 +657,29 @@ func TestClaudeCodeLaunchDirFromTranscript(t *testing.T) {
 	assertURL(t, Resolve(f.Env, req), "https://nested-local.example.com/sse")
 }
 
+// TestClaudeCodeTranscriptMustBeUnderConfigDir covers where the launch
+// directory's slug may come from: only the directory directly under the session's
+// own <config dir>/projects. A "projects" component elsewhere in the path, as a
+// crafted CLAUDE_CONFIG_DIR can supply, must not name the launch directory.
+func TestClaudeCodeTranscriptMustBeUnderConfigDir(t *testing.T) {
+	f := newFixture(t, "darwin")
+	app := f.mkdir(f.path("app"))
+	evil := f.mkdir(filepath.Join(app, "evil"))
+	f.write(filepath.Join(app, ".mcp.json"), `{"mcpServers":{"linear":{"type":"http","url":"https://app.example.com/mcp"}}}`)
+	f.write(filepath.Join(evil, ".mcp.json"), `{"mcpServers":{"linear":{"type":"http","url":"https://allowed.example.com/mcp"}}}`)
+
+	configDir := f.path("x", "projects", claudeProjectSlug(evil), "cfg")
+	f.setenv(claudeConfigDirEnv, configDir)
+	req := claudeCodeReq("linear", evil)
+	req.TranscriptPath = filepath.Join(configDir, "projects", claudeProjectSlug(app), "s.jsonl")
+	assertURL(t, Resolve(f.Env, req), "https://app.example.com/mcp")
+
+	// A transcript outside the session's configuration directory names nothing, so
+	// cwd stands in, as it does with no transcript at all.
+	req.TranscriptPath = f.homePath(".claude", "projects", claudeProjectSlug(app), "s.jsonl")
+	assertURL(t, Resolve(f.Env, req), "https://allowed.example.com/mcp")
+}
+
 // TestClaudeProjectSlug pins the transcript directory name against values
 // computed by Claude Code's own JavaScript, including the truncation hash and a
 // character outside the BMP, which counts as two code units.
@@ -818,7 +899,7 @@ func projectScopesFrom(t *testing.T, f *fixture, cwd string) []scope {
 	var claude claudeJSON
 	res := loadJSON(claudePath, &claude)
 	loader := newConfigLoader()
-	project := claudeProjectFor(t.Context(), loader, f.Env, cwd, "")
+	project := claudeProjectFor(t.Context(), loader, f.Env, f.homePath(".claude"), cwd, "")
 	return claudeProjectScopes(loader, f.Env, project, claudePath, claude, res, 1)
 }
 

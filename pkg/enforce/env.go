@@ -128,7 +128,7 @@ type cachedConfig struct {
 // repeated filesystem I/O. Operation lifetime belongs to the contexts passed
 // to its methods, not to the cache itself.
 type configLoader struct {
-	files           map[string]cachedConfig
+	files           map[configKey]cachedConfig
 	jsonServerSets  map[string]cachedServerSet
 	codexServerSets map[string]cachedServerSet
 	claudeDocs      map[string]cachedClaudeJSON
@@ -136,29 +136,44 @@ type configLoader struct {
 
 func newConfigLoader() *configLoader {
 	return &configLoader{
-		files:           map[string]cachedConfig{},
+		files:           map[configKey]cachedConfig{},
 		jsonServerSets:  map[string]cachedServerSet{},
 		codexServerSets: map[string]cachedServerSet{},
 		claudeDocs:      map[string]cachedClaudeJSON{},
 	}
 }
 
+// configKey caches a read by path and size limit: one file can be read under a
+// tighter limit by one agent than another.
+type configKey struct {
+	path  string
+	limit int64
+}
+
 func (l *configLoader) readConfig(ctx context.Context, path string) ([]byte, loadResult) {
+	return l.readConfigLimit(ctx, path, maxConfigBytes)
+}
+
+// readConfigLimit reads path, treating a file larger than limit bytes as
+// unusable. An agent that caps its own reads passes its cap, so a file it would
+// skip is skipped here too.
+func (l *configLoader) readConfigLimit(ctx context.Context, path string, limit int64) ([]byte, loadResult) {
 	if err := ctx.Err(); err != nil {
 		return nil, loadUnusable
 	}
-	if cached, ok := l.files[path]; ok {
+	key := configKey{path: path, limit: limit}
+	if cached, ok := l.files[key]; ok {
 		return cached.data, cached.res
 	}
-	data, res := l.readConfigUncached(ctx, path)
+	data, res := l.readConfigUncached(ctx, path, limit)
 	if ctx.Err() != nil {
 		return nil, loadUnusable
 	}
-	l.files[path] = cachedConfig{data: data, res: res}
+	l.files[key] = cachedConfig{data: data, res: res}
 	return data, res
 }
 
-func (l *configLoader) readConfigUncached(ctx context.Context, path string) ([]byte, loadResult) {
+func (l *configLoader) readConfigUncached(ctx context.Context, path string, limit int64) ([]byte, loadResult) {
 	if err := ctx.Err(); err != nil {
 		return nil, loadUnusable
 	}
@@ -177,17 +192,17 @@ func (l *configLoader) readConfigUncached(ctx context.Context, path string) ([]b
 	if err != nil {
 		return nil, loadUnusable
 	}
-	if !info.Mode().IsRegular() || info.Size() > maxConfigBytes {
+	if !info.Mode().IsRegular() || info.Size() > limit {
 		return nil, loadUnusable
 	}
-	data, err := io.ReadAll(io.LimitReader(f, maxConfigBytes+1))
+	data, err := io.ReadAll(io.LimitReader(f, limit+1))
 	if err != nil {
 		return nil, loadUnusable
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, loadUnusable
 	}
-	if len(data) > maxConfigBytes {
+	if int64(len(data)) > limit {
 		return nil, loadUnusable
 	}
 	return bytes.TrimPrefix(data, utf8BOM), loadOK
@@ -205,7 +220,12 @@ func loadJSON(path string, out any) loadResult {
 }
 
 func (l *configLoader) loadJSON(ctx context.Context, path string, out any) loadResult {
-	data, res := l.readConfig(ctx, path)
+	return l.loadJSONLimit(ctx, path, out, maxConfigBytes)
+}
+
+// loadJSONLimit is loadJSON under a size limit of the caller's own.
+func (l *configLoader) loadJSONLimit(ctx context.Context, path string, out any, limit int64) loadResult {
+	data, res := l.readConfigLimit(ctx, path, limit)
 	if res != loadOK {
 		return res
 	}

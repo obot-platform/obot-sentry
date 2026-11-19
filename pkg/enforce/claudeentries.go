@@ -55,8 +55,9 @@ func claudeServerEntry(raw json.RawMessage) (mcpEntry, bool) {
 	if !ok {
 		return mcpEntry{}, false
 	}
-	typ, _, ok := exactString(members, "type")
-	if !ok {
+	typ, typed, ok := exactString(members, "type")
+	if !ok || typed && typ == "" {
+		// A type that is present must name a transport; "" is not an absent type.
 		return mcpEntry{}, false
 	}
 	switch typ {
@@ -66,10 +67,7 @@ func claudeServerEntry(raw json.RawMessage) (mcpEntry, bool) {
 			return mcpEntry{}, false
 		}
 		entry := mcpEntry{Command: command}
-		if args, present := members["args"]; present && json.Unmarshal(args, &entry.Args) != nil {
-			return mcpEntry{}, false
-		}
-		if env, present := members["env"]; present && json.Unmarshal(env, &entry.Environment) != nil {
+		if !optionalMember(members, "args", '[', &entry.Args) || !optionalMember(members, "env", '{', &entry.Environment) {
 			return mcpEntry{}, false
 		}
 		return entry, true
@@ -79,13 +77,25 @@ func claudeServerEntry(raw json.RawMessage) (mcpEntry, bool) {
 			return mcpEntry{}, false
 		}
 		var headers map[string]string
-		if raw, present := members["headers"]; present && json.Unmarshal(raw, &headers) != nil {
+		if !optionalMember(members, "headers", '{', &headers) {
 			return mcpEntry{}, false
 		}
 		return mcpEntry{URL: url}, true
 	default:
 		return mcpEntry{}, false
 	}
+}
+
+// optionalMember decodes member key into out when present. A present member must
+// be the JSON kind open starts ('[' or '{'): Claude Code rejects null where it
+// expects a list or a record, though Go would decode null into either.
+func optionalMember(members map[string]json.RawMessage, key string, open byte, out any) bool {
+	raw, present := members[key]
+	if !present {
+		return true
+	}
+	raw = bytes.TrimSpace(raw)
+	return len(raw) > 0 && raw[0] == open && json.Unmarshal(raw, out) == nil
 }
 
 // claudeServers decodes a server table, keeping only the entries Claude Code
@@ -114,10 +124,13 @@ func objectMember(members map[string]json.RawMessage, key string) (table map[str
 
 // claudeJSONServers reads the mcpServers table of a Claude Code JSON
 // configuration file, such as .mcp.json or managed-mcp.json.
+//
+// Claude Code skips such a file over claudeMCPConfigMaxBytes, so it is unusable
+// here too: a project file then falls through, and managed-mcp.json still locks.
 func claudeJSONServers(loader *configLoader, path string) func(context.Context) (serverSet, loadResult) {
 	return func(ctx context.Context) (serverSet, loadResult) {
 		var raw json.RawMessage
-		if res := loader.loadJSON(ctx, path, &raw); res != loadOK {
+		if res := loader.loadJSONLimit(ctx, path, &raw, claudeMCPConfigMaxBytes); res != loadOK {
 			return nil, res
 		}
 		members, ok := exactObject(raw)

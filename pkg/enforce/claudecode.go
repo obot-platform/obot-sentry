@@ -34,6 +34,13 @@ const (
 	claudeManagedDropInDir  = "managed-settings.d"
 	// claudeManagedServersKey is the managed settings key that delivers MCP servers.
 	claudeManagedServersKey = "managedMcpServers"
+	// claudeMCPConfigMaxBytes is Claude Code's own cap on .mcp.json and
+	// managed-mcp.json: it skips a larger file.
+	claudeMCPConfigMaxBytes = 2 << 20
+	// claudeJSONMaxBytes bounds the .claude.json read. Claude Code reads that file
+	// whole, and it grows with use, so the general limit would skip files the
+	// session loaded.
+	claudeJSONMaxBytes = 64 << 20
 	// maxClaudeManagedDropIns bounds the managed-settings.d files read per call.
 	// Claude Code itself reads every drop-in, so past this many the managed set is
 	// treated as unreadable rather than truncated.
@@ -75,7 +82,7 @@ func (l *configLoader) loadClaudeJSON(ctx context.Context, path string) (claudeJ
 		return cached.doc, cached.res
 	}
 	var doc claudeJSON
-	res := l.loadJSON(ctx, path, &doc)
+	res := l.loadJSONLimit(ctx, path, &doc, claudeJSONMaxBytes)
 	if ctx.Err() != nil {
 		return claudeJSON{}, loadUnusable
 	}
@@ -162,12 +169,22 @@ func resolveClaudeCode(ctx context.Context, loader *configLoader, env Env, req R
 	// exclusive control rather than letting user configuration through, so
 	// resolving against user configuration here would name a server the session
 	// could not have run.
-	if _, res := loader.readConfig(ctx, env.managedMCPPath()); res != loadAbsent {
+	if _, res := loader.readConfigLimit(ctx, env.managedMCPPath(), claudeMCPConfigMaxBytes); res != loadAbsent {
 		return notFound(req.Agent, serverName, fmt.Sprintf(
 			"MCP server %q is not in Claude Code's managed MCP configuration, which cannot be overridden", serverName))
 	}
 
-	project := claudeProjectFor(ctx, loader, env, req.CWD, req.TranscriptPath)
+	// .claude.json holds the local and user scopes, which outrank every project
+	// file. If it is there but cannot be read, a project file answering in its place
+	// may name a server other than the one that ran. Claude Code rewrites a corrupt
+	// .claude.json when it starts, so this is a file that changed mid-session or
+	// exceeds even the raised read limit.
+	if claudeRes == loadUnusable {
+		return notFound(req.Agent, serverName, fmt.Sprintf(
+			"Claude Code's %s could not be read, so its local and user MCP servers cannot be ruled out", claudePath))
+	}
+
+	project := claudeProjectFor(ctx, loader, env, configDir, req.CWD, req.TranscriptPath)
 	scopes := claudeProjectScopes(loader, env, project, claudePath, claude, claudeRes, 0)
 	scopes = append(scopes, scope{
 		path: claudePath,
@@ -326,13 +343,13 @@ type claudeProject struct {
 // the configuration it loaded at launch. Claude Code names the transcript
 // directory after the launch directory, so the transcript path recovers it; when
 // it does not, cwd stands in.
-func claudeProjectFor(ctx context.Context, loader *configLoader, env Env, cwd, transcriptPath string) claudeProject {
+func claudeProjectFor(ctx context.Context, loader *configLoader, env Env, configDir, cwd, transcriptPath string) claudeProject {
 	dirs := ancestors(cwd)
 	if len(dirs) == 0 {
 		return claudeProject{}
 	}
 	launchDir := dirs[0]
-	if dir, ok := claudeLaunchDir(env, dirs, transcriptPath); ok {
+	if dir, ok := claudeLaunchDir(env, dirs, configDir, transcriptPath); ok {
 		launchDir = dir
 	}
 	return claudeProject{launchDir: launchDir, root: claudeProjectRoot(ctx, loader, launchDir)}
@@ -341,32 +358,41 @@ func claudeProjectFor(ctx context.Context, loader *configLoader, env Env, cwd, t
 // claudeLaunchDir finds which of dirs, an absolute cwd and its ancestors, names
 // the transcript directory the session writes to (projects/<slug>/<id>.jsonl in
 // Claude Code's configuration directory).
-func claudeLaunchDir(env Env, dirs []string, transcriptPath string) (string, bool) {
-	if !filepath.IsAbs(transcriptPath) {
+func claudeLaunchDir(env Env, dirs []string, configDir, transcriptPath string) (string, bool) {
+	slug, ok := claudeTranscriptSlug(env, configDir, transcriptPath)
+	if !ok {
 		return "", false
 	}
-	// The slug is the component after "projects". Matching on that rather than on
-	// the parent directory alone also covers a subagent transcript, which lives
-	// below its session's directory.
-	parts := strings.FieldsFunc(transcriptPath, func(r rune) bool { return r == '/' || r == '\\' })
-	var slugs []string
-	for i := 0; i+1 < len(parts); i++ {
-		if parts[i] == "projects" {
-			slugs = append(slugs, parts[i+1])
-		}
-	}
 	for _, dir := range dirs {
-		slug := claudeProjectSlug(dir)
-		if slices.ContainsFunc(slugs, func(s string) bool {
-			if env.windows() {
-				return strings.EqualFold(s, slug)
-			}
-			return s == slug
-		}) {
+		want := claudeProjectSlug(dir)
+		if slug == want || env.windows() && strings.EqualFold(slug, want) {
 			return dir, true
 		}
 	}
 	return "", false
+}
+
+// claudeTranscriptSlug returns the project slug of a transcript the session wrote
+// to configDir: the directory directly under configDir/projects, with the
+// transcript at or below it, which also covers a subagent transcript nested under
+// its session. A "projects" component anywhere else in the path is not the
+// session's; taking one would let a crafted configuration directory name any
+// launch directory.
+func claudeTranscriptSlug(env Env, configDir, transcriptPath string) (string, bool) {
+	if !filepath.IsAbs(transcriptPath) || !filepath.IsAbs(configDir) {
+		return "", false
+	}
+	projects := filepath.Join(configDir, "projects") + string(filepath.Separator)
+	path := filepath.Clean(transcriptPath)
+	if len(path) <= len(projects) {
+		return "", false
+	}
+	prefix := path[:len(projects)]
+	if prefix != projects && !(env.windows() && strings.EqualFold(prefix, projects)) {
+		return "", false
+	}
+	slug, rest, ok := strings.Cut(path[len(projects):], string(filepath.Separator))
+	return slug, ok && slug != "" && rest != ""
 }
 
 // claudeSlugMax is the longest slug Claude Code writes before truncating.

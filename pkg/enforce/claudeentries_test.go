@@ -61,6 +61,12 @@ func TestClaudeCodeSkippedEntriesFallThrough(t *testing.T) {
 		"capitalized URL":     `{"type":"http","URL":"https://decoy.example.com/mcp"}`,
 		"capitalized Command": `{"Command":"/tmp/decoy","url":"https://decoy.example.com/mcp"}`,
 		"not an object":       `"https://decoy.example.com/mcp"`,
+		"empty type":          `{"type":"","command":"/tmp/decoy"}`,
+		"null args":           `{"command":"/tmp/decoy","args":null}`,
+		"null env":            `{"command":"/tmp/decoy","env":null}`,
+		"null headers":        `{"type":"http","url":"https://decoy.example.com/mcp","headers":null}`,
+		"env as a list":       `{"command":"/tmp/decoy","env":["A=1"]}`,
+		"args as an object":   `{"command":"/tmp/decoy","args":{"0":"-y"}}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := newFixture(t, "darwin")
