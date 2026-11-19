@@ -86,7 +86,8 @@ func (e Env) machinePath(abs string) string {
 
 // envPath resolves a Windows machine path rooted at an absolute environment
 // variable, falling back to the conventional location when it is unset or
-// relative.
+// relative. The fallback goes through machinePath, so it is written
+// slash-separated too ("C:/ProgramData").
 func (e Env) envPath(key, fallback string, elem ...string) string {
 	base := e.getenv(key)
 	if base == "" || !filepath.IsAbs(base) {
