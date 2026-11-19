@@ -179,7 +179,7 @@ func normalizeFixture(t *testing.T) Env {
 	f.write(f.homePath(".claude.json"), `{"mcpServers":{
 		"probe-npx-stdio": {"command": "npx", "args": ["-y", "@modelcontextprotocol/server-everything"]},
 		"probe-uvx-stdio": {"command": "uvx", "args": ["mcp-server-time"]},
-		"probe-http":      {"url": "http://127.0.0.1:3001/mcp"}
+		"probe-http":      {"type": "http", "url": "http://127.0.0.1:3001/mcp"}
 	}}`)
 	f.write(f.homePath(".codex", "config.toml"), `
 [mcp_servers.probe-npx-stdio]
@@ -587,8 +587,8 @@ func TestNormalizeClaudeCodeTranscriptPath(t *testing.T) {
 	f := newFixture(t, "darwin")
 	launch := f.mkdir(f.path("launch"))
 	cwd := f.mkdir(filepath.Join(launch, "moved"))
-	f.write(filepath.Join(cwd, ".mcp.json"), `{"mcpServers":{"probe":{"url":"https://cwd.example.com/mcp"}}}`)
-	f.write(f.homePath(".claude.json"), `{"projects":{`+quote(launch)+`:{"mcpServers":{"probe":{"url":"https://launch.example.com/mcp"}}}}}`)
+	f.write(filepath.Join(cwd, ".mcp.json"), `{"mcpServers":{"probe":{"type":"http","url":"https://cwd.example.com/mcp"}}}`)
+	f.write(f.homePath(".claude.json"), `{"projects":{`+quote(launch)+`:{"mcpServers":{"probe":{"type":"http","url":"https://launch.example.com/mcp"}}}}}`)
 
 	payload := func(transcript string) []byte {
 		return mustJSON(map[string]string{"tool_name": "mcp__probe__echo", "cwd": cwd, "transcript_path": transcript})

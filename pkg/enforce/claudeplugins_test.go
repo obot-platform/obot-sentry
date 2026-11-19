@@ -18,7 +18,7 @@ func TestClaudeCodePluginServer(t *testing.T) {
 	f := newFixture(t, "darwin")
 	project := f.path("proj")
 	install := f.mkdir(f.homePath(".claude", "plugins", "cache", "mkt", "my-tool", "1.0.0"))
-	f.write(filepath.Join(install, ".mcp.json"), `{"mcpServers":{"lin.ear":{"url":"https://plugin.example.com/mcp"}}}`)
+	f.write(filepath.Join(install, ".mcp.json"), `{"mcpServers":{"lin.ear":{"type":"http","url":"https://plugin.example.com/mcp"}}}`)
 	f.pluginRegistry(f.homePath(".claude"), `{"version":2,"plugins":{"my.tool@mkt":[`+
 		`{"scope":"user","installPath":`+quote(install)+`}]}}`)
 
@@ -39,12 +39,12 @@ func TestClaudeCodePluginManifestServers(t *testing.T) {
 	f := newFixture(t, "darwin")
 	project := f.path("proj")
 	install := f.mkdir(f.path("plugins", "kit"))
-	f.write(filepath.Join(install, ".mcp.json"), `{"over":{"url":"https://dotfile.example.com/mcp"}}`)
-	f.write(filepath.Join(install, "servers.json"), `{"mcpServers":{"fromfile":{"url":"https://file.example.com/mcp"}}}`)
+	f.write(filepath.Join(install, ".mcp.json"), `{"over":{"type":"http","url":"https://dotfile.example.com/mcp"}}`)
+	f.write(filepath.Join(install, "servers.json"), `{"mcpServers":{"fromfile":{"type":"http","url":"https://file.example.com/mcp"}}}`)
 	f.write(filepath.Join(install, ".claude-plugin", "plugin.json"), `{"name":"kit","mcpServers":[
 		"./servers.json",
 		"../escape.json",
-		{"over":{"url":"https://manifest.example.com/mcp"}},
+		{"over":{"type":"http","url":"https://manifest.example.com/mcp"}},
 		{"bundled":{"command":"${CLAUDE_PLUGIN_ROOT}/bin/server","args":["--root","${CLAUDE_PLUGIN_ROOT}"]}},
 		{"pkg":{"command":"npx","args":["-y","@acme/srv@1.2.3"]}}
 	]}`)
@@ -69,7 +69,7 @@ func TestClaudeCodePluginInlineManifest(t *testing.T) {
 	f := newFixture(t, "darwin")
 	install := f.mkdir(f.path("plugins", "inline_p"))
 	f.write(filepath.Join(install, ".claude-plugin", "plugin.json"),
-		`{"name":"inline_p","mcpServers":{"srv":{"url":"https://inline.example.com/mcp"}}}`)
+		`{"name":"inline_p","mcpServers":{"srv":{"type":"http","url":"https://inline.example.com/mcp"}}}`)
 	f.pluginRegistry(f.homePath(".claude"), `{"version":2,"plugins":{"inline_p@mkt":[`+
 		`{"scope":"user","installPath":`+quote(install)+`}]}}`)
 
@@ -86,8 +86,8 @@ func TestClaudeCodePluginInstallScopes(t *testing.T) {
 	other := f.mkdir(f.path("other"))
 	v1 := f.mkdir(f.path("cache", "p", "1.0.0"))
 	v2 := f.mkdir(f.path("cache", "p", "2.0.0"))
-	f.write(filepath.Join(v1, ".mcp.json"), `{"s":{"url":"https://v1.example.com/mcp"}}`)
-	f.write(filepath.Join(v2, ".mcp.json"), `{"s":{"url":"https://v2.example.com/mcp"}}`)
+	f.write(filepath.Join(v1, ".mcp.json"), `{"s":{"type":"http","url":"https://v1.example.com/mcp"}}`)
+	f.write(filepath.Join(v2, ".mcp.json"), `{"s":{"type":"http","url":"https://v2.example.com/mcp"}}`)
 	f.pluginRegistry(f.homePath(".claude"), `{"version":2,"plugins":{"p@mkt":[`+
 		`{"scope":"project","installPath":`+quote(v1)+`,"projectPath":`+quote(project)+`},`+
 		`{"scope":"local","installPath":`+quote(v2)+`,"projectPath":`+quote(other)+`}]}}`)
@@ -110,7 +110,7 @@ func TestClaudeCodePluginRegistryFollowsConfigDir(t *testing.T) {
 	configDir := f.path("alt-claude")
 	f.setenv(claudeConfigDirEnv, configDir)
 	install := f.mkdir(f.path("cache", "p"))
-	f.write(filepath.Join(install, ".mcp.json"), `{"s":{"url":"https://alt.example.com/mcp"}}`)
+	f.write(filepath.Join(install, ".mcp.json"), `{"s":{"type":"http","url":"https://alt.example.com/mcp"}}`)
 	f.pluginRegistry(configDir, `{"version":2,"plugins":{"p@mkt":[{"scope":"user","installPath":`+quote(install)+`}]}}`)
 
 	assertURL(t, Resolve(f.Env, claudeCodeReq("plugin_p_s", f.path("proj"))), "https://alt.example.com/mcp")
@@ -121,9 +121,9 @@ func TestClaudeCodePluginRegistryFollowsConfigDir(t *testing.T) {
 func TestClaudeCodePluginRanksBelowUser(t *testing.T) {
 	f := newFixture(t, "darwin")
 	install := f.mkdir(f.path("cache", "p"))
-	f.write(filepath.Join(install, ".mcp.json"), `{"s":{"url":"https://plugin.example.com/mcp"}}`)
+	f.write(filepath.Join(install, ".mcp.json"), `{"s":{"type":"http","url":"https://plugin.example.com/mcp"}}`)
 	f.pluginRegistry(f.homePath(".claude"), `{"version":2,"plugins":{"p@mkt":[{"scope":"user","installPath":`+quote(install)+`}]}}`)
-	f.write(f.homePath(".claude.json"), `{"mcpServers":{"plugin:p:s":{"url":"https://user.example.com/mcp"}}}`)
+	f.write(f.homePath(".claude.json"), `{"mcpServers":{"plugin:p:s":{"type":"http","url":"https://user.example.com/mcp"}}}`)
 
 	assertURL(t, Resolve(f.Env, claudeCodeReq("plugin_p_s", f.path("proj"))), "https://user.example.com/mcp")
 }

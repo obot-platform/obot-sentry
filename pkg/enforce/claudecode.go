@@ -45,16 +45,21 @@ const (
 	claudeConfigDirEnv = "CLAUDE_CONFIG_DIR"
 )
 
-// claudeJSON is the part of .claude.json the resolver reads.
+// claudeJSON is the part of .claude.json the resolver reads. It is decoded by
+// exact key (see UnmarshalJSON), as Claude Code reads it.
 type claudeJSON struct {
-	MCPServers map[string]json.RawMessage `json:"mcpServers"`
-	Projects   map[string]struct {
-		MCPServers map[string]json.RawMessage `json:"mcpServers"`
-	} `json:"projects"`
+	MCPServers map[string]json.RawMessage
+	Projects   map[string]claudeProjectConfig
 	// ClaudeAIMCPEverConnected lists the display names of claude.ai account
 	// connectors this installation has connected to. It is the only local evidence
 	// such a connector exists.
-	ClaudeAIMCPEverConnected []string `json:"claudeAiMcpEverConnected"`
+	ClaudeAIMCPEverConnected []string
+}
+
+// claudeProjectConfig is the part of a .claude.json projects{} entry the
+// resolver reads.
+type claudeProjectConfig struct {
+	MCPServers map[string]json.RawMessage
 }
 
 type cachedClaudeJSON struct {
@@ -136,7 +141,7 @@ func resolveClaudeCode(ctx context.Context, loader *configLoader, env Env, req R
 	// only ones: Claude Code then loads its servers and managedMcpServers and nothing
 	// else. managed-mcp.json overrides managedMcpServers, so it ranks above them.
 	mcpPath := env.managedMCPPath()
-	m, out := resolveScopes(ctx, []scope{{path: mcpPath, key: mcpServersKey, load: jsonServers(loader, mcpPath)}}, names, tr)
+	m, out := resolveScopes(ctx, []scope{{path: mcpPath, key: mcpServersKey, load: claudeJSONServers(loader, mcpPath)}}, names, tr)
 	if out == outcomeFound {
 		return resolved(env, m.key, m.entry)
 	}
@@ -168,7 +173,7 @@ func resolveClaudeCode(ctx context.Context, loader *configLoader, env Env, req R
 		path: claudePath,
 		key:  mcpServersKey,
 		rank: len(scopes),
-		load: fixedServers(decodeServers(claude.MCPServers), claudeRes),
+		load: fixedServers(claudeServers(claude.MCPServers), claudeRes),
 	})
 	if strings.HasPrefix(serverName, claudePluginNamespacePrefix) {
 		scopes = append(scopes, claudePluginScopes(ctx, loader, env, configDir, project, len(scopes))...)
@@ -262,20 +267,22 @@ func claudeManagedSettingsFiles(env Env) (files []string, complete bool) {
 // earlier file's definition, or a lower scope's, still answers for that name.
 func managedSettingsServers(loader *configLoader, path string) func(context.Context) (serverSet, loadResult) {
 	return func(ctx context.Context) (serverSet, loadResult) {
-		var doc struct {
-			Servers map[string]json.RawMessage `json:"managedMcpServers"`
-		}
-		res := loader.loadJSON(ctx, path, &doc)
-		if res != loadOK {
+		var raw json.RawMessage
+		if res := loader.loadJSON(ctx, path, &raw); res != loadOK {
 			return nil, res
 		}
-		accepted := make(map[string]json.RawMessage, len(doc.Servers))
-		for name, raw := range doc.Servers {
+		members, ok := exactObject(raw)
+		if !ok {
+			return nil, loadUnusable
+		}
+		table, _ := objectMember(members, claudeManagedServersKey)
+		accepted := make(map[string]json.RawMessage, len(table))
+		for name, raw := range table {
 			if managedSettingsServerAccepted(raw) {
 				accepted[name] = raw
 			}
 		}
-		return decodeServers(accepted), loadOK
+		return claudeServers(accepted), loadOK
 	}
 }
 
@@ -284,18 +291,19 @@ func managedSettingsServers(loader *configLoader, path string) func(context.Cont
 // at an https URL, and never a command. managed-mcp.json is not restricted this
 // way.
 func managedSettingsServerAccepted(raw json.RawMessage) bool {
-	var entry struct {
-		Type    string          `json:"type"`
-		URL     string          `json:"url"`
-		Command json.RawMessage `json:"command"`
-	}
-	if json.Unmarshal(raw, &entry) != nil || entry.Command != nil {
+	members, ok := exactObject(raw)
+	if !ok {
 		return false
 	}
-	if entry.Type != "http" && entry.Type != "sse" {
+	if _, present := members["command"]; present {
 		return false
 	}
-	u, err := url.Parse(entry.URL)
+	typ, _, _ := exactString(members, "type")
+	if typ != "http" && typ != "sse" {
+		return false
+	}
+	rawURL, _, _ := exactString(members, "url")
+	u, err := url.Parse(rawURL)
 	return err == nil && strings.EqualFold(u.Scheme, "https") && u.Host != ""
 }
 
@@ -520,7 +528,7 @@ func claudeProjectScopes(loader *configLoader, env Env, project claudeProject, c
 			path: claudePath,
 			key:  fmt.Sprintf("projects[%q].%s", key, mcpServersKey),
 			rank: rank,
-			load: fixedServers(decodeServers(claude.Projects[key].MCPServers), claudeRes),
+			load: fixedServers(claudeServers(claude.Projects[key].MCPServers), claudeRes),
 		})
 		rank++
 	}
@@ -537,7 +545,7 @@ func claudeProjectScopes(loader *configLoader, env Env, project claudeProject, c
 			path: path,
 			key:  mcpServersKey,
 			rank: rank,
-			load: jsonServers(loader, path),
+			load: claudeJSONServers(loader, path),
 		})
 		rank++
 	}

@@ -65,14 +65,14 @@ func TestClaudeCodeFileOrder(t *testing.T) {
 func TestClaudeCodeManagedConfigIsExclusive(t *testing.T) {
 	f := newFixture(t, "darwin")
 	project := f.path("proj")
-	f.write(f.homePath(".claude.json"), `{"mcpServers":{"myserver":{"url":"https://user.example.com/sse"}}}`)
+	f.write(f.homePath(".claude.json"), `{"mcpServers":{"myserver":{"type":"http","url":"https://user.example.com/sse"}}}`)
 
 	// With no managed file the user config answers.
 	assertURL(t, Resolve(f.Env, claudeCodeReq("myserver", project)), "https://user.example.com/sse")
 
 	// A managed file that lists a different server stops resolution: the user
 	// entry is not consulted at all.
-	f.write(f.Env.managedMCPPath(), `{"mcpServers":{"github":{"url":"https://managed.example.com/sse"}}}`)
+	f.write(f.Env.managedMCPPath(), `{"mcpServers":{"github":{"type":"http","url":"https://managed.example.com/sse"}}}`)
 	res := Resolve(f.Env, claudeCodeReq("myserver", project))
 	assertUnresolved(t, res, "managed MCP configuration, which cannot be overridden")
 	if slices.Contains(consultedPaths(res), f.homePath(".claude.json")) {
@@ -80,7 +80,7 @@ func TestClaudeCodeManagedConfigIsExclusive(t *testing.T) {
 	}
 
 	// A managed file that does list it wins.
-	f.write(f.Env.managedMCPPath(), `{"mcpServers":{"myserver":{"url":"https://managed.example.com/sse"}}}`)
+	f.write(f.Env.managedMCPPath(), `{"mcpServers":{"myserver":{"type":"http","url":"https://managed.example.com/sse"}}}`)
 	assertURL(t, Resolve(f.Env, claudeCodeReq("myserver", project)), "https://managed.example.com/sse")
 
 	// One that cannot be parsed still locks. Claude Code keeps a broken managed
@@ -101,13 +101,13 @@ func TestClaudeCodeManagedConfigWindows(t *testing.T) {
 	f := newFixture(t, "windows")
 	project := f.path("proj")
 	f.write(f.machinePath("C:/Program Files/ClaudeCode/managed-mcp.json"),
-		`{"mcpServers":{"myserver":{"url":"https://managed.example.com/sse"}}}`)
+		`{"mcpServers":{"myserver":{"type":"http","url":"https://managed.example.com/sse"}}}`)
 	assertURL(t, Resolve(f.Env, claudeCodeReq("myserver", project)), "https://managed.example.com/sse")
 
 	planted := f.mkdir(f.path("planted"))
 	f.setenv("PROGRAMFILES", planted)
 	f.write(filepath.Join(planted, "ClaudeCode", "managed-mcp.json"),
-		`{"mcpServers":{"myserver":{"url":"https://allowed.example.com/sse"}}}`)
+		`{"mcpServers":{"myserver":{"type":"http","url":"https://allowed.example.com/sse"}}}`)
 	res := Resolve(f.Env, claudeCodeReq("myserver", project))
 	assertURL(t, res, "https://managed.example.com/sse")
 	for _, path := range consultedPaths(res) {
@@ -129,15 +129,15 @@ func managedServer(url string) string {
 func TestClaudeCodeManagedSettingsServers(t *testing.T) {
 	f := newFixture(t, "darwin")
 	project := f.path("proj")
-	f.write(f.homePath(".claude.json"), `{"mcpServers":{"myserver":{"url":"https://user.example.com/sse"}}}`)
+	f.write(f.homePath(".claude.json"), `{"mcpServers":{"myserver":{"type":"http","url":"https://user.example.com/sse"}}}`)
 	f.write(f.Env.claudeManagedPath(claudeManagedSettings),
 		`{"managedMcpServers":{"myserver":`+managedServer("https://settings.example.com/sse")+`}}`)
 	assertURL(t, Resolve(f.Env, claudeCodeReq("myserver", project)), "https://settings.example.com/sse")
 
-	f.write(f.Env.managedMCPPath(), `{"mcpServers":{"other":{"url":"https://managed.example.com/sse"}}}`)
+	f.write(f.Env.managedMCPPath(), `{"mcpServers":{"other":{"type":"http","url":"https://managed.example.com/sse"}}}`)
 	assertURL(t, Resolve(f.Env, claudeCodeReq("myserver", project)), "https://settings.example.com/sse")
 
-	f.write(f.Env.managedMCPPath(), `{"mcpServers":{"myserver":{"url":"https://managed.example.com/sse"}}}`)
+	f.write(f.Env.managedMCPPath(), `{"mcpServers":{"myserver":{"type":"http","url":"https://managed.example.com/sse"}}}`)
 	assertURL(t, Resolve(f.Env, claudeCodeReq("myserver", project)), "https://managed.example.com/sse")
 }
 
@@ -156,7 +156,7 @@ func TestClaudeCodeManagedSettingsRejectedEntries(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := newFixture(t, "darwin")
-			f.write(f.homePath(".claude.json"), `{"mcpServers":{"myserver":{"url":"https://user.example.com/sse"}}}`)
+			f.write(f.homePath(".claude.json"), `{"mcpServers":{"myserver":{"type":"http","url":"https://user.example.com/sse"}}}`)
 			f.write(f.Env.claudeManagedPath(claudeManagedSettings), `{"managedMcpServers":{"myserver":`+entry+`}}`)
 			assertURL(t, Resolve(f.Env, claudeCodeReq("myserver", f.path("proj"))), "https://user.example.com/sse")
 		})
@@ -208,7 +208,7 @@ func TestClaudeCodeManagedSettingsDropIns(t *testing.T) {
 func TestClaudeCodeManagedSettingsIncomplete(t *testing.T) {
 	f := newFixture(t, "darwin")
 	project := f.path("proj")
-	f.write(f.homePath(".claude.json"), `{"mcpServers":{"myserver":{"url":"https://user.example.com/sse"}}}`)
+	f.write(f.homePath(".claude.json"), `{"mcpServers":{"myserver":{"type":"http","url":"https://user.example.com/sse"}}}`)
 	for i := range maxClaudeManagedDropIns + 1 {
 		f.write(f.Env.claudeManagedPath(claudeManagedDropInDir, fmt.Sprintf("%04d.json", i)), `{}`)
 	}
@@ -220,7 +220,7 @@ func TestClaudeCodeManagedSettingsIncomplete(t *testing.T) {
 	assertUnresolved(t, Resolve(f.Env, claudeCodeReq("early", project)), "could not be read in full")
 
 	// managed-mcp.json outranks every drop-in, so its answer stands.
-	f.write(f.Env.managedMCPPath(), `{"mcpServers":{"myserver":{"url":"https://managed.example.com/sse"}}}`)
+	f.write(f.Env.managedMCPPath(), `{"mcpServers":{"myserver":{"type":"http","url":"https://managed.example.com/sse"}}}`)
 	assertURL(t, Resolve(f.Env, claudeCodeReq("myserver", project)), "https://managed.example.com/sse")
 }
 
@@ -228,7 +228,7 @@ func TestClaudeCodeManagedSettingsIncomplete(t *testing.T) {
 // Claude Code cannot read either. It skips it silently and loads everything else,
 // so the resolver does the same rather than denying every call.
 func TestClaudeCodeManagedSettingsUnreadableDropIns(t *testing.T) {
-	userServer := `{"mcpServers":{"myserver":{"url":"https://user.example.com/sse"}}}`
+	userServer := `{"mcpServers":{"myserver":{"type":"http","url":"https://user.example.com/sse"}}}`
 
 	t.Run("not a directory", func(t *testing.T) {
 		f := newFixture(t, "darwin")
@@ -262,14 +262,14 @@ func TestClaudeCodeConfigDirRelocatesClaudeJSON(t *testing.T) {
 	f := newFixture(t, "darwin")
 	project := f.path("proj")
 	configDir := f.path("alt-claude")
-	f.write(f.homePath(".claude.json"), `{"mcpServers":{"myserver":{"url":"https://home.example.com/sse"}}}`)
+	f.write(f.homePath(".claude.json"), `{"mcpServers":{"myserver":{"type":"http","url":"https://home.example.com/sse"}}}`)
 
 	// Unset, the home file answers.
 	assertURL(t, Resolve(f.Env, claudeCodeReq("myserver", project)), "https://home.example.com/sse")
 
 	// Set, the relocated file answers and the home file is never consulted.
 	f.setenv(claudeConfigDirEnv, configDir)
-	f.write(filepath.Join(configDir, ".claude.json"), `{"mcpServers":{"myserver":{"url":"https://alt.example.com/sse"}}}`)
+	f.write(filepath.Join(configDir, ".claude.json"), `{"mcpServers":{"myserver":{"type":"http","url":"https://alt.example.com/sse"}}}`)
 	res := Resolve(f.Env, claudeCodeReq("myserver", project))
 	assertURL(t, res, "https://alt.example.com/sse")
 	if slices.Contains(consultedPaths(res), f.homePath(".claude.json")) {
@@ -277,7 +277,7 @@ func TestClaudeCodeConfigDirRelocatesClaudeJSON(t *testing.T) {
 	}
 
 	// A server only the home file defines is not one this session can run.
-	f.write(f.homePath(".claude.json"), `{"mcpServers":{"homeonly":{"url":"https://home.example.com/sse"}}}`)
+	f.write(f.homePath(".claude.json"), `{"mcpServers":{"homeonly":{"type":"http","url":"https://home.example.com/sse"}}}`)
 	res = Resolve(f.Env, claudeCodeReq("homeonly", project))
 	assertUnresolved(t, res, `MCP server "homeonly" was not found in any Claude Code MCP configuration`)
 	want := []string{
@@ -299,7 +299,7 @@ func TestClaudeCodeConfigDirRelocatesProjectsAndConnectors(t *testing.T) {
 	configDir := f.path("alt-claude")
 	f.setenv(claudeConfigDirEnv, configDir)
 	f.write(filepath.Join(configDir, ".claude.json"), `{`+
-		`"projects":{`+quote(project)+`:{"mcpServers":{"myserver":{"url":"https://project.example.com/sse"}}}},`+
+		`"projects":{`+quote(project)+`:{"mcpServers":{"myserver":{"type":"http","url":"https://project.example.com/sse"}}}},`+
 		`"claudeAiMcpEverConnected":["claude.ai Linear"]}`)
 
 	assertURL(t, Resolve(f.Env, claudeCodeReq("myserver", project)), "https://project.example.com/sse")
@@ -316,9 +316,9 @@ func TestClaudeCodeConfigDirRelocatesProjectsAndConnectors(t *testing.T) {
 func TestClaudeCodeConfigDirIsUsedVerbatim(t *testing.T) {
 	f := newFixture(t, "darwin")
 	project := f.path("proj")
-	f.write(f.homePath(".claude.json"), `{"mcpServers":{"myserver":{"url":"https://home.example.com/sse"}}}`)
-	f.write(filepath.Join(f.path("alt"), ".claude.json"), `{"mcpServers":{"myserver":{"url":"https://alt.example.com/sse"}}}`)
-	f.write(filepath.Join(f.path("alt "), ".claude.json"), `{"mcpServers":{"myserver":{"url":"https://alt-space.example.com/sse"}}}`)
+	f.write(f.homePath(".claude.json"), `{"mcpServers":{"myserver":{"type":"http","url":"https://home.example.com/sse"}}}`)
+	f.write(filepath.Join(f.path("alt"), ".claude.json"), `{"mcpServers":{"myserver":{"type":"http","url":"https://alt.example.com/sse"}}}`)
+	f.write(filepath.Join(f.path("alt "), ".claude.json"), `{"mcpServers":{"myserver":{"type":"http","url":"https://alt-space.example.com/sse"}}}`)
 
 	f.setenv(claudeConfigDirEnv, f.path("alt "))
 	assertURL(t, Resolve(f.Env, claudeCodeReq("myserver", project)), "https://alt-space.example.com/sse")
@@ -335,9 +335,9 @@ func TestClaudeCodeConfigDirIsUsedVerbatim(t *testing.T) {
 func TestClaudeCodeRelativeConfigDirIsDenied(t *testing.T) {
 	f := newFixture(t, "darwin")
 	project := f.path("proj")
-	f.write(f.homePath(".claude.json"), `{"mcpServers":{"myserver":{"url":"https://home.example.com/sse"}}}`)
-	f.write(filepath.Join(project, ".mcp.json"), `{"mcpServers":{"myserver":{"url":"https://project.example.com/sse"}}}`)
-	f.write(filepath.Join(project, "alt-claude", ".claude.json"), `{"mcpServers":{"myserver":{"url":"https://alt.example.com/sse"}}}`)
+	f.write(f.homePath(".claude.json"), `{"mcpServers":{"myserver":{"type":"http","url":"https://home.example.com/sse"}}}`)
+	f.write(filepath.Join(project, ".mcp.json"), `{"mcpServers":{"myserver":{"type":"http","url":"https://project.example.com/sse"}}}`)
+	f.write(filepath.Join(project, "alt-claude", ".claude.json"), `{"mcpServers":{"myserver":{"type":"http","url":"https://alt.example.com/sse"}}}`)
 
 	f.setenv(claudeConfigDirEnv, "./alt-claude")
 	res := Resolve(f.Env, claudeCodeReq("myserver", project))
@@ -352,8 +352,8 @@ func TestClaudeCodeRelativeConfigDirIsDenied(t *testing.T) {
 func TestClaudeCodeProjectBeatsGlobal(t *testing.T) {
 	f := newFixture(t, "darwin")
 	project := f.path("proj")
-	f.write(filepath.Join(project, ".mcp.json"), `{"mcpServers":{"myserver":{"url":"https://project.example.com/sse"}}}`)
-	f.write(f.homePath(".claude.json"), `{"mcpServers":{"myserver":{"url":"https://global.example.com/sse"}}}`)
+	f.write(filepath.Join(project, ".mcp.json"), `{"mcpServers":{"myserver":{"type":"http","url":"https://project.example.com/sse"}}}`)
+	f.write(f.homePath(".claude.json"), `{"mcpServers":{"myserver":{"type":"http","url":"https://global.example.com/sse"}}}`)
 
 	assertURL(t, Resolve(f.Env, claudeCodeReq("myserver", project)), "https://project.example.com/sse")
 }
@@ -367,13 +367,13 @@ func TestClaudeCodeProjectsKeySpelling(t *testing.T) {
 	withSlash := project + string(filepath.Separator)
 
 	t.Run("key carries the separator", func(t *testing.T) {
-		f.write(f.homePath(".claude.json"), `{"projects":{`+quote(withSlash)+`:{"mcpServers":{"myserver":{"url":"https://raw.example.com/sse"}}}}}`)
+		f.write(f.homePath(".claude.json"), `{"projects":{`+quote(withSlash)+`:{"mcpServers":{"myserver":{"type":"http","url":"https://raw.example.com/sse"}}}}}`)
 		assertURL(t, Resolve(f.Env, claudeCodeReq("myserver", withSlash)), "https://raw.example.com/sse")
 		assertURL(t, Resolve(f.Env, claudeCodeReq("myserver", project)), "https://raw.example.com/sse")
 	})
 
 	t.Run("cwd carries the separator", func(t *testing.T) {
-		f.write(f.homePath(".claude.json"), `{"projects":{`+quote(project)+`:{"mcpServers":{"myserver":{"url":"https://clean.example.com/sse"}}}}}`)
+		f.write(f.homePath(".claude.json"), `{"projects":{`+quote(project)+`:{"mcpServers":{"myserver":{"type":"http","url":"https://clean.example.com/sse"}}}}}`)
 		assertURL(t, Resolve(f.Env, claudeCodeReq("myserver", withSlash)), "https://clean.example.com/sse")
 	})
 }
@@ -386,10 +386,10 @@ func TestClaudeCodeProjectPrecedence(t *testing.T) {
 	project := f.mkdir(f.path("proj"))
 	cwd := f.mkdir(filepath.Join(project, "a", "b"))
 
-	f.write(filepath.Join(cwd, ".mcp.json"), `{"mcpServers":{"myserver":{"url":"https://cwd-file.example.com/sse"}}}`)
-	f.write(filepath.Join(project, ".mcp.json"), `{"mcpServers":{"myserver":{"url":"https://project-file.example.com/sse"}}}`)
+	f.write(filepath.Join(cwd, ".mcp.json"), `{"mcpServers":{"myserver":{"type":"http","url":"https://cwd-file.example.com/sse"}}}`)
+	f.write(filepath.Join(project, ".mcp.json"), `{"mcpServers":{"myserver":{"type":"http","url":"https://project-file.example.com/sse"}}}`)
 	f.write(f.homePath(".claude.json"), `{"projects":{
-		`+quote(cwd)+`:{"mcpServers":{"myserver":{"url":"https://local.example.com/sse"}}}
+		`+quote(cwd)+`:{"mcpServers":{"myserver":{"type":"http","url":"https://local.example.com/sse"}}}
 	}}`)
 
 	// Local configuration overrides the shared project file, however deep it is.
@@ -411,9 +411,9 @@ func TestClaudeCodeEveryProjectFileIsLive(t *testing.T) {
 	f := newFixture(t, "darwin")
 	outer := f.mkdir(f.path("outer"))
 	inner := f.mkdir(filepath.Join(outer, "inner"))
-	f.write(filepath.Join(outer, ".mcp.json"), `{"mcpServers":{"outeronly":{"url":"https://outer.example.com/sse"}}}`)
-	f.write(filepath.Join(inner, ".mcp.json"), `{"mcpServers":{"inneronly":{"url":"https://inner.example.com/sse"}}}`)
-	f.write(f.homePath(".claude.json"), `{"mcpServers":{"outeronly":{"url":"https://user.example.com/sse"}}}`)
+	f.write(filepath.Join(outer, ".mcp.json"), `{"mcpServers":{"outeronly":{"type":"http","url":"https://outer.example.com/sse"}}}`)
+	f.write(filepath.Join(inner, ".mcp.json"), `{"mcpServers":{"inneronly":{"type":"http","url":"https://inner.example.com/sse"}}}`)
+	f.write(f.homePath(".claude.json"), `{"mcpServers":{"outeronly":{"type":"http","url":"https://user.example.com/sse"}}}`)
 
 	assertURL(t, Resolve(f.Env, claudeCodeReq("inneronly", inner)), "https://inner.example.com/sse")
 	// The outer file, not the user table beneath it: reading only the nearest file
@@ -427,7 +427,7 @@ func TestClaudeCodeProjectFileAboveCWD(t *testing.T) {
 	f := newFixture(t, "darwin")
 	project := f.mkdir(f.path("proj"))
 	cwd := f.mkdir(filepath.Join(project, "a", "b"))
-	f.write(filepath.Join(project, ".mcp.json"), `{"mcpServers":{"myserver":{"url":"https://project.example.com/sse"}}}`)
+	f.write(filepath.Join(project, ".mcp.json"), `{"mcpServers":{"myserver":{"type":"http","url":"https://project.example.com/sse"}}}`)
 
 	assertURL(t, Resolve(f.Env, claudeCodeReq("myserver", cwd)), "https://project.example.com/sse")
 }
@@ -440,7 +440,7 @@ func TestClaudeCodeLocalScopeIsOneKey(t *testing.T) {
 	parent := f.mkdir(f.path("parent"))
 	cwd := f.mkdir(filepath.Join(parent, "child"))
 	f.write(f.homePath(".claude.json"), `{"projects":{
-		`+quote(parent)+`:{"mcpServers":{"myserver":{"url":"https://parent.example.com/sse"}}}
+		`+quote(parent)+`:{"mcpServers":{"myserver":{"type":"http","url":"https://parent.example.com/sse"}}}
 	}}`)
 
 	res := Resolve(f.Env, claudeCodeReq("myserver", cwd))
@@ -456,8 +456,8 @@ func TestClaudeCodeLocalScopeIsKeyedByGitRoot(t *testing.T) {
 	f.mkdir(filepath.Join(repo, ".git"))
 	cwd := f.mkdir(filepath.Join(repo, "pkg", "sub"))
 	f.write(f.homePath(".claude.json"), `{"projects":{
-		`+quote(repo)+`:{"mcpServers":{"myserver":{"url":"https://repo.example.com/sse"}}},
-		`+quote(cwd)+`:{"mcpServers":{"myserver":{"url":"https://sub.example.com/sse"}}}
+		`+quote(repo)+`:{"mcpServers":{"myserver":{"type":"http","url":"https://repo.example.com/sse"}}},
+		`+quote(cwd)+`:{"mcpServers":{"myserver":{"type":"http","url":"https://sub.example.com/sse"}}}
 	}}`)
 
 	assertURL(t, Resolve(f.Env, claudeCodeReq("myserver", cwd)), "https://repo.example.com/sse")
@@ -487,8 +487,8 @@ func TestClaudeCodeWorktreeSharesMainCheckoutConfig(t *testing.T) {
 	f.write(filepath.Join(sub, ".git"), "gitdir: ../../.git/modules/lib\n")
 
 	f.write(f.homePath(".claude.json"), `{"projects":{
-		`+quote(main)+`:{"mcpServers":{"myserver":{"url":"https://main.example.com/sse"}}},
-		`+quote(sub)+`:{"mcpServers":{"myserver":{"url":"https://submodule.example.com/sse"}}}
+		`+quote(main)+`:{"mcpServers":{"myserver":{"type":"http","url":"https://main.example.com/sse"}}},
+		`+quote(sub)+`:{"mcpServers":{"myserver":{"type":"http","url":"https://submodule.example.com/sse"}}}
 	}}`)
 
 	assertURL(t, Resolve(f.Env, claudeCodeReq("myserver", f.path("feature"))), "https://main.example.com/sse")
@@ -503,8 +503,8 @@ func TestClaudeCodeBareRepositoryWorktree(t *testing.T) {
 	worktree := filepath.Join(bare, "main")
 	f.linkWorktree(bare, worktree)
 	f.write(f.homePath(".claude.json"), `{"projects":{
-		`+quote(bare)+`:{"mcpServers":{"myserver":{"url":"https://bare.example.com/sse"}}},
-		`+quote(worktree)+`:{"mcpServers":{"other":{"url":"https://worktree.example.com/sse"}}}
+		`+quote(bare)+`:{"mcpServers":{"myserver":{"type":"http","url":"https://bare.example.com/sse"}}},
+		`+quote(worktree)+`:{"mcpServers":{"other":{"type":"http","url":"https://worktree.example.com/sse"}}}
 	}}`)
 
 	assertURL(t, Resolve(f.Env, claudeCodeReq("myserver", worktree)), "https://bare.example.com/sse")
@@ -521,7 +521,7 @@ func TestClaudeCodeForgedWorktreeKeysItself(t *testing.T) {
 	trusted := f.mkdir(f.path("trusted"))
 	f.linkWorktree(filepath.Join(trusted, ".git"), f.path("real-worktree"))
 	f.write(f.homePath(".claude.json"), `{"projects":{
-		`+quote(trusted)+`:{"mcpServers":{"linear":{"url":"https://allowed.example.com/sse"}}}
+		`+quote(trusted)+`:{"mcpServers":{"linear":{"type":"http","url":"https://allowed.example.com/sse"}}}
 	}}`)
 
 	t.Run("git dir outside worktrees", func(t *testing.T) {
@@ -530,7 +530,7 @@ func TestClaudeCodeForgedWorktreeKeysItself(t *testing.T) {
 		f.write(filepath.Join(gitDir, "commondir"), filepath.Join(trusted, ".git")+"\n")
 		f.write(filepath.Join(gitDir, "gitdir"), filepath.Join(evil, ".git")+"\n")
 		f.write(filepath.Join(evil, ".git"), "gitdir: "+gitDir+"\n")
-		f.write(filepath.Join(evil, ".mcp.json"), `{"mcpServers":{"linear":{"url":"https://evil.example.com/sse"}}}`)
+		f.write(filepath.Join(evil, ".mcp.json"), `{"mcpServers":{"linear":{"type":"http","url":"https://evil.example.com/sse"}}}`)
 
 		assertURL(t, Resolve(f.Env, claudeCodeReq("linear", evil)), "https://evil.example.com/sse")
 	})
@@ -538,7 +538,7 @@ func TestClaudeCodeForgedWorktreeKeysItself(t *testing.T) {
 	t.Run("backlink to another worktree", func(t *testing.T) {
 		evil := f.mkdir(f.path("evil2"))
 		f.write(filepath.Join(evil, ".git"), "gitdir: "+filepath.Join(trusted, ".git", "worktrees", "real-worktree")+"\n")
-		f.write(filepath.Join(evil, ".mcp.json"), `{"mcpServers":{"linear":{"url":"https://evil.example.com/sse"}}}`)
+		f.write(filepath.Join(evil, ".mcp.json"), `{"mcpServers":{"linear":{"type":"http","url":"https://evil.example.com/sse"}}}`)
 
 		assertURL(t, Resolve(f.Env, claudeCodeReq("linear", evil)), "https://evil.example.com/sse")
 	})
@@ -557,8 +557,8 @@ func TestClaudeCodeSymlinkedGitDir(t *testing.T) {
 	}
 	cwd := f.mkdir(filepath.Join(checkout, "sub"))
 	f.write(f.homePath(".claude.json"), `{"projects":{
-		`+quote(checkout)+`:{"mcpServers":{"myserver":{"url":"https://checkout.example.com/sse"}}},
-		`+quote(cwd)+`:{"mcpServers":{"subonly":{"url":"https://sub.example.com/sse"}}}
+		`+quote(checkout)+`:{"mcpServers":{"myserver":{"type":"http","url":"https://checkout.example.com/sse"}}},
+		`+quote(cwd)+`:{"mcpServers":{"subonly":{"type":"http","url":"https://sub.example.com/sse"}}}
 	}}`)
 
 	assertURL(t, Resolve(f.Env, claudeCodeReq("myserver", cwd)), "https://checkout.example.com/sse")
@@ -574,11 +574,11 @@ func TestClaudeCodeLaunchDirFromTranscript(t *testing.T) {
 	workspace := f.mkdir(f.path("workspace"))
 	nested := f.mkdir(filepath.Join(workspace, "nested.repo"))
 	f.mkdir(filepath.Join(nested, ".git"))
-	f.write(filepath.Join(workspace, ".mcp.json"), `{"mcpServers":{"myserver":{"url":"https://workspace.example.com/sse"}}}`)
-	f.write(filepath.Join(nested, ".mcp.json"), `{"mcpServers":{"myserver":{"url":"https://nested.example.com/sse"}}}`)
+	f.write(filepath.Join(workspace, ".mcp.json"), `{"mcpServers":{"myserver":{"type":"http","url":"https://workspace.example.com/sse"}}}`)
+	f.write(filepath.Join(nested, ".mcp.json"), `{"mcpServers":{"myserver":{"type":"http","url":"https://nested.example.com/sse"}}}`)
 	f.write(f.homePath(".claude.json"), `{"projects":{
-		`+quote(workspace)+`:{"mcpServers":{"local":{"url":"https://workspace-local.example.com/sse"}}},
-		`+quote(nested)+`:{"mcpServers":{"local":{"url":"https://nested-local.example.com/sse"}}}
+		`+quote(workspace)+`:{"mcpServers":{"local":{"type":"http","url":"https://workspace-local.example.com/sse"}}},
+		`+quote(nested)+`:{"mcpServers":{"local":{"type":"http","url":"https://nested-local.example.com/sse"}}}
 	}}`)
 	transcript := f.homePath(".claude", "projects", claudeProjectSlug(workspace), "0b0e.jsonl")
 
@@ -621,7 +621,7 @@ func TestClaudeProjectSlug(t *testing.T) {
 func TestClaudeCodeNonGitProject(t *testing.T) {
 	f := newFixture(t, "darwin")
 	project := f.mkdir(f.path("loose"))
-	f.write(filepath.Join(project, ".mcp.json"), `{"mcpServers":{"myserver":{"url":"https://loose.example.com/sse"}}}`)
+	f.write(filepath.Join(project, ".mcp.json"), `{"mcpServers":{"myserver":{"type":"http","url":"https://loose.example.com/sse"}}}`)
 
 	assertURL(t, Resolve(f.Env, claudeCodeReq("myserver", filepath.Join(project, "sub"))), "https://loose.example.com/sse")
 }
@@ -632,7 +632,7 @@ func TestClaudeCodeMalformedFilesAreSkipped(t *testing.T) {
 	f := newFixture(t, "darwin")
 	project := f.path("proj")
 	f.write(filepath.Join(project, ".mcp.json"), `{"mcpServers": {`)
-	f.write(f.homePath(".claude.json"), `{"mcpServers":{"myserver":{"url":"https://global.example.com/sse"}}}`)
+	f.write(f.homePath(".claude.json"), `{"mcpServers":{"myserver":{"type":"http","url":"https://global.example.com/sse"}}}`)
 
 	res := Resolve(f.Env, claudeCodeReq("myserver", project))
 	assertURL(t, res, "https://global.example.com/sse")
@@ -650,7 +650,7 @@ func TestClaudeCodeJSONCTolerance(t *testing.T) {
 	f.write(filepath.Join(project, ".mcp.json"), `{
 		// the issue tracker
 		"mcpServers": {
-			"myserver": {"url": "https://myserver.example.com/sse"},
+			"myserver": {"type":"http","url": "https://myserver.example.com/sse"},
 		}
 	}`)
 
@@ -689,7 +689,7 @@ func TestClaudeCodeStdioResolution(t *testing.T) {
 func TestClaudeCodeHostnameIsLeftToTheBackend(t *testing.T) {
 	f := newFixture(t, "darwin")
 	project := f.path("proj")
-	f.write(filepath.Join(project, ".mcp.json"), `{"mcpServers":{"g":{"url":"https://gitmcp.io/obot/x"}}}`)
+	f.write(filepath.Join(project, ".mcp.json"), `{"mcpServers":{"g":{"type":"http","url":"https://gitmcp.io/obot/x"}}}`)
 
 	res := Resolve(f.Env, claudeCodeReq("g", project))
 	if res.Identity.Hostname != "" {
@@ -1003,6 +1003,6 @@ func TestClaudeCodeBuiltinServerIsReportedByName(t *testing.T) {
 	// identity to report. Claude Code will not let this happen — that guarantee is
 	// what makes name matching sound here — but the ordering is what makes the
 	// built-in check safe at its single call site.
-	f.write(f.homePath(".claude.json"), `{"mcpServers":{"Claude_Preview":{"url":"https://user.example.com/sse"}}}`)
+	f.write(f.homePath(".claude.json"), `{"mcpServers":{"Claude_Preview":{"type":"http","url":"https://user.example.com/sse"}}}`)
 	assertURL(t, Resolve(f.Env, claudeCodeReq("Claude_Preview", f.path("proj"))), "https://user.example.com/sse")
 }

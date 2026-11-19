@@ -27,9 +27,9 @@ const (
 
 // claudePluginInstall is one installation recorded in installed_plugins.json.
 type claudePluginInstall struct {
-	Scope       string `json:"scope"`
-	InstallPath string `json:"installPath"`
-	ProjectPath string `json:"projectPath"`
+	Scope       string
+	InstallPath string
+	ProjectPath string
 }
 
 // claudePluginScopes returns one scope per plugin installation that may serve
@@ -42,21 +42,29 @@ type claudePluginInstall struct {
 // launched there or keyed to that project root.
 func claudePluginScopes(ctx context.Context, loader *configLoader, env Env, configDir string, project claudeProject, rank int) []scope {
 	registryPath := filepath.Join(configDir, "plugins", claudePluginRegistry)
-	var doc struct {
-		Plugins map[string]json.RawMessage `json:"plugins"`
+	var raw json.RawMessage
+	res := loader.loadJSON(ctx, registryPath, &raw)
+	var plugins map[string]json.RawMessage
+	if res == loadOK {
+		members, ok := exactObject(raw)
+		if ok {
+			plugins, ok = objectMember(members, "plugins")
+		}
+		if !ok {
+			res = loadUnusable
+		}
 	}
-	res := loader.loadJSON(ctx, registryPath, &doc)
-	if res != loadOK || len(doc.Plugins) == 0 {
+	if res != loadOK || len(plugins) == 0 {
 		return []scope{{path: registryPath, key: "plugins", rank: rank, load: fixedServers(nil, res)}}
 	}
 
 	var scopes []scope
-	for _, id := range slices.Sorted(maps.Keys(doc.Plugins)) {
+	for _, id := range slices.Sorted(maps.Keys(plugins)) {
 		name := id
 		if at := strings.LastIndex(id, "@"); at > 0 {
 			name = id[:at]
 		}
-		for _, install := range decodePluginInstalls(doc.Plugins[id]) {
+		for _, install := range decodePluginInstalls(plugins[id]) {
 			if len(scopes) == maxClaudePluginInstalls {
 				return scopes
 			}
@@ -78,15 +86,23 @@ func claudePluginScopes(ctx context.Context, loader *configLoader, env Env, conf
 // decodePluginInstalls reads a plugin's installations: a list in the current
 // registry, a single object in the version-1 one.
 func decodePluginInstalls(raw json.RawMessage) []claudePluginInstall {
-	var list []claudePluginInstall
-	if json.Unmarshal(raw, &list) == nil {
-		return list
+	var list []json.RawMessage
+	if json.Unmarshal(raw, &list) != nil {
+		list = []json.RawMessage{raw}
 	}
-	var one claudePluginInstall
-	if json.Unmarshal(raw, &one) == nil {
-		return []claudePluginInstall{one}
+	installs := make([]claudePluginInstall, 0, len(list))
+	for _, item := range list {
+		members, ok := exactObject(item)
+		if !ok {
+			continue
+		}
+		var install claudePluginInstall
+		install.Scope, _, _ = exactString(members, "scope")
+		install.InstallPath, _, _ = exactString(members, "installPath")
+		install.ProjectPath, _, _ = exactString(members, "projectPath")
+		installs = append(installs, install)
 	}
-	return nil
+	return installs
 }
 
 func pluginServesProject(env Env, install claudePluginInstall, project claudeProject) bool {
@@ -109,27 +125,33 @@ func pluginServesProject(env Env, install claudePluginInstall, project claudePro
 //
 // The installation is usable if any of its files is: a plugin that declares
 // servers in only one of the places is the common case.
+//
+// Each source is validated before it is merged, as Claude Code validates each
+// file, so an entry a later source declares in a form Claude Code skips does not
+// displace an earlier source's valid one.
 func pluginServers(loader *configLoader, name, dir string) func(context.Context) (serverSet, loadResult) {
 	return func(ctx context.Context) (serverSet, loadResult) {
-		raw := map[string]json.RawMessage{}
+		merged := serverSet{}
 		res := loadAbsent
 		merge := func(path string) {
 			servers, r := pluginServerFile(ctx, loader, path)
 			res = max(res, r)
-			maps.Copy(raw, servers)
+			maps.Copy(merged, servers)
 		}
 
 		merge(filepath.Join(dir, ".mcp.json"))
 
-		var manifest struct {
-			MCPServers json.RawMessage `json:"mcpServers"`
-		}
-		manifestRes := loader.loadJSON(ctx, filepath.Join(dir, filepath.FromSlash(claudePluginManifest)), &manifest)
+		var rawManifest json.RawMessage
+		manifestRes := loader.loadJSON(ctx, filepath.Join(dir, filepath.FromSlash(claudePluginManifest)), &rawManifest)
 		res = max(res, manifestRes)
-		if manifestRes == loadOK && len(manifest.MCPServers) > 0 {
+		var declared json.RawMessage
+		if manifest, ok := exactObject(rawManifest); manifestRes == loadOK && ok {
+			declared = manifest[mcpServersKey]
+		}
+		if len(declared) > 0 {
 			var specs []json.RawMessage
-			if json.Unmarshal(manifest.MCPServers, &specs) != nil {
-				specs = []json.RawMessage{manifest.MCPServers}
+			if json.Unmarshal(declared, &specs) != nil {
+				specs = []json.RawMessage{declared}
 			}
 			files := 0
 			for _, spec := range specs {
@@ -141,9 +163,8 @@ func pluginServers(loader *configLoader, name, dir string) func(context.Context)
 					}
 					continue
 				}
-				var inline map[string]json.RawMessage
-				if json.Unmarshal(spec, &inline) == nil {
-					maps.Copy(raw, inline)
+				if inline, ok := exactObject(spec); ok {
+					maps.Copy(merged, claudeServers(inline))
 				}
 			}
 		}
@@ -151,8 +172,8 @@ func pluginServers(loader *configLoader, name, dir string) func(context.Context)
 			return nil, res
 		}
 
-		set := make(serverSet, len(raw))
-		for server, entry := range decodeServers(raw) {
+		set := make(serverSet, len(merged))
+		for server, entry := range merged {
 			set["plugin:"+name+":"+server] = expandPluginRoot(entry, dir)
 		}
 		return set, loadOK
@@ -160,21 +181,22 @@ func pluginServers(loader *configLoader, name, dir string) func(context.Context)
 }
 
 // pluginServerFile reads a plugin server file, which may hold its table under
-// mcpServers or be the table itself.
-func pluginServerFile(ctx context.Context, loader *configLoader, path string) (map[string]json.RawMessage, loadResult) {
-	var doc map[string]json.RawMessage
-	res := loader.loadJSON(ctx, path, &doc)
-	if res != loadOK {
+// mcpServers or be the table itself, and keeps the entries Claude Code loads.
+// Like Claude Code's "doc.mcpServers || doc", a mcpServers member that is not an
+// object leaves the file read as a flat table.
+func pluginServerFile(ctx context.Context, loader *configLoader, path string) (serverSet, loadResult) {
+	var raw json.RawMessage
+	if res := loader.loadJSON(ctx, path, &raw); res != loadOK {
 		return nil, res
 	}
-	if wrapped, ok := doc[mcpServersKey]; ok {
-		var servers map[string]json.RawMessage
-		if json.Unmarshal(wrapped, &servers) != nil {
-			return nil, loadUnusable
-		}
-		return servers, loadOK
+	doc, ok := exactObject(raw)
+	if !ok {
+		return nil, loadUnusable
 	}
-	return doc, loadOK
+	if wrapped, ok := objectMember(doc, mcpServersKey); ok && wrapped != nil {
+		return claudeServers(wrapped), loadOK
+	}
+	return claudeServers(doc), loadOK
 }
 
 // pluginRelPath resolves a manifest's server file reference. Claude Code takes
