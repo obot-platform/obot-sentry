@@ -82,7 +82,7 @@ func (l *configLoader) loadClaudeJSON(ctx context.Context, path string) (claudeJ
 		return cached.doc, cached.res
 	}
 	var doc claudeJSON
-	res := l.loadJSONLimit(ctx, path, &doc, claudeJSONMaxBytes)
+	res := l.loadStrictJSON(ctx, path, &doc, claudeJSONMaxBytes)
 	if ctx.Err() != nil {
 		return claudeJSON{}, loadUnusable
 	}
@@ -184,24 +184,37 @@ func resolveClaudeCode(ctx context.Context, loader *configLoader, env Env, req R
 			"Claude Code's %s could not be read, so its local and user MCP servers cannot be ruled out", claudePath))
 	}
 
-	project := claudeProjectFor(ctx, loader, env, configDir, req.CWD, req.TranscriptPath)
-	scopes := claudeProjectScopes(loader, env, project, claudePath, claude, claudeRes, 0)
-	scopes = append(scopes, scope{
-		path: claudePath,
-		key:  mcpServersKey,
-		rank: len(scopes),
-		load: fixedServers(claudeServers(claude.MCPServers), claudeRes),
-	})
-	if strings.HasPrefix(serverName, claudePluginNamespacePrefix) {
-		scopes = append(scopes, claudePluginScopes(ctx, loader, env, configDir, project, len(scopes))...)
-	}
+	// Each project the session may have launched in is resolved in full. Those
+	// that define the name must agree on it. One that does not define it cannot be
+	// where the session loaded the server it is calling.
+	projects := claudeProjectsFor(ctx, loader, env, configDir, req.CWD, req.TranscriptPath)
+	for _, project := range projects {
+		scopes := claudeProjectScopes(loader, env, project, claudePath, claude, claudeRes, 0)
+		scopes = append(scopes, scope{
+			path: claudePath,
+			key:  mcpServersKey,
+			rank: len(scopes),
+			load: fixedServers(claudeServers(claude.MCPServers), claudeRes),
+		})
+		if strings.HasPrefix(serverName, claudePluginNamespacePrefix) {
+			scopes = append(scopes, claudePluginScopes(ctx, loader, env, configDir, project, len(scopes))...)
+		}
 
-	m, out = resolveScopes(ctx, scopes, names, tr)
-	switch out {
-	case outcomeFound:
+		pm, pout := resolveScopes(ctx, scopes, names, tr)
+		switch {
+		case pout == outcomeAmbiguous:
+			return ambiguous(req.Agent, serverName)
+		case pout != outcomeFound:
+		case out == outcomeFound && !sameEntry(pm.entry, m.entry):
+			return unresolved(serverName, fmt.Sprintf(
+				"the session started in %s or a directory between it and %s, and Claude Code's MCP configuration defines %q differently depending on which, so the hook cannot tell which one ran; rename one of them",
+				projects[len(projects)-1].launchDir, projects[0].launchDir, serverName))
+		case out != outcomeFound:
+			m, out = pm, pout
+		}
+	}
+	if out == outcomeFound {
 		return resolved(env, m.key, m.entry)
-	case outcomeAmbiguous:
-		return ambiguous(req.Agent, serverName)
 	}
 
 	if connector, ok := resolveClaudeAIConnector(claude, claudeRes, claudePath, serverName, tr); ok {
@@ -285,7 +298,7 @@ func claudeManagedSettingsFiles(env Env) (files []string, complete bool) {
 func managedSettingsServers(loader *configLoader, path string) func(context.Context) (serverSet, loadResult) {
 	return func(ctx context.Context) (serverSet, loadResult) {
 		var raw json.RawMessage
-		if res := loader.loadJSON(ctx, path, &raw); res != loadOK {
+		if res := loader.loadStrictJSON(ctx, path, &raw, maxConfigBytes); res != loadOK {
 			return nil, res
 		}
 		members, ok := exactObject(raw)
@@ -336,40 +349,52 @@ type claudeProject struct {
 	root string
 }
 
-// claudeProjectFor establishes the project context for a call made from cwd.
+// claudeProjectsFor establishes the project contexts a call made from cwd may
+// have been loaded in, cwd's first.
 //
 // The hook's cwd is where the session is now, which is not necessarily where it
 // started: a session that cd's into a subdirectory or a nested repository keeps
 // the configuration it loaded at launch. Claude Code names the transcript
 // directory after the launch directory, so the transcript path recovers it; when
 // it does not, cwd stands in.
-func claudeProjectFor(ctx context.Context, loader *configLoader, env Env, configDir, cwd, transcriptPath string) claudeProject {
+//
+// A resumed session breaks that. It loads its configuration from the directory
+// it was resumed in, but goes on writing the transcript it started, named after
+// the directory the session first launched in. When that names a directory above
+// cwd, the payload looks the same for a session that launched there and cd'd
+// down as for one resumed from anywhere between there and cwd, so every one of
+// those directories is a candidate.
+func claudeProjectsFor(ctx context.Context, loader *configLoader, env Env, configDir, cwd, transcriptPath string) []claudeProject {
 	dirs := ancestors(cwd)
 	if len(dirs) == 0 {
-		return claudeProject{}
+		return []claudeProject{{}}
 	}
-	launchDir := dirs[0]
-	if dir, ok := claudeLaunchDir(env, dirs, configDir, transcriptPath); ok {
-		launchDir = dir
+	candidates := dirs[:1]
+	if n, ok := claudeLaunchDir(env, dirs, configDir, transcriptPath); ok {
+		candidates = dirs[:n+1]
 	}
-	return claudeProject{launchDir: launchDir, root: claudeProjectRoot(ctx, loader, launchDir)}
+	projects := make([]claudeProject, len(candidates))
+	for i, dir := range candidates {
+		projects[i] = claudeProject{launchDir: dir, root: claudeProjectRoot(ctx, loader, dir)}
+	}
+	return projects
 }
 
 // claudeLaunchDir finds which of dirs, an absolute cwd and its ancestors, names
 // the transcript directory the session writes to (projects/<slug>/<id>.jsonl in
-// Claude Code's configuration directory).
-func claudeLaunchDir(env Env, dirs []string, configDir, transcriptPath string) (string, bool) {
+// Claude Code's configuration directory), and returns its index.
+func claudeLaunchDir(env Env, dirs []string, configDir, transcriptPath string) (int, bool) {
 	slug, ok := claudeTranscriptSlug(env, configDir, transcriptPath)
 	if !ok {
-		return "", false
+		return 0, false
 	}
-	for _, dir := range dirs {
+	for i, dir := range dirs {
 		want := claudeProjectSlug(dir)
 		if slug == want || env.windows() && strings.EqualFold(slug, want) {
-			return dir, true
+			return i, true
 		}
 	}
-	return "", false
+	return 0, false
 }
 
 // claudeTranscriptSlug returns the project slug of a transcript the session wrote

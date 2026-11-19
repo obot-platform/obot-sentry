@@ -127,3 +127,54 @@ func TestClaudeCodePluginRanksBelowUser(t *testing.T) {
 
 	assertURL(t, Resolve(f.Env, claudeCodeReq("plugin_p_s", f.path("proj"))), "https://user.example.com/mcp")
 }
+
+// TestClaudeCodeLocalMarketplacePlugin covers a plugin from a marketplace added
+// from a local folder or catalog file. Claude Code loads it in place from the
+// marketplace folder, at the path its catalog entry gives, and never from the
+// installed copy, so an edit to the copy is not what runs.
+func TestClaudeCodeLocalMarketplacePlugin(t *testing.T) {
+	for _, kind := range []string{"directory", "file"} {
+		t.Run(kind, func(t *testing.T) {
+			f := newFixture(t, "darwin")
+			market := f.mkdir(f.path("mkt"))
+			catalog := filepath.Join(market, ".claude-plugin", "marketplace.json")
+			source := `{"source":"directory","path":` + quote(market) + `}`
+			if kind == "file" {
+				source = `{"source":"file","path":` + quote(catalog) + `}`
+			}
+			f.write(f.homePath(".claude", "plugins", claudeMarketplaceRegistry),
+				`{"mkt":{"source":`+source+`,"installLocation":`+quote(market)+`}}`)
+			cached := f.mkdir(f.homePath(".claude", "plugins", "cache", "mkt", "p", "1.0.0"))
+			f.write(filepath.Join(cached, ".mcp.json"), `{"s":{"type":"http","url":"https://cached.example.com/mcp"}}`)
+			f.write(filepath.Join(market, "plugins", "p", ".mcp.json"), `{"s":{"type":"http","url":"https://live.example.com/mcp"}}`)
+			f.write(filepath.Join(market, "other", ".mcp.json"), `{"s":{"type":"http","url":"https://other.example.com/mcp"}}`)
+			f.pluginRegistry(f.homePath(".claude"), `{"version":2,"plugins":{"p@mkt":[{"scope":"user","installPath":`+quote(cached)+`}]}}`)
+			resolve := func(entries string) Resolution {
+				f.write(catalog, `{"name":"mkt","plugins":[`+entries+`]}`)
+				return Resolve(f.Env, claudeCodeReq("plugin_p_s", f.path("proj")))
+			}
+
+			assertURL(t, resolve(`{"name":"p","source":"./plugins/p"}`), "https://live.example.com/mcp")
+			assertURL(t, resolve(`{"name":"p","source":"plugins/p"}`), "https://live.example.com/mcp")
+			// The first entry for the plugin is the one Claude Code takes.
+			assertURL(t, resolve(`{"name":"p","source":"./plugins/p"},{"name":"p","source":"./other"}`), "https://live.example.com/mcp")
+			// A remote source is installed, so the installed copy is what loads.
+			assertURL(t, resolve(`{"name":"p","source":{"source":"github","repo":"acme/p"}}`), "https://cached.example.com/mcp")
+			// Claude Code loads nothing for a plugin it cannot locate.
+			assertUnresolved(t, resolve(`{"name":"q","source":"./plugins/p"}`), "was not found")
+			assertUnresolved(t, resolve(`{"name":"p","source":"../escape"}`), "was not found")
+			assertUnresolved(t, resolve(`{"name":"p","source":"./plugins/p"},`), "was not found")
+		})
+	}
+}
+
+// TestClaudeCodePluginFilesAreStrictJSON covers a plugin server file Claude Code
+// cannot parse: it loads none of that file's servers.
+func TestClaudeCodePluginFilesAreStrictJSON(t *testing.T) {
+	f := newFixture(t, "darwin")
+	install := f.mkdir(f.path("cache", "p"))
+	f.write(filepath.Join(install, ".mcp.json"), `{"s":{"type":"http","url":"https://plugin.example.com/mcp"},}`)
+	f.pluginRegistry(f.homePath(".claude"), `{"version":2,"plugins":{"p@mkt":[{"scope":"user","installPath":`+quote(install)+`}]}}`)
+
+	assertUnresolved(t, Resolve(f.Env, claudeCodeReq("plugin_p_s", f.path("proj"))), "was not found")
+}

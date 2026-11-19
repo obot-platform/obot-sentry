@@ -625,27 +625,21 @@ func TestClaudeCodeSymlinkedGitDir(t *testing.T) {
 
 // TestClaudeCodeLaunchDirFromTranscript covers a session whose cwd has moved since
 // launch. Claude Code keeps the configuration it loaded for the launch directory,
-// which the transcript path names; resolving from cwd would read a nested
-// repository's files the session never loaded.
+// which the transcript path names, so a server only the launch directory's
+// configuration defines still resolves after a cd into a nested repository.
 func TestClaudeCodeLaunchDirFromTranscript(t *testing.T) {
 	f := newFixture(t, "darwin")
 	workspace := f.mkdir(f.path("workspace"))
 	nested := f.mkdir(filepath.Join(workspace, "nested.repo"))
 	f.mkdir(filepath.Join(nested, ".git"))
-	f.write(filepath.Join(workspace, ".mcp.json"), `{"mcpServers":{"myserver":{"type":"http","url":"https://workspace.example.com/sse"}}}`)
-	f.write(filepath.Join(nested, ".mcp.json"), `{"mcpServers":{"myserver":{"type":"http","url":"https://nested.example.com/sse"}}}`)
 	f.write(f.homePath(".claude.json"), `{"projects":{
-		`+quote(workspace)+`:{"mcpServers":{"local":{"type":"http","url":"https://workspace-local.example.com/sse"}}},
-		`+quote(nested)+`:{"mcpServers":{"local":{"type":"http","url":"https://nested-local.example.com/sse"}}}
+		`+quote(workspace)+`:{"mcpServers":{"local":{"type":"http","url":"https://workspace-local.example.com/sse"}}}
 	}}`)
 	transcript := f.homePath(".claude", "projects", claudeProjectSlug(workspace), "0b0e.jsonl")
 
-	req := claudeCodeReq("myserver", nested)
-	assertURL(t, Resolve(f.Env, req), "https://nested.example.com/sse") // no transcript: cwd stands in
+	req := claudeCodeReq("local", nested)
+	assertUnresolved(t, Resolve(f.Env, req), "was not found") // no transcript: cwd stands in
 	req.TranscriptPath = transcript
-	assertURL(t, Resolve(f.Env, req), "https://workspace.example.com/sse")
-
-	req.ServerName = "local"
 	assertURL(t, Resolve(f.Env, req), "https://workspace-local.example.com/sse")
 
 	// A subagent's transcript sits below its session's directory.
@@ -654,7 +648,47 @@ func TestClaudeCodeLaunchDirFromTranscript(t *testing.T) {
 
 	// A transcript naming no ancestor of cwd is ignored rather than trusted.
 	req.TranscriptPath = f.homePath(".claude", "projects", "-somewhere-else", "0b0e.jsonl")
-	assertURL(t, Resolve(f.Env, req), "https://nested-local.example.com/sse")
+	assertUnresolved(t, Resolve(f.Env, req), "was not found")
+}
+
+// TestClaudeCodeResumedSession covers a session resumed below the directory it
+// first launched in. Claude Code loads the configuration of the directory it was
+// resumed in but keeps writing the original transcript, so the payload is the
+// same as for a session that launched above and cd'd down. Each directory from
+// the transcript's down to cwd may be the one loaded; where those that define the
+// server disagree, the hook cannot tell which ran.
+func TestClaudeCodeResumedSession(t *testing.T) {
+	f := newFixture(t, "darwin")
+	repo := f.mkdir(f.path("repo"))
+	sub := f.mkdir(filepath.Join(repo, "sub"))
+	deep := f.mkdir(filepath.Join(sub, "deep"))
+	f.write(filepath.Join(repo, ".mcp.json"), `{"mcpServers":{
+		"linear":{"type":"http","url":"https://allowed.example.com/mcp"},
+		"shared":{"type":"http","url":"https://shared.example.com/mcp"}
+	}}`)
+	f.write(filepath.Join(sub, ".mcp.json"), `{"mcpServers":{
+		"linear":{"command":"/tmp/evil"},
+		"subonly":{"type":"http","url":"https://sub.example.com/mcp"}
+	}}`)
+	transcript := f.homePath(".claude", "projects", claudeProjectSlug(repo), "s.jsonl")
+
+	for _, cwd := range []string{sub, deep} {
+		req := claudeCodeReq("linear", cwd)
+		req.TranscriptPath = transcript
+		assertUnresolved(t, Resolve(f.Env, req), "defines \"linear\" differently")
+
+		req.ServerName = "shared"
+		assertURL(t, Resolve(f.Env, req), "https://shared.example.com/mcp")
+
+		// Only a session resumed in sub or below can have loaded this one.
+		req.ServerName = "subonly"
+		assertURL(t, Resolve(f.Env, req), "https://sub.example.com/mcp")
+	}
+
+	// Resumed in the directory it launched in, there is one candidate.
+	req := claudeCodeReq("linear", repo)
+	req.TranscriptPath = transcript
+	assertURL(t, Resolve(f.Env, req), "https://allowed.example.com/mcp")
 }
 
 // TestClaudeCodeTranscriptMustBeUnderConfigDir covers where the launch
@@ -665,14 +699,16 @@ func TestClaudeCodeTranscriptMustBeUnderConfigDir(t *testing.T) {
 	f := newFixture(t, "darwin")
 	app := f.mkdir(f.path("app"))
 	evil := f.mkdir(filepath.Join(app, "evil"))
-	f.write(filepath.Join(app, ".mcp.json"), `{"mcpServers":{"linear":{"type":"http","url":"https://app.example.com/mcp"}}}`)
+	f.write(filepath.Join(app, ".mcp.json"), `{"mcpServers":{"linear":{"command":"/tmp/real"}}}`)
 	f.write(filepath.Join(evil, ".mcp.json"), `{"mcpServers":{"linear":{"type":"http","url":"https://allowed.example.com/mcp"}}}`)
 
+	// The real slug makes app a candidate, which defines linear differently; the
+	// crafted one would leave evil the only candidate.
 	configDir := f.path("x", "projects", claudeProjectSlug(evil), "cfg")
 	f.setenv(claudeConfigDirEnv, configDir)
 	req := claudeCodeReq("linear", evil)
 	req.TranscriptPath = filepath.Join(configDir, "projects", claudeProjectSlug(app), "s.jsonl")
-	assertURL(t, Resolve(f.Env, req), "https://app.example.com/mcp")
+	assertUnresolved(t, Resolve(f.Env, req), "differently")
 
 	// A transcript outside the session's configuration directory names nothing, so
 	// cwd stands in, as it does with no transcript at all.
@@ -723,19 +759,30 @@ func TestClaudeCodeMalformedFilesAreSkipped(t *testing.T) {
 	}
 }
 
-// TestClaudeCodeJSONCTolerance covers a config carrying comments and a trailing
-// comma. Refusing to parse one would turn a working server into a deny.
-func TestClaudeCodeJSONCTolerance(t *testing.T) {
-	f := newFixture(t, "darwin")
-	project := f.path("proj")
-	f.write(filepath.Join(project, ".mcp.json"), `{
-		// the issue tracker
-		"mcpServers": {
-			"myserver": {"type":"http","url": "https://myserver.example.com/sse"},
-		}
-	}`)
+// TestClaudeCodeStrictJSON covers configuration carrying comments or a trailing
+// comma. Claude Code parses its files with JSON.parse and skips one it cannot,
+// so a lower scope's definition answers; reading past the error would report a
+// server the session never loaded.
+func TestClaudeCodeStrictJSON(t *testing.T) {
+	for name, body := range map[string]string{
+		"trailing comma": `{"mcpServers":{"myserver":{"type":"http","url":"https://decoy.example.com/mcp"},}}`,
+		"line comment":   "{\"mcpServers\":{ // decoy\n\"myserver\":{\"type\":\"http\",\"url\":\"https://decoy.example.com/mcp\"}}}",
+		"block comment":  `{"mcpServers":{/* decoy */"myserver":{"type":"http","url":"https://decoy.example.com/mcp"}}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t, "darwin")
+			project := f.mkdir(f.path("proj"))
+			f.write(filepath.Join(project, ".mcp.json"), body)
+			f.write(f.homePath(".claude.json"), `{"mcpServers":{"myserver":{"command":"/opt/tools/real-server"}}}`)
+			assertCommand(t, Resolve(f.Env, claudeCodeReq("myserver", project)), "/opt/tools/real-server")
+		})
+	}
 
-	assertURL(t, Resolve(f.Env, claudeCodeReq("myserver", project)), "https://myserver.example.com/sse")
+	// managed-mcp.json still locks when Claude Code cannot parse it, and then
+	// supplies no servers.
+	f := newFixture(t, "darwin")
+	f.write(f.Env.managedMCPPath(), `{"mcpServers":{"myserver":{"type":"http","url":"https://managed.example.com/mcp"},}}`)
+	assertUnresolved(t, Resolve(f.Env, claudeCodeReq("myserver", f.path("proj"))), "cannot be overridden")
 }
 
 // TestClaudeCodeStdioResolution covers an entry that launches a package runner,
@@ -899,7 +946,7 @@ func projectScopesFrom(t *testing.T, f *fixture, cwd string) []scope {
 	var claude claudeJSON
 	res := loadJSON(claudePath, &claude)
 	loader := newConfigLoader()
-	project := claudeProjectFor(t.Context(), loader, f.Env, f.homePath(".claude"), cwd, "")
+	project := claudeProjectsFor(t.Context(), loader, f.Env, f.homePath(".claude"), cwd, "")[0]
 	return claudeProjectScopes(loader, f.Env, project, claudePath, claude, res, 1)
 }
 

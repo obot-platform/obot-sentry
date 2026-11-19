@@ -35,10 +35,19 @@ func exactString(members map[string]json.RawMessage, key string) (value string, 
 	if !present {
 		return "", false, true
 	}
-	if json.Unmarshal(raw, &value) != nil || bytes.TrimSpace(raw)[0] != '"' {
-		return "", true, false
+	value, ok = jsonString(raw)
+	return value, true, ok
+}
+
+// jsonString decodes raw as a JSON string. null is not one, though Go would
+// decode it into a string without complaint.
+func jsonString(raw json.RawMessage) (string, bool) {
+	raw = bytes.TrimSpace(raw)
+	var value string
+	if len(raw) == 0 || raw[0] != '"' || json.Unmarshal(raw, &value) != nil {
+		return "", false
 	}
-	return value, true, true
+	return value, true
 }
 
 // claudeServerEntry decodes one server entry the way Claude Code validates it,
@@ -67,7 +76,10 @@ func claudeServerEntry(raw json.RawMessage) (mcpEntry, bool) {
 			return mcpEntry{}, false
 		}
 		entry := mcpEntry{Command: command}
-		if !optionalMember(members, "args", '[', &entry.Args) || !optionalMember(members, "env", '{', &entry.Environment) {
+		if entry.Args, ok = optionalStrings(members, "args"); !ok {
+			return mcpEntry{}, false
+		}
+		if entry.Environment, ok = optionalStringMap(members, "env"); !ok {
 			return mcpEntry{}, false
 		}
 		return entry, true
@@ -76,8 +88,7 @@ func claudeServerEntry(raw json.RawMessage) (mcpEntry, bool) {
 		if !present || !ok {
 			return mcpEntry{}, false
 		}
-		var headers map[string]string
-		if !optionalMember(members, "headers", '{', &headers) {
+		if _, ok := optionalStringMap(members, "headers"); !ok {
 			return mcpEntry{}, false
 		}
 		return mcpEntry{URL: url}, true
@@ -86,16 +97,45 @@ func claudeServerEntry(raw json.RawMessage) (mcpEntry, bool) {
 	}
 }
 
-// optionalMember decodes member key into out when present. A present member must
-// be the JSON kind open starts ('[' or '{'): Claude Code rejects null where it
-// expects a list or a record, though Go would decode null into either.
-func optionalMember(members map[string]json.RawMessage, key string, open byte, out any) bool {
+// optionalStrings reads member key as a list of strings, if present. Claude Code
+// rejects null for the list or any element of it, though Go would decode null
+// into either.
+func optionalStrings(members map[string]json.RawMessage, key string) ([]string, bool) {
 	raw, present := members[key]
 	if !present {
-		return true
+		return nil, true
 	}
-	raw = bytes.TrimSpace(raw)
-	return len(raw) > 0 && raw[0] == open && json.Unmarshal(raw, out) == nil
+	var items []json.RawMessage
+	if raw = bytes.TrimSpace(raw); len(raw) == 0 || raw[0] != '[' || json.Unmarshal(raw, &items) != nil {
+		return nil, false
+	}
+	values := make([]string, len(items))
+	for i, item := range items {
+		value, ok := jsonString(item)
+		if !ok {
+			return nil, false
+		}
+		values[i] = value
+	}
+	return values, true
+}
+
+// optionalStringMap reads member key as a record of strings, if present, with
+// null rejected for the record or any value in it, as optionalStrings does.
+func optionalStringMap(members map[string]json.RawMessage, key string) (map[string]string, bool) {
+	record, ok := objectMember(members, key)
+	if !ok || record == nil {
+		return nil, ok
+	}
+	values := make(map[string]string, len(record))
+	for name, raw := range record {
+		value, ok := jsonString(raw)
+		if !ok {
+			return nil, false
+		}
+		values[name] = value
+	}
+	return values, true
 }
 
 // claudeServers decodes a server table, keeping only the entries Claude Code
@@ -130,7 +170,7 @@ func objectMember(members map[string]json.RawMessage, key string) (table map[str
 func claudeJSONServers(loader *configLoader, path string) func(context.Context) (serverSet, loadResult) {
 	return func(ctx context.Context) (serverSet, loadResult) {
 		var raw json.RawMessage
-		if res := loader.loadJSONLimit(ctx, path, &raw, claudeMCPConfigMaxBytes); res != loadOK {
+		if res := loader.loadStrictJSON(ctx, path, &raw, claudeMCPConfigMaxBytes); res != loadOK {
 			return nil, res
 		}
 		members, ok := exactObject(raw)

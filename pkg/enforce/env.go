@@ -254,6 +254,21 @@ func (l *configLoader) loadJSONLimit(ctx context.Context, path string, out any, 
 	return loadOK
 }
 
+// loadStrictJSON decodes the JSON file at path with no JSONC fallback, for an
+// agent that parses its files with JSON.parse: a file it rejects for a comment or
+// a trailing comma is unusable here too, rather than read past what the agent
+// never could.
+func (l *configLoader) loadStrictJSON(ctx context.Context, path string, out any, limit int64) loadResult {
+	data, res := l.readConfigLimit(ctx, path, limit)
+	if res != loadOK {
+		return res
+	}
+	if err := json.Unmarshal(data, out); err != nil || ctx.Err() != nil {
+		return loadUnusable
+	}
+	return loadOK
+}
+
 func (l *configLoader) loadTOML(ctx context.Context, path string, out any) loadResult {
 	data, res := l.readConfig(ctx, path)
 	if res != loadOK {

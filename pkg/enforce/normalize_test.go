@@ -587,7 +587,6 @@ func TestNormalizeClaudeCodeTranscriptPath(t *testing.T) {
 	f := newFixture(t, "darwin")
 	launch := f.mkdir(f.path("launch"))
 	cwd := f.mkdir(filepath.Join(launch, "moved"))
-	f.write(filepath.Join(cwd, ".mcp.json"), `{"mcpServers":{"probe":{"type":"http","url":"https://cwd.example.com/mcp"}}}`)
 	f.write(f.homePath(".claude.json"), `{"projects":{`+quote(launch)+`:{"mcpServers":{"probe":{"type":"http","url":"https://launch.example.com/mcp"}}}}}`)
 
 	payload := func(transcript string) []byte {
@@ -607,8 +606,8 @@ func TestNormalizeClaudeCodeTranscriptPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("an over-long transcript path failed the call: %v", err)
 	}
-	if got := call.Request.Server.URL; got != "https://cwd.example.com/mcp" {
-		t.Fatalf("URL = %q, want cwd to stand in", got)
+	if got := call.Request.Server.URL; got != "" {
+		t.Fatalf("URL = %q, want cwd to stand in, where nothing defines the server", got)
 	}
 }
 

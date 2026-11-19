@@ -194,7 +194,13 @@ managed servers, the project's local section of `.claude.json` (keyed by the git
 root, or a linked worktree's main checkout), every `.mcp.json` from the session's
 launch directory upward, user servers, then plugins. A session's launch directory
 is recovered from its transcript path, so pass `--transcript-path` from a hook
-payload to reproduce a call made after the session changed directories.
+payload to reproduce a call made after the session changed directories. A resumed
+session keeps its original transcript, so when that names a directory above the
+current one, each directory in between may be the one the session loaded, and a
+server they define differently is left unresolved. Claude Code's files are parsed
+as strict JSON, as Claude Code parses them, so a file with comments or trailing
+commas is skipped. A plugin from a marketplace added from a local folder or
+catalog file is read from that folder, which is where Claude Code loads it.
 
 An unidentified server prints the reason on the last line and exits 1:
 
