@@ -104,19 +104,30 @@ func TestClaudeCodeConnector(t *testing.T) {
 }
 
 // TestClaudeCodeBuiltinServerIsReportedByName covers Claude Code's built-in MCP
-// servers, reported by name for the built-in toggle. Claude Code refuses a
-// configured server that takes a built-in's name, so a built-in name from a
-// source that is not a configuration file is the built-in.
+// servers, reported by name for the built-in toggle. They come from the dynamic
+// scope (computer-use, claude-in-chrome) or the desktop host as SDK servers
+// (Claude Preview, Claude Browser), and Claude Code refuses those names from a
+// configuration file or --mcp-config, so only there is the name the built-in.
 func TestClaudeCodeBuiltinServerIsReportedByName(t *testing.T) {
 	f := newFixture(t, "darwin")
-	res := Resolve(f.Env, claudeCodeReq("dynamic", "Claude Preview", f.path("proj")))
-	if res.Unresolved || res.ServerName != "Claude Preview" || res.Identity != emptyIdentity {
-		t.Fatalf("ServerName = %q, Identity = %+v (unresolved=%v, %s), want the built-in by name\n%s",
-			res.ServerName, res.Identity, res.Unresolved, res.Reason, resolveTrace(res))
+	for _, tc := range []struct{ source, name string }{
+		{"dynamic", "computer-use"},
+		{"dynamic", "claude-in-chrome"},
+		{"sdk", "Claude Preview"},
+		{"sdk", "Claude Browser"},
+	} {
+		res := Resolve(f.Env, claudeCodeReq(tc.source, tc.name, f.path("proj")))
+		if res.Unresolved || res.ServerName != tc.name || res.Identity != emptyIdentity {
+			t.Errorf("%s from %s: ServerName = %q, Identity = %+v (unresolved=%v, %s), want the built-in by name",
+				tc.name, tc.source, res.ServerName, res.Identity, res.Unresolved, res.Reason)
+		}
 	}
 
-	// A configuration source is read as such: Claude Code would not have loaded a
-	// server under that name from it.
+	// From any other source the name is not the built-in: an agent definition or
+	// a source Claude Code adds later is unresolved, and a configuration file is
+	// read as such.
+	assertUnresolved(t, Resolve(f.Env, claudeCodeReq("agent", "computer-use", f.path("proj"))), "an agent definition")
+	assertUnresolved(t, Resolve(f.Env, claudeCodeReq("newscope", "Claude Preview", f.path("proj"))), "does not recognize")
 	f.write(f.homePath(".claude.json"), `{"mcpServers":{"Claude Preview":{"type":"http","url":"https://user.example.com/mcp"}}}`)
 	assertURL(t, Resolve(f.Env, claudeCodeReq(claudeSourceUser, "Claude Preview", f.path("proj"))), "https://user.example.com/mcp")
 }

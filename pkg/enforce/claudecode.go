@@ -145,9 +145,7 @@ func resolveClaudeCode(ctx context.Context, loader *configLoader, env Env, req R
 		return unresolved(serverName,
 			"Claude Code did not report which configuration the MCP server came from (the hook payload has no mcp_server); update Claude Code")
 	}
-	if isBuiltinAgentMCP(req.Agent, serverName) && !claudeFileSource(source) {
-		// Claude Code refuses a configured server that takes a built-in's name, so
-		// this is the built-in.
+	if isBuiltinAgentMCP(req.Agent, serverName) && claudeBuiltinSource(source) {
 		return Resolution{ServerName: serverName}
 	}
 	claudePath, configDir, ok := env.claudeConfigPaths()
@@ -242,14 +240,14 @@ func resolveClaudeCode(ctx context.Context, loader *configLoader, env Env, req R
 	return resolved(env, m.key, m.entry)
 }
 
-// claudeFileSource reports whether source names a configuration the resolver
-// reads from disk.
-func claudeFileSource(source string) bool {
-	switch source {
-	case claudeSourceUser, claudeSourceLocal, claudeSourceProject, claudeSourcePlugin, claudeSourceEnterprise, claudeSourceManaged:
-		return true
-	}
-	return false
+// claudeBuiltinSource reports whether source is one Claude Code's built-in
+// servers report. computer-use and claude-in-chrome are registered as stdio
+// servers in the dynamic scope, and the desktop host supplies Claude Preview
+// and Claude Browser as SDK servers. Claude Code refuses a built-in name from a
+// configuration file or --mcp-config, so under these sources the name is the
+// built-in. Under any other source it is not, and is resolved as reported.
+func claudeBuiltinSource(source string) bool {
+	return source == "dynamic" || source == "sdk"
 }
 
 // claudeResolveIn resolves the server in one source's scopes.

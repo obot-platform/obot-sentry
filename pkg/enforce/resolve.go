@@ -240,7 +240,8 @@ func enforcementURL(raw string) (string, bool) {
 // server take one of those names (it refuses any whose tool namespace matches
 // one, verified against Claude Code 2.1.311), so a built-in name can never also
 // be a configuration key. resolveClaudeCode checks it before reading anything,
-// for a server whose reported source is not a configuration file.
+// for a server whose reported source is one the built-ins report (see
+// claudeBuiltinSource).
 //
 // Codex's built-ins are not here, because Codex does let a configured server
 // take a built-in name, and Codex Desktop itself configures node_repl. They are
