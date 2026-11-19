@@ -83,6 +83,77 @@ command = "/old/obot-sentry audit submit --managed-by obot-sentry"
 	}
 }
 
+// TestRemoveConfigDropsEventsItEmpties covers what removal leaves behind. An
+// event array that held only our hooks goes, and so does a hooks object left
+// with no events. Anything that was empty before, or that carries a comment,
+// was put there by someone else and stays.
+func TestRemoveConfigDropsEventsItEmpties(t *testing.T) {
+	const (
+		ours  = `{"matcher":"*","hooks":[{"type":"command","command":"/old/obot-sentry audit submit --managed-by obot-sentry"}]}`
+		user  = `{"matcher":"UserOwned","hooks":[{"type":"command","command":"echo user-hook"}]}`
+		claim = `{"command":"/old/obot-sentry audit submit --managed-by obot-sentry"}`
+	)
+	claude := Destination{
+		Agent:  localagent.ClaudeCode,
+		Format: FormatJSON,
+	}
+	tests := []struct {
+		name string
+		dest Destination
+		data string
+		want string
+	}{
+		{
+			name: "user settings keep their own hook and lose our events",
+			dest: claude,
+			data: `{"theme":"dark","hooks":{"PreToolUse":[` + user + `,` + ours + `],"PostToolUse":[` + ours + `],"PostToolUseFailure":[` + ours + `]}}`,
+			want: `{"theme":"dark","hooks":{"PreToolUse":[` + user + `]}}`,
+		},
+		{
+			name: "a hooks object holding only ours goes",
+			dest: claude,
+			data: `{"$schema":"https://json.schemastore.org/claude-code-settings.json","hooks":{"PreToolUse":[` + ours + `],"PostToolUse":[` + ours + `]}}`,
+			want: `{"$schema":"https://json.schemastore.org/claude-code-settings.json"}`,
+		},
+		{
+			name: "an event that was already empty stays",
+			dest: claude,
+			data: `{"hooks":{"Stop":[],"PostToolUse":[` + ours + `]}}`,
+			want: `{"hooks":{"Stop":[]}}`,
+		},
+		{
+			name: "an emptied event with a comment stays",
+			dest: claude,
+			data: "{\"hooks\":{\n// audit trail, see ticket 42\n\"PostToolUse\":[" + ours + "]}}",
+			want: "{\"hooks\":{\n// audit trail, see ticket 42\n\"PostToolUse\":[]}}",
+		},
+		{
+			name: "cursor direct entries",
+			dest: Destination{
+				Agent:  localagent.Cursor,
+				Format: FormatJSON,
+			},
+			data: `{"version":1,"hooks":{"postToolUse":[` + claim + `],"stop":[{"command":"/third/party keep"}]}}`,
+			want: `{"version":1,"hooks":{"stop":[{"command":"/third/party keep"}]}}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			out, err := removeConfig(tt.dest, []byte(tt.data))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !out.write || out.status != StatusRemoved {
+				t.Fatalf("outcome = %+v, want a removal", out)
+			}
+			if got := string(out.data); got != tt.want {
+				t.Fatalf("removal left\n%s\nwant\n%s", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestAuditOnlyRemovesEnforcementFromUnexpectedEvents(t *testing.T) {
 	tests := []struct {
 		name string

@@ -346,19 +346,74 @@ func filterNestedOwned(arr *hujson.Array) int {
 // filterJSONHookEvents applies filter to every event array under a JSON hook
 // object. Claude uses nested matcher groups; Cursor and VS Code use direct hook
 // entries. An incompatible event value is rejected rather than overwritten.
+//
+// An event the filter empties is removed, so taking our hooks out does not
+// leave "PostToolUse": [] behind. Only events emptied here go: an array that
+// was already empty is someone else's, and so is one carrying a comment.
 func filterJSONHookEvents(hooks *hujson.Object, nested bool, owned func(string) bool) (int, error) {
 	removed := 0
+	emptied := make(map[int]bool)
 	for i := range hooks.Members {
 		name := memberName(hooks.Members[i])
 		arr, ok := asArray(&hooks.Members[i].Value)
 		if !ok {
 			return 0, fmt.Errorf("config hook event %q is %s, want a JSON array", name, kindName(hooks.Members[i].Value.Value))
 		}
+		var n int
 		if nested {
-			removed += filterNested(arr, owned)
+			n = filterNested(arr, owned)
 		} else {
-			removed += filterDirect(arr, owned)
+			n = filterDirect(arr, owned)
+		}
+		removed += n
+		if n > 0 && len(arr.Elements) == 0 && !memberHasComment(hooks.Members[i]) {
+			emptied[i] = true
 		}
 	}
+	if len(emptied) > 0 {
+		kept := hooks.Members[:0]
+		for i, m := range hooks.Members {
+			if !emptied[i] {
+				kept = append(kept, m)
+			}
+		}
+		hooks.Members = kept
+	}
 	return removed, nil
+}
+
+// removeEmptyObjectMember deletes obj[key] when it is an object with no members
+// and no comments, reporting whether it did.
+func removeEmptyObjectMember(obj *hujson.Object, key string) bool {
+	for i, m := range obj.Members {
+		if memberName(m) != key {
+			continue
+		}
+		inner, ok := asObject(&obj.Members[i].Value)
+		if !ok || len(inner.Members) > 0 || memberHasComment(m) || extraHasComment(inner.AfterExtra) {
+			return false
+		}
+		obj.Members = append(obj.Members[:i], obj.Members[i+1:]...)
+		return true
+	}
+	return false
+}
+
+// memberHasComment reports whether a member, or the array it holds, carries a
+// comment, which removing the member would silently discard.
+func memberHasComment(m hujson.ObjectMember) bool {
+	if extraHasComment(m.Name.BeforeExtra) || extraHasComment(m.Name.AfterExtra) ||
+		extraHasComment(m.Value.BeforeExtra) || extraHasComment(m.Value.AfterExtra) {
+		return true
+	}
+	if arr, ok := m.Value.Value.(*hujson.Array); ok {
+		return extraHasComment(arr.AfterExtra)
+	}
+	return false
+}
+
+// extraHasComment reports whether e holds a comment. Extra is whitespace and
+// comments only, and every comment starts with a slash.
+func extraHasComment(e hujson.Extra) bool {
+	return bytes.IndexByte(e, '/') >= 0
 }

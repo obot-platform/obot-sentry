@@ -168,7 +168,7 @@ func commitConfigFile(scope Scope, u *TargetUser, absPath string, data []byte) e
 			return err
 		}
 	}
-	if err := writeAtomic(root, rel, data, filePerm); err != nil {
+	if err := writeAtomic(root, rel, absPath, data, filePerm); err != nil {
 		return err
 	}
 	if scope == ScopeMachine {
@@ -199,7 +199,9 @@ func dirChain(dir string) []string {
 	return chain
 }
 
-func writeAtomic(root *os.Root, rel string, data []byte, perm os.FileMode) error {
+// writeAtomic replaces rel under root with data. absPath is the same file as
+// the user knows it, and is the only path its errors name.
+func writeAtomic(root *os.Root, rel, absPath string, data []byte, perm os.FileMode) error {
 	// The pid keeps concurrent installers off each other's in-flight write; the
 	// rename is atomic, so whichever commits last wins with identical content.
 	tmp := filepath.Join(filepath.Dir(rel), fmt.Sprintf(".%s.%d.obot-sentry-tmp", filepath.Base(rel), os.Getpid()))
@@ -211,17 +213,34 @@ func writeAtomic(root *os.Root, rel string, data []byte, perm os.FileMode) error
 		f, err = root.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, perm)
 	}
 	if err != nil {
-		return fmt.Errorf("creating temporary file for %q: %w", rel, err)
+		return fmt.Errorf("creating temporary file for %q: %w", absPath, withoutRootPath(err))
 	}
 	if err := writeAndClose(f, data, perm); err != nil {
 		_ = root.Remove(tmp)
-		return fmt.Errorf("writing temporary file for %q: %w", rel, err)
+		return fmt.Errorf("writing temporary file for %q: %w", absPath, withoutRootPath(err))
 	}
 	if err := root.Rename(tmp, rel); err != nil {
 		_ = root.Remove(tmp)
-		return fmt.Errorf("replacing %q: %w", rel, err)
+		return fmt.Errorf("replacing %q: %w", absPath, withoutRootPath(err))
 	}
 	return nil
+}
+
+// withoutRootPath strips the path from an os.Root operation's error. That path
+// is relative to the root, so on Windows it reads as "Program Files\..." with
+// the drive missing, and the caller already names the file in full. The
+// underlying error is kept, so errors.Is still sees fs.ErrPermission and the
+// like.
+func withoutRootPath(err error) error {
+	var pathErr *fs.PathError
+	if errors.As(err, &pathErr) {
+		return pathErr.Err
+	}
+	var linkErr *os.LinkError
+	if errors.As(err, &linkErr) {
+		return linkErr.Err
+	}
+	return err
 }
 
 // writeAndClose writes data, forces perm past the process umask, and flushes so

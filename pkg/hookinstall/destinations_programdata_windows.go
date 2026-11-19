@@ -15,13 +15,3 @@ func windowsProgramData() string {
 	}
 	return path
 }
-
-// windowsProgramFiles asks Windows for the Program Files known folder, where
-// Claude Code reads its managed settings, for the same reason.
-func windowsProgramFiles() string {
-	path, err := windows.KnownFolderPath(windows.FOLDERID_ProgramFiles, windows.KF_FLAG_DEFAULT)
-	if err != nil || path == "" {
-		return `C:\Program Files`
-	}
-	return path
-}

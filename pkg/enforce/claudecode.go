@@ -14,9 +14,11 @@ import (
 // hookinstall.supportedPlatform rejects everything else.
 const (
 	claudeManagedMCPDarwin = "/Library/Application Support/ClaudeCode/managed-mcp.json"
-	// windowsProgramFilesDefault stands in for %PROGRAMFILES% when it is unset,
-	// which happens when a test models the Windows layout from another OS.
-	windowsProgramFilesDefault = `C:\Program Files`
+	// claudeManagedMCPWindows is fixed on drive C:. Claude Code does not consult
+	// %PROGRAMFILES% or the Program Files known folder for its managed
+	// directory, so neither may this: on a machine whose Program Files lives
+	// elsewhere, either would name a file Claude Code never reads.
+	claudeManagedMCPWindows = "C:/Program Files/ClaudeCode/managed-mcp.json"
 	// claudeAIConnectorPrefix namespaces a claude.ai account connector's tools.
 	claudeAIConnectorPrefix = "claude_ai_"
 	// claudeConfigDirEnv relocates Claude Code's user configuration, .claude.json
@@ -60,7 +62,7 @@ func (l *configLoader) loadClaudeJSON(ctx context.Context, path string) (claudeJ
 // managedMCPPath returns the enterprise managed MCP configuration path.
 func (e Env) managedMCPPath() string {
 	if e.windows() {
-		return e.envPath("PROGRAMFILES", windowsProgramFilesDefault, "ClaudeCode", "managed-mcp.json")
+		return e.machinePath(claudeManagedMCPWindows)
 	}
 	return e.machinePath(claudeManagedMCPDarwin)
 }
