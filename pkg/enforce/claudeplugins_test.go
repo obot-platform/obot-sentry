@@ -1,7 +1,9 @@
 package enforce
 
 import (
+	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -215,4 +217,49 @@ func TestClaudeCodePluginFilesAreStrictJSON(t *testing.T) {
 	f.pluginRegistry(f.homePath(".claude"), `{"version":2,"plugins":{"p@mkt":[{"scope":"user","installPath":`+quote(install)+`}]}}`)
 
 	assertUnresolved(t, Resolve(f.Env, pluginReq("p", "s", f.path("proj"))), "did not find it there")
+}
+
+// TestClaudeCodePluginBoundsFailClosed covers the resolver's bounds on plugin
+// installations and manifest server files, which Claude Code does not share. A
+// later file or installation can redefine a server, so past either bound the
+// server is unresolved rather than answered from what was read.
+func TestClaudeCodePluginBoundsFailClosed(t *testing.T) {
+	t.Run("server files", func(t *testing.T) {
+		f := newFixture(t, "darwin")
+		install := f.mkdir(f.path("cache", "p"))
+		var refs []string
+		for i := range maxClaudePluginServerFiles + 1 {
+			name := fmt.Sprintf("./s%02d.json", i)
+			refs = append(refs, quote(name))
+			url := "https://allowed.example.com/mcp"
+			if i == maxClaudePluginServerFiles {
+				url = "https://override.example.com/mcp"
+			}
+			f.write(filepath.Join(install, name), `{"s":{"type":"http","url":"`+url+`"}}`)
+		}
+		f.pluginRegistry(f.homePath(".claude"), `{"version":2,"plugins":{"p@mkt":[{"scope":"user","installPath":`+quote(install)+`}]}}`)
+		manifest := filepath.Join(install, ".claude-plugin", "plugin.json")
+
+		f.write(manifest, `{"name":"p","mcpServers":[`+strings.Join(refs[:maxClaudePluginServerFiles], ",")+`]}`)
+		assertURL(t, Resolve(f.Env, pluginReq("p", "s", f.path("proj"))), "https://allowed.example.com/mcp")
+
+		f.write(manifest, `{"name":"p","mcpServers":[`+strings.Join(refs, ",")+`]}`)
+		assertUnresolved(t, Resolve(f.Env, pluginReq("p", "s", f.path("proj"))), "more installations or server files than the hook reads")
+	})
+
+	t.Run("installations", func(t *testing.T) {
+		f := newFixture(t, "darwin")
+		install := f.mkdir(f.path("cache", "p"))
+		f.write(filepath.Join(install, ".mcp.json"), `{"s":{"type":"http","url":"https://allowed.example.com/mcp"}}`)
+		entry := `{"scope":"user","installPath":` + quote(install) + `}`
+		registry := func(n int) string {
+			return `{"version":2,"plugins":{"p@mkt":[` + strings.TrimSuffix(strings.Repeat(entry+",", n), ",") + `]}}`
+		}
+
+		f.pluginRegistry(f.homePath(".claude"), registry(maxClaudePluginInstalls))
+		assertURL(t, Resolve(f.Env, pluginReq("p", "s", f.path("proj"))), "https://allowed.example.com/mcp")
+
+		f.pluginRegistry(f.homePath(".claude"), registry(maxClaudePluginInstalls+1))
+		assertUnresolved(t, Resolve(f.Env, pluginReq("p", "s", f.path("proj"))), "more installations or server files than the hook reads")
+	})
 }

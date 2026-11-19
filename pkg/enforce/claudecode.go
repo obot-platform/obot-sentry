@@ -215,8 +215,9 @@ func resolveClaudeCode(ctx context.Context, loader *configLoader, env Env, req R
 	// define it cannot be where the session loaded it.
 	projects := claudeProjectsFor(ctx, loader, env, configDir, req.CWD, req.TranscriptPath)
 	var (
-		m     match
-		found bool
+		m          match
+		found      bool
+		incomplete bool
 	)
 	for _, project := range projects {
 		var scopes []scope
@@ -226,9 +227,13 @@ func resolveClaudeCode(ctx context.Context, loader *configLoader, env Env, req R
 		case claudeSourceProject:
 			scopes = claudeProjectFileScopes(loader, project)
 		case claudeSourcePlugin:
-			scopes = claudePluginScopes(ctx, loader, env, configDir, project, 0)
+			scopes = claudePluginScopes(ctx, loader, env, configDir, project, 0, &incomplete)
 		}
 		pm, out := resolveScopes(ctx, scopes, names, tr)
+		if incomplete {
+			return unresolved(serverName, fmt.Sprintf(
+				"Claude Code's plugins name more installations or server files than the hook reads, so the definition of MCP server %q cannot be settled", serverName))
+		}
 		switch {
 		case out == outcomeAmbiguous:
 			return ambiguous(req.Agent, serverName)

@@ -20,9 +20,12 @@ const (
 	claudeMarketplaceCatalog  = ".claude-plugin/marketplace.json"
 	claudePluginManifest      = ".claude-plugin/plugin.json"
 	claudePluginRootVar       = "${CLAUDE_PLUGIN_ROOT}"
-	// maxClaudePluginInstalls bounds the installations considered per call.
-	maxClaudePluginInstalls = 256
-	// maxClaudePluginServerFiles bounds the server files one manifest may name.
+	// maxClaudePluginInstalls bounds the installations considered per call, and
+	// maxClaudePluginServerFiles the server files one manifest may name. Claude
+	// Code has neither bound, and a server a later file or installation defines
+	// can override one an earlier one does, so past either the plugin servers are
+	// reported incomplete rather than truncated.
+	maxClaudePluginInstalls    = 256
 	maxClaudePluginServerFiles = 16
 )
 
@@ -41,7 +44,11 @@ type claudePluginInstall struct {
 // A user-scoped installation serves every project. A project- or local-scoped one
 // records the directory it was installed from, and serves only a session
 // launched there or keyed to that project root.
-func claudePluginScopes(ctx context.Context, loader *configLoader, env Env, configDir string, project claudeProject, rank int) []scope {
+//
+// incomplete is set when an installation or a server file went unread for a
+// bound (see maxClaudePluginInstalls), either here or when a scope loads; the
+// scopes then do not settle which definition the session runs.
+func claudePluginScopes(ctx context.Context, loader *configLoader, env Env, configDir string, project claudeProject, rank int, incomplete *bool) []scope {
 	registryPath := filepath.Join(configDir, "plugins", claudePluginRegistry)
 	var raw json.RawMessage
 	res := loader.loadStrictJSON(ctx, registryPath, &raw, maxConfigBytes)
@@ -68,6 +75,7 @@ func claudePluginScopes(ctx context.Context, loader *configLoader, env Env, conf
 		}
 		for _, install := range decodePluginInstalls(plugins[id]) {
 			if len(scopes) == maxClaudePluginInstalls {
+				*incomplete = true
 				return scopes
 			}
 			if !filepath.IsAbs(install.InstallPath) || !pluginServesProject(env, install, project) {
@@ -76,10 +84,10 @@ func claudePluginScopes(ctx context.Context, loader *configLoader, env Env, conf
 			s := scope{key: "plugin " + id, rank: rank}
 			if dir, res, local := claudeLocalPluginDir(ctx, loader, markets, market, name); !local {
 				s.path = filepath.Clean(install.InstallPath)
-				s.load = pluginServers(loader, name, s.path)
+				s.load = pluginServers(loader, name, s.path, incomplete)
 			} else if res == loadOK {
 				s.path = dir
-				s.load = pluginServers(loader, name, dir)
+				s.load = pluginServers(loader, name, dir, incomplete)
 			} else {
 				s.path = cmp.Or(markets.catalogs[market], markets.path)
 				s.load = fixedServers(nil, res)
@@ -320,7 +328,7 @@ func pluginServesProject(env Env, install claudePluginInstall, project claudePro
 // Each source is validated before it is merged, as Claude Code validates each
 // file, so an entry a later source declares in a form Claude Code skips does not
 // displace an earlier source's valid one.
-func pluginServers(loader *configLoader, name, dir string) func(context.Context) (serverSet, loadResult) {
+func pluginServers(loader *configLoader, name, dir string, incomplete *bool) func(context.Context) (serverSet, loadResult) {
 	return func(ctx context.Context) (serverSet, loadResult) {
 		merged := serverSet{}
 		res := loadAbsent
@@ -348,7 +356,11 @@ func pluginServers(loader *configLoader, name, dir string) func(context.Context)
 			for _, spec := range specs {
 				var rel string
 				if json.Unmarshal(spec, &rel) == nil {
-					if path, ok := pluginRelPath(dir, rel); ok && files < maxClaudePluginServerFiles {
+					if path, ok := pluginRelPath(dir, rel); ok {
+						if files == maxClaudePluginServerFiles {
+							*incomplete = true
+							return nil, loadUnusable
+						}
 						files++
 						merge(path)
 					}

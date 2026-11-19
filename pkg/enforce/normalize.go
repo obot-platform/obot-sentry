@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/obot-platform/obot-sentry/pkg/localagent"
 	"github.com/obot-platform/obot-sentry/pkg/toolkind"
@@ -324,6 +325,12 @@ func classifyClaudeCodePreTool(toolName string, server *claudeMCPServer) (classi
 	switch {
 	case name == "" || source == "":
 		class.InvalidReason = "Claude Code's mcp_server field did not name the MCP server and its source"
+	case strings.ContainsRune(name, utf8.RuneError):
+		// encoding/json decodes an unpaired UTF-16 surrogate escape as U+FFFD,
+		// here and in every configuration key, where JSON.parse keeps it. Keys
+		// Claude Code tells apart, such as "a\ud800" and "a\udc00", can then match
+		// one another, so a name holding U+FFFD names no key reliably.
+		class.InvalidReason = fmt.Sprintf("the MCP server name %q holds a character the hook cannot match reliably", name)
 	default:
 		tool, ok := strings.CutPrefix(toolName, mcpToolPrefix+formClaudeCode(name)+"__")
 		if !ok || tool == "" {

@@ -740,6 +740,19 @@ func TestNormalizeClaudeCodeMCPServer(t *testing.T) {
 		"my_server":{"type":"http","url":"https://underscored.example.com/mcp"}
 	}}`)
 
+	// encoding/json decodes an unpaired surrogate as U+FFFD, merging keys
+	// Claude Code keeps apart, so a name holding one is not matched: here the
+	// call is to "a\ud800", and "a\udc00" is a different server.
+	f.write(f.homePath(".claude.json"), `{"mcpServers":{"a\udc00":{"type":"http","url":"https://allowed.example.com/mcp"}}}`)
+	raw := []byte(`{"tool_name":"mcp__a___run","cwd":` + quote(f.path("proj")) + `,"mcp_server":{"name":"a\ud800","source":"user"}}`)
+	call, err := normalizeCall(f.Env, localagent.ClaudeCode, EventPreToolUse, raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !call.Request.Unresolved || !strings.Contains(call.Request.UnresolvedReason, "cannot match reliably") {
+		t.Errorf("unpaired surrogate: %+v, want it unresolved", call.Request)
+	}
+
 	// A tool half containing "__" is the tool's own.
 	if got = normalize("mcp__my_server__a__b", "my.server", "user"); got.Tool != "a__b" {
 		t.Errorf("Tool = %q, want a__b", got.Tool)
