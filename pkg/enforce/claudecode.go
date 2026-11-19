@@ -339,12 +339,13 @@ func claudeProjectSlug(path string) string {
 // directory makes that directory the root. A .git file is a linked worktree or a
 // submodule: a worktree, whose git directory names a commondir, is keyed by the
 // main checkout so all of a repository's worktrees share one entry; a submodule
-// keeps its own.
+// keeps its own. A symlinked .git is followed, as Claude Code follows it: a
+// checkout made by a tool like repo is still its own root.
 func claudeProjectRoot(ctx context.Context, loader *configLoader, launchDir string) string {
 	for _, dir := range ancestors(launchDir) {
 		dotGit := filepath.Join(dir, ".git")
-		info, err := os.Lstat(dotGit)
-		if err != nil || info.Mode()&os.ModeSymlink != 0 {
+		info, err := os.Stat(dotGit)
+		if err != nil {
 			continue
 		}
 		if info.IsDir() {
@@ -423,9 +424,10 @@ func claudeProjectScopes(loader *configLoader, env Env, project claudeProject, c
 	}
 
 	files := projectFiles(project.launchDir)
-	if len(files) == 0 {
+	if len(files) == 0 && filepath.Dir(project.launchDir) != project.launchDir {
 		// Name the file an operator expects to be read, so the trace says it is
-		// absent rather than leaving it out.
+		// absent rather than leaving it out. Not at the filesystem root, whose
+		// .mcp.json Claude Code never reads: there the placeholder would load it.
 		files = []string{filepath.Join(project.launchDir, ".mcp.json")}
 	}
 	for _, path := range files {

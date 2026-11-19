@@ -2,6 +2,7 @@ package enforce
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -387,6 +388,27 @@ func TestClaudeCodeWorktreeSharesMainCheckoutConfig(t *testing.T) {
 	assertURL(t, Resolve(f.Env, claudeCodeReq("myserver", sub)), "https://submodule.example.com/sse")
 }
 
+// TestClaudeCodeSymlinkedGitDir covers a checkout whose .git is a symlink to its
+// git directory, as the repo tool makes them. Claude Code follows the link and
+// keys the session by the checkout; skipping it would walk past the checkout and
+// read a subdirectory's or an outer repository's entry instead.
+func TestClaudeCodeSymlinkedGitDir(t *testing.T) {
+	f := newFixture(t, "darwin")
+	gitDir := f.mkdir(f.path("gitdirs", "checkout"))
+	checkout := f.mkdir(f.path("checkout"))
+	if err := os.Symlink(gitDir, filepath.Join(checkout, ".git")); err != nil {
+		t.Skipf("cannot create a symlink here: %v", err)
+	}
+	cwd := f.mkdir(filepath.Join(checkout, "sub"))
+	f.write(f.homePath(".claude.json"), `{"projects":{
+		`+quote(checkout)+`:{"mcpServers":{"myserver":{"url":"https://checkout.example.com/sse"}}},
+		`+quote(cwd)+`:{"mcpServers":{"subonly":{"url":"https://sub.example.com/sse"}}}
+	}}`)
+
+	assertURL(t, Resolve(f.Env, claudeCodeReq("myserver", cwd)), "https://checkout.example.com/sse")
+	assertUnresolved(t, Resolve(f.Env, claudeCodeReq("subonly", cwd)), "was not found")
+}
+
 // TestClaudeCodeLaunchDirFromTranscript covers a session whose cwd has moved since
 // launch. Claude Code keeps the configuration it loaded for the launch directory,
 // which the transcript path names; resolving from cwd would read a nested
@@ -718,6 +740,20 @@ func TestProjectScopesNamesTheAbsentProjectFile(t *testing.T) {
 	want := []string{filepath.Join(cwd, ".mcp.json") + "  mcpServers"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("scopes\n%v\nwant\n%v", got, want)
+	}
+}
+
+// TestProjectScopesNeverReadTheRootProjectFile covers a session launched at the
+// filesystem root. Claude Code reads no .mcp.json there, so the absent-file
+// placeholder must not name one: as a scope it would be loaded.
+func TestProjectScopesNeverReadTheRootProjectFile(t *testing.T) {
+	f := newFixture(t, "darwin")
+	root := hostRoot(t)
+	project := claudeProject{launchDir: root, root: root}
+	for _, s := range claudeProjectScopes(newConfigLoader(), f.Env, project, f.homePath(".claude.json"), claudeJSON{}, loadAbsent, 1) {
+		if filepath.Base(s.path) == ".mcp.json" {
+			t.Fatalf("root launch produced a project file scope: %s", s.path)
+		}
 	}
 }
 
