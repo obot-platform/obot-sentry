@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -130,12 +132,21 @@ func resolveClaudeCode(ctx context.Context, loader *configLoader, env Env, req R
 	// The managed sources come first and, while managed-mcp.json is present, are the
 	// only ones: Claude Code then loads its servers and managedMcpServers and nothing
 	// else. managed-mcp.json overrides managedMcpServers, so it ranks above them.
-	m, out := resolveScopes(ctx, claudeManagedScopes(loader, env), names, tr)
+	managed, complete := claudeManagedScopes(loader, env, tr)
+	m, out := resolveScopes(ctx, managed, names, tr)
 	switch out {
 	case outcomeFound:
 		return resolved(env, m.key, m.entry)
 	case outcomeAmbiguous:
 		return ambiguous(req.Agent, serverName)
+	}
+	// Managed servers outrank everything below, so a managed set the resolver could
+	// not read in full may hold the server that ran. Answering from user or project
+	// configuration then risks naming the wrong one.
+	if !complete {
+		return notFound(req.Agent, serverName, fmt.Sprintf(
+			"Claude Code's managed settings directory %s could not be read in full, so MCP server %q cannot be ruled out of it",
+			env.claudeManagedPath(claudeManagedDropInDir), serverName))
 	}
 	// A managed-mcp.json that cannot be read still locks: Claude Code keeps it in
 	// exclusive control rather than letting user configuration through, so
@@ -188,10 +199,17 @@ func resolveClaudeCode(ctx context.Context, loader *configLoader, env Env, req R
 // the Windows registry, and server-delivered settings can also carry
 // managedMcpServers and are not read; a server delivered only through one of them
 // is unresolved, never misidentified.
-func claudeManagedScopes(loader *configLoader, env Env) []scope {
+//
+// complete is false when managed-settings.d could not be listed or holds more
+// drop-ins than the resolver reads.
+func claudeManagedScopes(loader *configLoader, env Env, tr *tracer) (scopes []scope, complete bool) {
 	mcpPath := env.managedMCPPath()
-	scopes := []scope{{path: mcpPath, key: mcpServersKey, load: jsonServers(loader, mcpPath)}}
-	for _, path := range claudeManagedSettingsFiles(env) {
+	scopes = []scope{{path: mcpPath, key: mcpServersKey, load: jsonServers(loader, mcpPath)}}
+	files, complete := claudeManagedSettingsFiles(env)
+	if !complete {
+		tr.miss(env.claudeManagedPath(claudeManagedDropInDir), "", loadUnusable)
+	}
+	for _, path := range files {
 		scopes = append(scopes, scope{
 			path: path,
 			key:  claudeManagedServersKey,
@@ -199,29 +217,30 @@ func claudeManagedScopes(loader *configLoader, env Env) []scope {
 			load: managedSettingsServers(loader, path),
 		})
 	}
-	return scopes
+	return scopes, complete
 }
 
 // claudeManagedSettingsFiles lists managed-settings.json and the .json drop-ins
-// beside it, in name order.
-func claudeManagedSettingsFiles(env Env) []string {
-	files := []string{env.claudeManagedPath(claudeManagedSettings)}
+// beside it, in name order. complete is false when the drop-in directory exists
+// but cannot be listed, or holds more drop-ins than the resolver reads.
+func claudeManagedSettingsFiles(env Env) (files []string, complete bool) {
+	files = []string{env.claudeManagedPath(claudeManagedSettings)}
 	dir := env.claudeManagedPath(claudeManagedDropInDir)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return files
+		return files, errors.Is(err, fs.ErrNotExist)
 	}
 	for _, entry := range entries {
-		if len(files) > maxClaudeManagedDropIns {
-			break
-		}
 		name := entry.Name()
 		if entry.IsDir() || strings.HasPrefix(name, ".") || !strings.EqualFold(filepath.Ext(name), ".json") {
 			continue
 		}
+		if len(files) > maxClaudeManagedDropIns {
+			return files, false
+		}
 		files = append(files, filepath.Join(dir, name))
 	}
-	return files
+	return files, true
 }
 
 // managedSettingsServers reads managedMcpServers from a managed settings file.
@@ -359,28 +378,69 @@ func claudeProjectRoot(ctx context.Context, loader *configLoader, launchDir stri
 	return launchDir
 }
 
-// gitWorktreeMain returns the main checkout of the linked worktree at dir, whose
-// .git file is dotGit.
+// gitWorktreeMain returns the directory that keys the linked worktree at dir,
+// whose .git file is dotGit: the main checkout, or for a bare repository the
+// repository itself.
+//
+// It ports Claude Code's validation, because a .git file is just a file: one
+// shipped in an archive can name any repository's commondir. Claude Code
+// redirects only when the git directory sits in <common>/worktrees and its gitdir
+// backlink resolves to dir/.git; anything else keys dir by itself, and so must
+// the resolver, or it would report another project's local servers for a
+// session that never loaded them.
 func gitWorktreeMain(ctx context.Context, loader *configLoader, dir, dotGit string) (string, bool) {
-	data, res := loader.readConfig(ctx, dotGit)
-	if res != loadOK {
-		return "", false
-	}
-	gitDir, ok := strings.CutPrefix(strings.TrimSpace(string(firstLine(data))), "gitdir:")
+	gitDir, ok := readGitPointer(ctx, loader, dotGit, "gitdir:")
 	if !ok {
 		return "", false
 	}
-	gitDir = absFrom(dir, strings.TrimSpace(gitDir))
-	data, res = loader.readConfig(ctx, filepath.Join(gitDir, "commondir"))
+	gitDir = absFrom(dir, gitDir)
+	common, ok := readGitPointer(ctx, loader, filepath.Join(gitDir, "commondir"), "")
+	if !ok {
+		return "", false
+	}
+	common = absFrom(gitDir, common)
+	if filepath.Dir(gitDir) != filepath.Join(common, "worktrees") {
+		return "", false
+	}
+	backlink, ok := readGitPointer(ctx, loader, filepath.Join(gitDir, "gitdir"), "")
+	if !ok || !sameRealPath(absFrom(gitDir, backlink), filepath.Join(dir, ".git")) {
+		return "", false
+	}
+	if filepath.Base(common) != ".git" {
+		// A bare repository keys its worktrees by the repository directory, unless
+		// that directory is itself a checkout.
+		if _, err := os.Stat(filepath.Join(common, ".git")); err == nil {
+			return "", false
+		}
+		return common, true
+	}
+	return filepath.Dir(common), true
+}
+
+// readGitPointer reads the one path a git pointer file holds, after prefix.
+func readGitPointer(ctx context.Context, loader *configLoader, path, prefix string) (string, bool) {
+	data, res := loader.readConfig(ctx, path)
 	if res != loadOK {
 		return "", false
 	}
-	common := absFrom(gitDir, strings.TrimSpace(string(firstLine(data))))
-	if filepath.Base(common) != ".git" {
-		// A bare repository's worktree has no main checkout to key by.
-		return "", false
+	value, ok := strings.CutPrefix(strings.TrimSpace(string(firstLine(data))), prefix)
+	value = strings.TrimSpace(value)
+	return value, ok && value != ""
+}
+
+// sameRealPath reports whether a and b name one file once symlinks are resolved.
+// b is resolved through its directory, since a worktree's .git is a file that
+// may not resolve on its own the way a directory does.
+func sameRealPath(a, b string) bool {
+	ra, err := filepath.EvalSymlinks(a)
+	if err != nil {
+		return false
 	}
-	return filepath.Dir(common), true
+	rb, err := filepath.EvalSymlinks(filepath.Dir(b))
+	if err != nil {
+		return false
+	}
+	return ra == filepath.Join(rb, filepath.Base(b))
 }
 
 func firstLine(data []byte) []byte {

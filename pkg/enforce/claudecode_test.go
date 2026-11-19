@@ -154,6 +154,39 @@ func TestClaudeCodeManagedSettingsDropIns(t *testing.T) {
 	assertUnresolved(t, Resolve(f.Env, claudeCodeReq("myserver", project)), "conflicting definitions")
 }
 
+// TestClaudeCodeManagedSettingsIncomplete covers a managed-settings.d the
+// resolver cannot read in full. Managed servers outrank all others, so falling
+// through to user configuration could name a server other than the one that ran.
+func TestClaudeCodeManagedSettingsIncomplete(t *testing.T) {
+	project := "proj"
+	userServer := `{"mcpServers":{"myserver":{"url":"https://user.example.com/sse"}}}`
+
+	t.Run("more drop-ins than are read", func(t *testing.T) {
+		f := newFixture(t, "darwin")
+		f.write(f.homePath(".claude.json"), userServer)
+		for i := range maxClaudeManagedDropIns + 1 {
+			f.write(f.Env.claudeManagedPath(claudeManagedDropInDir, fmt.Sprintf("%03d.json", i)), `{}`)
+		}
+		assertUnresolved(t, Resolve(f.Env, claudeCodeReq("myserver", f.path(project))), "could not be read in full")
+	})
+
+	t.Run("exactly the cap", func(t *testing.T) {
+		f := newFixture(t, "darwin")
+		f.write(f.homePath(".claude.json"), userServer)
+		for i := range maxClaudeManagedDropIns {
+			f.write(f.Env.claudeManagedPath(claudeManagedDropInDir, fmt.Sprintf("%03d.json", i)), `{}`)
+		}
+		assertURL(t, Resolve(f.Env, claudeCodeReq("myserver", f.path(project))), "https://user.example.com/sse")
+	})
+
+	t.Run("directory cannot be listed", func(t *testing.T) {
+		f := newFixture(t, "darwin")
+		f.write(f.homePath(".claude.json"), userServer)
+		f.write(f.Env.claudeManagedPath(claudeManagedDropInDir), "not a directory")
+		assertUnresolved(t, Resolve(f.Env, claudeCodeReq("myserver", f.path(project))), "could not be read in full")
+	})
+}
+
 // TestClaudeCodeConfigDirRelocatesClaudeJSON covers a session started with
 // CLAUDE_CONFIG_DIR. Claude Code then reads .claude.json from that directory and
 // ignores the one in the home directory, so the resolver has to as well: the
@@ -364,16 +397,24 @@ func TestClaudeCodeLocalScopeIsKeyedByGitRoot(t *testing.T) {
 	assertURL(t, Resolve(f.Env, claudeCodeReq("myserver", cwd)), "https://repo.example.com/sse")
 }
 
+// linkWorktree lays out a linked worktree at worktree for the repository whose
+// common git directory is common, as git worktree add does: a .git file naming
+// <common>/worktrees/<name>, which holds a commondir and a gitdir backlink.
+func (f *fixture) linkWorktree(common, worktree string) {
+	f.t.Helper()
+	gitDir := f.mkdir(filepath.Join(common, "worktrees", filepath.Base(worktree)))
+	f.write(filepath.Join(gitDir, "commondir"), "../..\n")
+	f.write(filepath.Join(gitDir, "gitdir"), filepath.Join(worktree, ".git")+"\n")
+	f.write(filepath.Join(f.mkdir(worktree), ".git"), "gitdir: "+gitDir+"\n")
+}
+
 // TestClaudeCodeWorktreeSharesMainCheckoutConfig covers a linked worktree, which
 // lives outside its repository's tree and still loads the main checkout's local
 // configuration. A submodule, by contrast, is keyed by its own directory.
 func TestClaudeCodeWorktreeSharesMainCheckoutConfig(t *testing.T) {
 	f := newFixture(t, "darwin")
 	main := f.mkdir(f.path("main"))
-	f.mkdir(filepath.Join(main, ".git", "worktrees", "feature"))
-	f.write(filepath.Join(main, ".git", "worktrees", "feature", "commondir"), "../..\n")
-	worktree := f.mkdir(f.path("feature"))
-	f.write(filepath.Join(worktree, ".git"), "gitdir: "+filepath.Join(main, ".git", "worktrees", "feature")+"\n")
+	f.linkWorktree(filepath.Join(main, ".git"), f.path("feature"))
 
 	sub := f.mkdir(filepath.Join(main, "vendor", "lib"))
 	f.mkdir(filepath.Join(main, ".git", "modules", "lib"))
@@ -384,8 +425,57 @@ func TestClaudeCodeWorktreeSharesMainCheckoutConfig(t *testing.T) {
 		`+quote(sub)+`:{"mcpServers":{"myserver":{"url":"https://submodule.example.com/sse"}}}
 	}}`)
 
-	assertURL(t, Resolve(f.Env, claudeCodeReq("myserver", worktree)), "https://main.example.com/sse")
+	assertURL(t, Resolve(f.Env, claudeCodeReq("myserver", f.path("feature"))), "https://main.example.com/sse")
 	assertURL(t, Resolve(f.Env, claudeCodeReq("myserver", sub)), "https://submodule.example.com/sse")
+}
+
+// TestClaudeCodeBareRepositoryWorktree covers a worktree of a bare repository,
+// which Claude Code keys by the repository directory itself.
+func TestClaudeCodeBareRepositoryWorktree(t *testing.T) {
+	f := newFixture(t, "darwin")
+	bare := f.mkdir(f.path("app.git"))
+	worktree := filepath.Join(bare, "main")
+	f.linkWorktree(bare, worktree)
+	f.write(f.homePath(".claude.json"), `{"projects":{
+		`+quote(bare)+`:{"mcpServers":{"myserver":{"url":"https://bare.example.com/sse"}}},
+		`+quote(worktree)+`:{"mcpServers":{"other":{"url":"https://worktree.example.com/sse"}}}
+	}}`)
+
+	assertURL(t, Resolve(f.Env, claudeCodeReq("myserver", worktree)), "https://bare.example.com/sse")
+	assertUnresolved(t, Resolve(f.Env, claudeCodeReq("other", worktree)), "was not found")
+}
+
+// TestClaudeCodeForgedWorktreeKeysItself covers a .git file that names another
+// repository's commondir without being one of its worktrees, as a tree copied out
+// of an archive can. Claude Code keys such a directory by itself; borrowing the
+// named repository's entry would report its servers for a session that never
+// loaded them.
+func TestClaudeCodeForgedWorktreeKeysItself(t *testing.T) {
+	f := newFixture(t, "darwin")
+	trusted := f.mkdir(f.path("trusted"))
+	f.linkWorktree(filepath.Join(trusted, ".git"), f.path("real-worktree"))
+	f.write(f.homePath(".claude.json"), `{"projects":{
+		`+quote(trusted)+`:{"mcpServers":{"linear":{"url":"https://allowed.example.com/sse"}}}
+	}}`)
+
+	t.Run("git dir outside worktrees", func(t *testing.T) {
+		evil := f.mkdir(f.path("evil"))
+		gitDir := f.mkdir(filepath.Join(evil, "g"))
+		f.write(filepath.Join(gitDir, "commondir"), filepath.Join(trusted, ".git")+"\n")
+		f.write(filepath.Join(gitDir, "gitdir"), filepath.Join(evil, ".git")+"\n")
+		f.write(filepath.Join(evil, ".git"), "gitdir: "+gitDir+"\n")
+		f.write(filepath.Join(evil, ".mcp.json"), `{"mcpServers":{"linear":{"url":"https://evil.example.com/sse"}}}`)
+
+		assertURL(t, Resolve(f.Env, claudeCodeReq("linear", evil)), "https://evil.example.com/sse")
+	})
+
+	t.Run("backlink to another worktree", func(t *testing.T) {
+		evil := f.mkdir(f.path("evil2"))
+		f.write(filepath.Join(evil, ".git"), "gitdir: "+filepath.Join(trusted, ".git", "worktrees", "real-worktree")+"\n")
+		f.write(filepath.Join(evil, ".mcp.json"), `{"mcpServers":{"linear":{"url":"https://evil.example.com/sse"}}}`)
+
+		assertURL(t, Resolve(f.Env, claudeCodeReq("linear", evil)), "https://evil.example.com/sse")
+	})
 }
 
 // TestClaudeCodeSymlinkedGitDir covers a checkout whose .git is a symlink to its
