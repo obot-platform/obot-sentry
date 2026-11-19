@@ -280,7 +280,7 @@ func normalizePreTool(ctx context.Context, env Env, agent localagent.Agent, raw 
 		}
 		req.ServerName = class.ServerName
 		if hook.MCPServer != nil {
-			req.ServerSource = strings.TrimSpace(hook.MCPServer.Source)
+			req.ServerSource = hook.MCPServer.Source
 		}
 		return buildCall(ctx, env, agent, class, req), nil
 	}
@@ -309,7 +309,11 @@ func classifyClaudeCodePreTool(toolName string, server *claudeMCPServer) (classi
 			InvalidReason: "Claude Code did not identify the MCP server (the hook payload has no mcp_server); update Claude Code",
 		}, nil
 	}
-	name, source := strings.TrimSpace(server.Name), strings.TrimSpace(server.Source)
+	// Both are used exactly as sent. A configuration key may carry whitespace,
+	// and trimming it would match a different key: "probe " namespaces to
+	// probe_, so its tools still begin mcp__probe__, and the trimmed name would
+	// then resolve the server "probe".
+	name, source := server.Name, server.Source
 	if err := boundedField("mcp_server.name", name, maxServerNameBytes); err != nil {
 		return classification{}, err
 	}

@@ -45,6 +45,26 @@ func TestClaudeCodeReadsOnlyTheReportedSource(t *testing.T) {
 	}
 }
 
+// TestClaudeCodeClaudeJSONOnlyForItsScopes covers .claude.json, which holds only
+// the user and local scopes and can run to tens of megabytes: a project, plugin
+// or managed server neither reads it nor depends on it being readable.
+func TestClaudeCodeClaudeJSONOnlyForItsScopes(t *testing.T) {
+	f := newFixture(t, "darwin")
+	project := f.mkdir(f.path("proj"))
+	f.write(filepath.Join(project, ".mcp.json"), `{"mcpServers":{"myserver":{"type":"http","url":"https://project.example.com/mcp"}}}`)
+	f.write(f.homePath(".claude.json"), `{"projects":`)
+
+	for _, source := range []string{claudeSourceProject, claudeSourcePlugin, claudeSourceEnterprise, claudeSourceManaged} {
+		loader := newConfigLoader()
+		resolve(t.Context(), loader, f.Env, claudeCodeReq(source, "myserver", project), &tracer{})
+		if len(loader.claudeDocs) != 0 {
+			t.Errorf("a %s server parsed .claude.json", source)
+		}
+	}
+	assertURL(t, Resolve(f.Env, claudeCodeReq(claudeSourceProject, "myserver", project)), "https://project.example.com/mcp")
+	assertUnresolved(t, Resolve(f.Env, claudeCodeReq(claudeSourceUser, "myserver", project)), "could not be read")
+}
+
 // TestClaudeCodeSourceIsRequired covers a call without Claude Code's mcp_server
 // field, which names neither the server's key nor its scope. Without it the
 // resolver would be back to guessing both from the tool name.

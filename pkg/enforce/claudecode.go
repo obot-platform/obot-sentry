@@ -189,10 +189,17 @@ func resolveClaudeCode(ctx context.Context, loader *configLoader, env Env, req R
 			"Claude Code loaded MCP server %q from %s, whose configuration the hook cannot read", serverName, where))
 	}
 
-	claude, claudeRes := loader.loadClaudeJSON(ctx, claudePath)
-	if source != claudeSourceProject && source != claudeSourcePlugin && claudeRes != loadOK {
-		return unresolved(serverName, fmt.Sprintf(
-			"Claude Code's %s, which holds %s MCP servers, could not be read", claudePath, source))
+	// Only the user and local scopes live in .claude.json, which can run to tens
+	// of megabytes, so it is not parsed for the others.
+	var (
+		claude    claudeJSON
+		claudeRes loadResult
+	)
+	if source == claudeSourceUser || source == claudeSourceLocal {
+		if claude, claudeRes = loader.loadClaudeJSON(ctx, claudePath); claudeRes != loadOK {
+			return unresolved(serverName, fmt.Sprintf(
+				"Claude Code's %s, which holds %s MCP servers, could not be read", claudePath, source))
+		}
 	}
 	if source == claudeSourceUser {
 		return claudeResolveIn(ctx, env, req, serverName, source, names, tr, []scope{{

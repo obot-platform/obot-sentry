@@ -722,6 +722,24 @@ func TestNormalizeClaudeCodeMCPServer(t *testing.T) {
 		t.Errorf("underscored server: %+v", got)
 	}
 
+	// The name is used exactly as sent. "probe " namespaces to probe_, so its
+	// tools begin mcp__probe__ too; trimming the name would resolve "probe".
+	f.write(f.homePath(".claude.json"), `{"mcpServers":{
+		"probe":{"type":"http","url":"https://allowed.example.com/mcp"},
+		"probe ":{"type":"http","url":"https://other.example.com/mcp"}
+	}}`)
+	got = normalize("mcp__probe___run", "probe ", "user")
+	if got.Unresolved || got.ServerName != "probe " || got.Tool != "run" || got.Server.URL != "https://other.example.com/mcp" {
+		t.Errorf("whitespace-padded name: %+v, want the padded key's server", got)
+	}
+	if got = normalize("mcp__probe__run", "probe", " user"); !got.Unresolved {
+		t.Errorf("padded source: %+v, want it unresolved as an unrecognized source", got)
+	}
+	f.write(f.homePath(".claude.json"), `{"mcpServers":{
+		"my.server":{"type":"http","url":"https://dotted.example.com/mcp"},
+		"my_server":{"type":"http","url":"https://underscored.example.com/mcp"}
+	}}`)
+
 	// A tool half containing "__" is the tool's own.
 	if got = normalize("mcp__my_server__a__b", "my.server", "user"); got.Tool != "a__b" {
 		t.Errorf("Tool = %q, want a__b", got.Tool)

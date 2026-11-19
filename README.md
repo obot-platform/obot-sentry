@@ -203,8 +203,9 @@ matched exactly:
 
 Servers from `--mcp-config`, the Agent SDK, or an agent definition (`dynamic`,
 `sdk` and `agent`) are left unresolved, since the hook cannot read their
-definitions, and so is an MCP call whose payload has no `mcp_server`, which
-Claude Code releases before it did not send.
+definitions, and so is an MCP call whose payload has no `mcp_server`. Claude
+Code first sends `mcp_server` in 2.1.274, so MCP calls from earlier releases are
+denied.
 
 A session's launch directory is recovered from its transcript path, so pass
 `--transcript-path` from a hook payload to reproduce a call made after the

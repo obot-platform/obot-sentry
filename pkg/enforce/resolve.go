@@ -128,6 +128,11 @@ func resolve(ctx context.Context, loader *configLoader, env Env, req ResolveRequ
 		return unresolved(strings.TrimSpace(req.ServerName), "MCP server resolution was cancelled")
 	}
 	serverName := strings.TrimSpace(req.ServerName)
+	if req.Agent == localagent.ClaudeCode {
+		// Claude Code's mcp_server.name is the configuration key exactly as
+		// written, whitespace included; see classifyClaudeCodePreTool.
+		serverName = req.ServerName
+	}
 	if serverName == "" {
 		return unresolved("", "the tool call did not name an MCP server")
 	}
