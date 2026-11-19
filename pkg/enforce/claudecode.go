@@ -453,7 +453,7 @@ func claudeTranscriptSlug(env Env, configDir, transcriptPath string) (string, bo
 		return "", false
 	}
 	prefix := path[:len(projects)]
-	if prefix != projects && !(env.windows() && strings.EqualFold(prefix, projects)) {
+	if prefix != projects && (!env.windows() || !strings.EqualFold(prefix, projects)) {
 		return "", false
 	}
 	slug, rest, ok := strings.Cut(path[len(projects):], string(filepath.Separator))
