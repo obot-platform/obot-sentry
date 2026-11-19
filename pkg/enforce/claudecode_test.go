@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -116,6 +117,11 @@ func TestClaudeCodeManagedConfigWindows(t *testing.T) {
 	}
 }
 
+// managedServer renders a managedMcpServers entry Claude Code accepts.
+func managedServer(url string) string {
+	return `{"type":"http","url":"` + url + `"}`
+}
+
 // TestClaudeCodeManagedSettingsServers covers managedMcpServers, the managed
 // settings key that delivers servers. It outranks user configuration, joins
 // managed-mcp.json's set under its lock, and yields to managed-mcp.json on a
@@ -125,7 +131,7 @@ func TestClaudeCodeManagedSettingsServers(t *testing.T) {
 	project := f.path("proj")
 	f.write(f.homePath(".claude.json"), `{"mcpServers":{"myserver":{"url":"https://user.example.com/sse"}}}`)
 	f.write(f.Env.claudeManagedPath(claudeManagedSettings),
-		`{"managedMcpServers":{"myserver":{"url":"https://settings.example.com/sse"}}}`)
+		`{"managedMcpServers":{"myserver":`+managedServer("https://settings.example.com/sse")+`}}`)
 	assertURL(t, Resolve(f.Env, claudeCodeReq("myserver", project)), "https://settings.example.com/sse")
 
 	f.write(f.Env.managedMCPPath(), `{"mcpServers":{"other":{"url":"https://managed.example.com/sse"}}}`)
@@ -135,55 +141,115 @@ func TestClaudeCodeManagedSettingsServers(t *testing.T) {
 	assertURL(t, Resolve(f.Env, claudeCodeReq("myserver", project)), "https://managed.example.com/sse")
 }
 
-// TestClaudeCodeManagedSettingsDropIns covers managed-settings.d. The resolver
-// does not reproduce how Claude Code layers drop-ins, so ones that agree identify
-// a server and ones that disagree leave it ambiguous.
+// TestClaudeCodeManagedSettingsRejectedEntries covers the entries Claude Code
+// ignores in managedMcpServers: anything but an "http" or "sse" server at an
+// https URL. An ignored entry overrides nothing, so the name falls through to the
+// next definition, which is the one the session runs.
+func TestClaudeCodeManagedSettingsRejectedEntries(t *testing.T) {
+	for name, entry := range map[string]string{
+		"plain http":      `{"type":"http","url":"http://managed.example.com/sse"}`,
+		"no type":         `{"url":"https://managed.example.com/sse"}`,
+		"ws type":         `{"type":"ws","url":"wss://managed.example.com/sse"}`,
+		"uppercase type":  `{"type":"HTTP","url":"https://managed.example.com/sse"}`,
+		"stdio":           `{"command":"npx","args":["-y","managed-mcp@1.0.0"]}`,
+		"url and command": `{"type":"http","url":"https://managed.example.com/sse","command":"npx"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t, "darwin")
+			f.write(f.homePath(".claude.json"), `{"mcpServers":{"myserver":{"url":"https://user.example.com/sse"}}}`)
+			f.write(f.Env.claudeManagedPath(claudeManagedSettings), `{"managedMcpServers":{"myserver":`+entry+`}}`)
+			assertURL(t, Resolve(f.Env, claudeCodeReq("myserver", f.path("proj"))), "https://user.example.com/sse")
+		})
+	}
+
+	// The scheme is matched without regard to case, as Claude Code matches it.
+	f := newFixture(t, "darwin")
+	f.write(f.Env.claudeManagedPath(claudeManagedSettings),
+		`{"managedMcpServers":{"myserver":{"type":"sse","url":"HTTPS://managed.example.com/sse"}}}`)
+	assertURL(t, Resolve(f.Env, claudeCodeReq("myserver", f.path("proj"))), "https://managed.example.com/sse")
+}
+
+// TestClaudeCodeManagedSettingsDropIns covers managed-settings.d as Claude Code
+// layers it: managed-settings.json first, then drop-ins in byte order of file
+// name, a later one overriding an earlier one. An entry a later file defines in a
+// form Claude Code rejects leaves the earlier definition in force.
 func TestClaudeCodeManagedSettingsDropIns(t *testing.T) {
 	f := newFixture(t, "darwin")
 	project := f.path("proj")
-	dropIn := func(name, url string) {
-		f.write(f.Env.claudeManagedPath(claudeManagedDropInDir, name),
-			`{"managedMcpServers":{"myserver":{"url":"`+url+`"}}}`)
+	dropIn := func(file, server, url string) {
+		f.write(f.Env.claudeManagedPath(claudeManagedDropInDir, file),
+			`{"managedMcpServers":{"`+server+`":`+managedServer(url)+`}}`)
 	}
-	dropIn("10-base.json", "https://dropin.example.com/sse")
-	dropIn("20-same.json", "https://dropin.example.com/sse")
-	f.write(f.Env.claudeManagedPath(claudeManagedDropInDir, "notes.txt"), `{"managedMcpServers":{"myserver":{"url":"https://ignored.example.com/sse"}}}`)
-	assertURL(t, Resolve(f.Env, claudeCodeReq("myserver", project)), "https://dropin.example.com/sse")
+	f.write(f.Env.claudeManagedPath(claudeManagedSettings),
+		`{"managedMcpServers":{"base":`+managedServer("https://base.example.com/sse")+`,`+
+			`"kept":`+managedServer("https://kept.example.com/sse")+`}}`)
+	dropIn("10.json", "base", "https://ten.example.com/sse")
+	dropIn("9.json", "base", "https://nine.example.com/sse") // "9" sorts after "10"
+	dropIn("B.json", "case", "https://upper.example.com/sse")
+	dropIn("a.json", "case", "https://lower.example.com/sse") // "a" sorts after "B"
+	f.write(f.Env.claudeManagedPath(claudeManagedDropInDir, "z.json"),
+		`{"managedMcpServers":{"kept":{"type":"http","url":"http://rejected.example.com/sse"}}}`)
 
-	dropIn("30-other.json", "https://other.example.com/sse")
-	assertUnresolved(t, Resolve(f.Env, claudeCodeReq("myserver", project)), "conflicting definitions")
+	assertURL(t, Resolve(f.Env, claudeCodeReq("base", project)), "https://nine.example.com/sse")
+	assertURL(t, Resolve(f.Env, claudeCodeReq("case", project)), "https://lower.example.com/sse")
+	assertURL(t, Resolve(f.Env, claudeCodeReq("kept", project)), "https://kept.example.com/sse")
+
+	// Only files directly in the directory whose names end in a lowercase ".json"
+	// and do not start with a dot are drop-ins.
+	for _, file := range []string{".hidden.json", "x.txt", "U.JSON", filepath.Join("sub", "s.json")} {
+		dropIn(file, "ignored", "https://ignored.example.com/sse")
+	}
+	assertUnresolved(t, Resolve(f.Env, claudeCodeReq("ignored", project)), "was not found")
 }
 
 // TestClaudeCodeManagedSettingsIncomplete covers a managed-settings.d the
-// resolver cannot read in full. Managed servers outrank all others, so falling
-// through to user configuration could name a server other than the one that ran.
+// resolver cannot read in full. Managed servers outrank all others, and an unread
+// drop-in can override a read one, so nothing below managed-mcp.json can answer.
 func TestClaudeCodeManagedSettingsIncomplete(t *testing.T) {
-	project := "proj"
+	f := newFixture(t, "darwin")
+	project := f.path("proj")
+	f.write(f.homePath(".claude.json"), `{"mcpServers":{"myserver":{"url":"https://user.example.com/sse"}}}`)
+	for i := range maxClaudeManagedDropIns + 1 {
+		f.write(f.Env.claudeManagedPath(claudeManagedDropInDir, fmt.Sprintf("%04d.json", i)), `{}`)
+	}
+	assertUnresolved(t, Resolve(f.Env, claudeCodeReq("myserver", project)), "could not be read in full")
+
+	// Including a name a read drop-in defines: an unread one could redefine it.
+	f.write(f.Env.claudeManagedPath(claudeManagedDropInDir, "0000.json"),
+		`{"managedMcpServers":{"early":`+managedServer("https://early.example.com/sse")+`}}`)
+	assertUnresolved(t, Resolve(f.Env, claudeCodeReq("early", project)), "could not be read in full")
+
+	// managed-mcp.json outranks every drop-in, so its answer stands.
+	f.write(f.Env.managedMCPPath(), `{"mcpServers":{"myserver":{"url":"https://managed.example.com/sse"}}}`)
+	assertURL(t, Resolve(f.Env, claudeCodeReq("myserver", project)), "https://managed.example.com/sse")
+}
+
+// TestClaudeCodeManagedSettingsUnreadableDropIns covers a drop-in location
+// Claude Code cannot read either. It skips it silently and loads everything else,
+// so the resolver does the same rather than denying every call.
+func TestClaudeCodeManagedSettingsUnreadableDropIns(t *testing.T) {
 	userServer := `{"mcpServers":{"myserver":{"url":"https://user.example.com/sse"}}}`
 
-	t.Run("more drop-ins than are read", func(t *testing.T) {
-		f := newFixture(t, "darwin")
-		f.write(f.homePath(".claude.json"), userServer)
-		for i := range maxClaudeManagedDropIns + 1 {
-			f.write(f.Env.claudeManagedPath(claudeManagedDropInDir, fmt.Sprintf("%03d.json", i)), `{}`)
-		}
-		assertUnresolved(t, Resolve(f.Env, claudeCodeReq("myserver", f.path(project))), "could not be read in full")
-	})
-
-	t.Run("exactly the cap", func(t *testing.T) {
-		f := newFixture(t, "darwin")
-		f.write(f.homePath(".claude.json"), userServer)
-		for i := range maxClaudeManagedDropIns {
-			f.write(f.Env.claudeManagedPath(claudeManagedDropInDir, fmt.Sprintf("%03d.json", i)), `{}`)
-		}
-		assertURL(t, Resolve(f.Env, claudeCodeReq("myserver", f.path(project))), "https://user.example.com/sse")
-	})
-
-	t.Run("directory cannot be listed", func(t *testing.T) {
+	t.Run("not a directory", func(t *testing.T) {
 		f := newFixture(t, "darwin")
 		f.write(f.homePath(".claude.json"), userServer)
 		f.write(f.Env.claudeManagedPath(claudeManagedDropInDir), "not a directory")
-		assertUnresolved(t, Resolve(f.Env, claudeCodeReq("myserver", f.path(project))), "could not be read in full")
+		assertURL(t, Resolve(f.Env, claudeCodeReq("myserver", f.path("proj"))), "https://user.example.com/sse")
+	})
+
+	t.Run("permission denied", func(t *testing.T) {
+		if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+			t.Skip("needs POSIX permissions enforced against the test process")
+		}
+		f := newFixture(t, "darwin")
+		f.write(f.homePath(".claude.json"), userServer)
+		dir := f.Env.claudeManagedPath(claudeManagedDropInDir)
+		f.write(filepath.Join(dir, "10.json"), `{"managedMcpServers":{"myserver":`+managedServer("https://hidden.example.com/sse")+`}}`)
+		if err := os.Chmod(dir, 0); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+		assertURL(t, Resolve(f.Env, claudeCodeReq("myserver", f.path("proj"))), "https://user.example.com/sse")
 	})
 }
 

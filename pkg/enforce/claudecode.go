@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -34,7 +35,9 @@ const (
 	// claudeManagedServersKey is the managed settings key that delivers MCP servers.
 	claudeManagedServersKey = "managedMcpServers"
 	// maxClaudeManagedDropIns bounds the managed-settings.d files read per call.
-	maxClaudeManagedDropIns = 64
+	// Claude Code itself reads every drop-in, so past this many the managed set is
+	// treated as unreadable rather than truncated.
+	maxClaudeManagedDropIns = 512
 	// claudeAIConnectorPrefix namespaces a claude.ai account connector's tools.
 	claudeAIConnectorPrefix = "claude_ai_"
 	// claudeConfigDirEnv relocates Claude Code's user configuration, .claude.json
@@ -132,21 +135,23 @@ func resolveClaudeCode(ctx context.Context, loader *configLoader, env Env, req R
 	// The managed sources come first and, while managed-mcp.json is present, are the
 	// only ones: Claude Code then loads its servers and managedMcpServers and nothing
 	// else. managed-mcp.json overrides managedMcpServers, so it ranks above them.
-	managed, complete := claudeManagedScopes(loader, env, tr)
-	m, out := resolveScopes(ctx, managed, names, tr)
-	switch out {
-	case outcomeFound:
+	mcpPath := env.managedMCPPath()
+	m, out := resolveScopes(ctx, []scope{{path: mcpPath, key: mcpServersKey, load: jsonServers(loader, mcpPath)}}, names, tr)
+	if out == outcomeFound {
 		return resolved(env, m.key, m.entry)
-	case outcomeAmbiguous:
-		return ambiguous(req.Agent, serverName)
 	}
-	// Managed servers outrank everything below, so a managed set the resolver could
-	// not read in full may hold the server that ran. Answering from user or project
-	// configuration then risks naming the wrong one.
+	// managedMcpServers rank just below managed-mcp.json and above everything else.
+	// A set the resolver could not read in full may hold a definition of this name
+	// that overrides one it did read, or that outranks user configuration, so no
+	// answer from here down can be trusted.
+	settings, complete := claudeManagedSettingsScopes(loader, env, tr)
 	if !complete {
 		return notFound(req.Agent, serverName, fmt.Sprintf(
 			"Claude Code's managed settings directory %s could not be read in full, so MCP server %q cannot be ruled out of it",
 			env.claudeManagedPath(claudeManagedDropInDir), serverName))
+	}
+	if m, out = resolveScopes(ctx, settings, names, tr); out == outcomeFound {
+		return resolved(env, m.key, m.entry)
 	}
 	// A managed-mcp.json that cannot be read still locks: Claude Code keeps it in
 	// exclusive control rather than letting user configuration through, so
@@ -190,49 +195,57 @@ func resolveClaudeCode(ctx context.Context, loader *configLoader, env Env, req R
 		"MCP server %q was not found in any Claude Code MCP configuration", serverName))
 }
 
-// claudeManagedScopes returns managed-mcp.json, then the managed settings files
-// that can carry managedMcpServers.
+// claudeManagedSettingsScopes returns the managed settings files that can carry
+// managedMcpServers, highest precedence first. Claude Code applies
+// managed-settings.json, then each drop-in in managed-settings.d in byte order of
+// file name, a later file overriding an earlier one; so the last drop-in ranks
+// first and managed-settings.json last.
 //
-// managed-settings.json and its drop-ins are peers: the resolver does not
-// reproduce how Claude Code layers them, so two that define one server
-// differently are ambiguous rather than settled by a guessed order. MDM profiles,
-// the Windows registry, and server-delivered settings can also carry
-// managedMcpServers and are not read; a server delivered only through one of them
-// is unresolved, never misidentified.
+// MDM profiles, the Windows registry, and server-delivered settings can also
+// carry managedMcpServers and are not read; a server delivered only through one
+// of them is unresolved, never misidentified.
 //
-// complete is false when managed-settings.d could not be listed or holds more
-// drop-ins than the resolver reads.
-func claudeManagedScopes(loader *configLoader, env Env, tr *tracer) (scopes []scope, complete bool) {
-	mcpPath := env.managedMCPPath()
-	scopes = []scope{{path: mcpPath, key: mcpServersKey, load: jsonServers(loader, mcpPath)}}
+// complete is false when the drop-ins could not all be read.
+func claudeManagedSettingsScopes(loader *configLoader, env Env, tr *tracer) (scopes []scope, complete bool) {
 	files, complete := claudeManagedSettingsFiles(env)
 	if !complete {
 		tr.miss(env.claudeManagedPath(claudeManagedDropInDir), "", loadUnusable)
+		return nil, false
 	}
-	for _, path := range files {
+	for i, path := range slices.Backward(files) {
 		scopes = append(scopes, scope{
 			path: path,
 			key:  claudeManagedServersKey,
-			rank: 1,
+			rank: len(files) - 1 - i,
 			load: managedSettingsServers(loader, path),
 		})
 	}
-	return scopes, complete
+	return scopes, true
 }
 
-// claudeManagedSettingsFiles lists managed-settings.json and the .json drop-ins
-// beside it, in name order. complete is false when the drop-in directory exists
-// but cannot be listed, or holds more drop-ins than the resolver reads.
+// claudeManagedSettingsFiles lists managed-settings.json and its drop-ins in the
+// order Claude Code applies them. A drop-in is a file directly in
+// managed-settings.d whose name ends in ".json" (case-sensitively) and does not
+// start with a dot.
+//
+// A drop-in directory that cannot be listed for lack of permission, or that is
+// not a directory at all, is treated as absent: the hook runs as the same user as
+// Claude Code, which skips it silently in both cases, so nothing in it can have
+// run. Any other listing failure, or more drop-ins than the resolver reads,
+// leaves the set incomplete.
 func claudeManagedSettingsFiles(env Env) (files []string, complete bool) {
 	files = []string{env.claudeManagedPath(claudeManagedSettings)}
 	dir := env.claudeManagedPath(claudeManagedDropInDir)
+	if info, err := os.Stat(dir); err == nil && !info.IsDir() {
+		return files, true
+	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return files, errors.Is(err, fs.ErrNotExist)
+		return files, errors.Is(err, fs.ErrNotExist) || errors.Is(err, fs.ErrPermission)
 	}
 	for _, entry := range entries {
 		name := entry.Name()
-		if entry.IsDir() || strings.HasPrefix(name, ".") || !strings.EqualFold(filepath.Ext(name), ".json") {
+		if entry.IsDir() || strings.HasPrefix(name, ".") || !strings.HasSuffix(name, ".json") {
 			continue
 		}
 		if len(files) > maxClaudeManagedDropIns {
@@ -243,7 +256,10 @@ func claudeManagedSettingsFiles(env Env) (files []string, complete bool) {
 	return files, true
 }
 
-// managedSettingsServers reads managedMcpServers from a managed settings file.
+// managedSettingsServers reads managedMcpServers from a managed settings file,
+// keeping only the entries Claude Code accepts there. An entry it ignores
+// overrides nothing: Claude Code validates each file before layering it, so an
+// earlier file's definition, or a lower scope's, still answers for that name.
 func managedSettingsServers(loader *configLoader, path string) func(context.Context) (serverSet, loadResult) {
 	return func(ctx context.Context) (serverSet, loadResult) {
 		var doc struct {
@@ -253,8 +269,34 @@ func managedSettingsServers(loader *configLoader, path string) func(context.Cont
 		if res != loadOK {
 			return nil, res
 		}
-		return decodeServers(doc.Servers), loadOK
+		accepted := make(map[string]json.RawMessage, len(doc.Servers))
+		for name, raw := range doc.Servers {
+			if managedSettingsServerAccepted(raw) {
+				accepted[name] = raw
+			}
+		}
+		return decodeServers(accepted), loadOK
 	}
+}
+
+// managedSettingsServerAccepted reports whether Claude Code would load a
+// managedMcpServers entry: managed settings deliver only "http" or "sse" servers
+// at an https URL, and never a command. managed-mcp.json is not restricted this
+// way.
+func managedSettingsServerAccepted(raw json.RawMessage) bool {
+	var entry struct {
+		Type    string          `json:"type"`
+		URL     string          `json:"url"`
+		Command json.RawMessage `json:"command"`
+	}
+	if json.Unmarshal(raw, &entry) != nil || entry.Command != nil {
+		return false
+	}
+	if entry.Type != "http" && entry.Type != "sse" {
+		return false
+	}
+	u, err := url.Parse(entry.URL)
+	return err == nil && strings.EqualFold(u.Scheme, "https") && u.Host != ""
 }
 
 // claudeProject is the project context a Claude Code session loads its
