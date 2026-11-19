@@ -184,8 +184,14 @@ func (e *Enforce) decider(envErr error) enforce.DecideFunc {
 // evidence about production behavior.
 type EnforceResolve struct {
 	Agent  string `usage:"local agent provider: claude-code, codex, cursor, kiro"`
-	Server string `usage:"MCP server name, as the tool call reports it"`
-	CWD    string `usage:"working directory to resolve project configuration against (default: the current directory)" name:"cwd"`
+	Server string `usage:"MCP server name, as the tool call reports it; for claude-code, the payload's mcp_server.name"`
+	// ServerSource reproduces a Claude Code payload's mcp_server.source, the scope
+	// it loaded the server from.
+	ServerSource string `usage:"Claude Code mcp_server.source from the hook payload: user, local, project, plugin, enterprise, managed or claudeai" name:"server-source"`
+	CWD          string `usage:"working directory to resolve project configuration against (default: the current directory)" name:"cwd"`
+	// TranscriptPath reproduces a Claude Code payload's transcript_path, which
+	// recovers the directory a session was launched in when it has since moved.
+	TranscriptPath string `usage:"Claude Code transcript path from the hook payload, naming the session's launch directory" name:"transcript-path"`
 }
 
 func (r *EnforceResolve) Customize(cmd *cobra.Command) {
@@ -221,7 +227,7 @@ func (r *EnforceResolve) Run(cmd *cobra.Command, _ []string) error {
 		}
 	}
 
-	req := enforce.ResolveRequest{Agent: agent, ServerName: r.Server, CWD: cwd}
+	req := enforce.ResolveRequest{Agent: agent, ServerName: r.Server, ServerSource: r.ServerSource, CWD: cwd, TranscriptPath: r.TranscriptPath}
 	if agent == localagent.Cursor {
 		// Cursor sends no usable cwd, so its resolver reads workspace roots. The
 		// directory being diagnosed stands in for the workspace root a live call

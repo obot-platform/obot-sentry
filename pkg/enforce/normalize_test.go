@@ -50,6 +50,21 @@ func TestNormalizeGolden(t *testing.T) {
 			},
 		},
 		{
+			// Claude Code before mcp_server: the tool name alone is not trusted to
+			// name the server.
+			name:    "claude code mcp call without mcp_server",
+			agent:   localagent.ClaudeCode,
+			event:   EventPreToolUse,
+			payload: "claude-code-pretooluse-mcp-no-server.json",
+			want: types.EnforcementDecisionRequest{
+				Agent:            "claude_code",
+				Tool:             "mcp__probe-npx-stdio__echo",
+				Kind:             "mcp",
+				Unresolved:       true,
+				UnresolvedReason: "Claude Code did not identify the MCP server (the hook payload has no mcp_server); update Claude Code",
+			},
+		},
+		{
 			name:    "claude code built-in tool",
 			agent:   localagent.ClaudeCode,
 			event:   EventPreToolUse,
@@ -179,7 +194,7 @@ func normalizeFixture(t *testing.T) Env {
 	f.write(f.homePath(".claude.json"), `{"mcpServers":{
 		"probe-npx-stdio": {"command": "npx", "args": ["-y", "@modelcontextprotocol/server-everything"]},
 		"probe-uvx-stdio": {"command": "uvx", "args": ["mcp-server-time"]},
-		"probe-http":      {"url": "http://127.0.0.1:3001/mcp"}
+		"probe-http":      {"type": "http", "url": "http://127.0.0.1:3001/mcp"}
 	}}`)
 	f.write(f.homePath(".codex", "config.toml"), `
 [mcp_servers.probe-npx-stdio]
@@ -580,6 +595,38 @@ func TestNormalizeUnresolvedMCPCall(t *testing.T) {
 	}
 }
 
+// TestNormalizeClaudeCodeTranscriptPath covers the payload field that recovers a
+// session's launch directory: it reaches the resolver, and one too long to trust
+// is dropped rather than failing the call.
+func TestNormalizeClaudeCodeTranscriptPath(t *testing.T) {
+	f := newFixture(t, "darwin")
+	launch := f.mkdir(f.path("launch"))
+	cwd := f.mkdir(filepath.Join(launch, "moved"))
+	f.write(f.homePath(".claude.json"), `{"projects":{`+quote(launch)+`:{"mcpServers":{"probe":{"type":"http","url":"https://launch.example.com/mcp"}}}}}`)
+
+	payload := func(transcript string) []byte {
+		return mustJSON(map[string]any{"tool_name": "mcp__probe__echo", "cwd": cwd, "transcript_path": transcript,
+			"mcp_server": map[string]string{"name": "probe", "source": "local"}})
+	}
+	call, err := normalizeCall(f.Env, localagent.ClaudeCode, EventPreToolUse,
+		payload(f.homePath(".claude", "projects", claudeProjectSlug(launch), "s.jsonl")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := call.Request.Server.URL; got != "https://launch.example.com/mcp" {
+		t.Fatalf("URL = %q, want the launch directory's server", got)
+	}
+
+	call, err = normalizeCall(f.Env, localagent.ClaudeCode, EventPreToolUse,
+		payload("/"+strings.Repeat("x", maxTranscriptPathBytes)))
+	if err != nil {
+		t.Fatalf("an over-long transcript path failed the call: %v", err)
+	}
+	if got := call.Request.Server.URL; got != "" {
+		t.Fatalf("URL = %q, want cwd to stand in, where nothing defines the server", got)
+	}
+}
+
 // TestNormalizeMissingToolNameIsAnError covers a payload we cannot understand at
 // all, which the caller turns into a deny.
 func TestNormalizeMissingToolNameIsAnError(t *testing.T) {
@@ -643,55 +690,65 @@ func assertRequest(t *testing.T, got, want types.EnforcementDecisionRequest) {
 	}
 }
 
-// TestNormalizeMCPCallWithNoServerHint covers an MCP-shaped tool name that names
-// no server: a single-underscore or colon namespace, neither of which the supported
-// agents use. It is still an MCP call, so it is reported as unidentified rather than
-// classified as a built-in tool, which would gate it behind the wrong toggle.
-func TestNormalizeMCPCallWithNoServerHint(t *testing.T) {
-	env := normalizeFixture(t)
-	for _, toolName := range []string{"mcp_linear_search", "mcp:search_issues"} {
-		raw := []byte(`{"tool_name":` + string(mustJSON(toolName)) + `,"cwd":"/Users/dev/probe-workspace"}`)
-
-		call, err := normalizeCall(env, localagent.ClaudeCode, EventPreToolUse, raw)
+// TestNormalizeClaudeCodeMCPServer covers how a Claude Code MCP call is read:
+// the server and its source come from mcp_server, and the tool name supplies only
+// the tool, below the prefix Claude Code builds from that server's name.
+func TestNormalizeClaudeCodeMCPServer(t *testing.T) {
+	f := newFixture(t, "darwin")
+	f.write(f.homePath(".claude.json"), `{"mcpServers":{
+		"my.server":{"type":"http","url":"https://dotted.example.com/mcp"},
+		"my_server":{"type":"http","url":"https://underscored.example.com/mcp"}
+	}}`)
+	normalize := func(toolName, name, source string) types.EnforcementDecisionRequest {
+		t.Helper()
+		payload := map[string]any{"tool_name": toolName, "cwd": f.path("proj")}
+		if name != "" || source != "" {
+			payload["mcp_server"] = map[string]string{"name": name, "source": source}
+		}
+		call, err := normalizeCall(f.Env, localagent.ClaudeCode, EventPreToolUse, mustJSON(payload))
 		if err != nil {
 			t.Fatal(err)
 		}
-		if call.Request.Kind != "mcp" {
-			t.Errorf("%s: Kind = %q, want mcp", toolName, call.Request.Kind)
-		}
-		if !call.Request.Unresolved {
-			t.Errorf("%s: request = %+v, want unresolved", toolName, call.Request)
-		}
-		if !strings.Contains(call.Request.UnresolvedReason, "did not name an MCP server") {
-			t.Errorf("%s: reason = %q", toolName, call.Request.UnresolvedReason)
-		}
-		if len(call.Trace) != 0 {
-			t.Errorf("%s: trace = %v, want no config files consulted", toolName, call.Trace)
-		}
+		return call.Request
 	}
-}
 
-// TestNormalizeMCPCallWithNoToolHalf covers mcp__<server> with nothing after it.
-// The whole remainder is the server, so the call resolves rather than being
-// reported as unidentified.
-func TestNormalizeMCPCallWithNoToolHalf(t *testing.T) {
-	env := normalizeFixture(t)
-	raw := []byte(`{"tool_name":"mcp__probe-http","cwd":"/Users/dev/probe-workspace"}`)
+	// Both servers share the tool namespace my_server; mcp_server tells them apart.
+	got := normalize("mcp__my_server__search", "my.server", "user")
+	if got.Unresolved || got.ServerName != "my.server" || got.Tool != "search" || got.Server.URL != "https://dotted.example.com/mcp" {
+		t.Errorf("dotted server: %+v", got)
+	}
+	got = normalize("mcp__my_server__search", "my_server", "user")
+	if got.Unresolved || got.ServerName != "my_server" || got.Server.URL != "https://underscored.example.com/mcp" {
+		t.Errorf("underscored server: %+v", got)
+	}
 
-	call, err := normalizeCall(env, localagent.ClaudeCode, EventPreToolUse, raw)
-	if err != nil {
-		t.Fatal(err)
+	// A tool half containing "__" is the tool's own.
+	if got = normalize("mcp__my_server__a__b", "my.server", "user"); got.Tool != "a__b" {
+		t.Errorf("Tool = %q, want a__b", got.Tool)
 	}
-	if call.Request.Unresolved {
-		t.Fatalf("request = %+v, want it resolved", call.Request)
+
+	for _, tc := range []struct{ toolName, name, source, reason string }{
+		{"mcp__linear__search", "", "", "has no mcp_server"},
+		{"mcp_linear_search", "", "", "has no mcp_server"},
+		{"mcp__linear__search", "linear", "", "did not name the MCP server and its source"},
+		{"mcp__linear__search", "", "user", "did not name the MCP server and its source"},
+		{"mcp__other__search", "my.server", "user", `does not belong to MCP server "my.server"`},
+		{"mcp__my_server__", "my.server", "user", `does not belong to MCP server "my.server"`},
+		{"mcp__my_server", "my.server", "user", `does not belong to MCP server "my.server"`},
+		{"Read", "my.server", "user", `does not belong to MCP server "my.server"`},
+	} {
+		got := normalize(tc.toolName, tc.name, tc.source)
+		if got.Kind != "mcp" || !got.Unresolved || !strings.Contains(got.UnresolvedReason, tc.reason) {
+			t.Errorf("%s with %q/%q: %+v, want an unresolved MCP call (%s)", tc.toolName, tc.name, tc.source, got, tc.reason)
+		}
+		if got.Server != (types.EnforcementDecisionServer{}) {
+			t.Errorf("%s with %q/%q: carried a server: %+v", tc.toolName, tc.name, tc.source, got.Server)
+		}
 	}
-	if call.Request.ServerName != "probe-http" {
-		t.Errorf("ServerName = %q, want %q", call.Request.ServerName, "probe-http")
-	}
-	// With no tool half there is no tool within the server, so the name as it
-	// arrived is reported; a tool-scoped allowlist entry cannot match it.
-	if call.Request.Tool != "mcp__probe-http" {
-		t.Errorf("Tool = %q, want the name as it arrived", call.Request.Tool)
+
+	// A built-in tool needs no mcp_server.
+	if got = normalize("Read", "", ""); got.Kind != "read" || got.Unresolved {
+		t.Errorf("Read: %+v", got)
 	}
 }
 

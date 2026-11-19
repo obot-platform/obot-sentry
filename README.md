@@ -179,14 +179,42 @@ that says FOUND is evidence about production behavior. It exits non-zero when th
 server cannot be identified.
 
 ```
-$ obot-sentry enforce resolve --agent claude-code --server linear
-1  /Library/Application Support/ClaudeCode/managed-mcp.json  absent
-2  /Users/me/proj/.mcp.json  absent
-3  /Users/me/.claude.json  projects["/Users/me/proj"]  no match
-4  /Users/me/.claude.json  mcpServers["linear"]  FOUND
+$ obot-sentry enforce resolve --agent claude-code --server linear --server-source project
+1  /Users/me/proj/.mcp.json  mcpServers["linear"]  FOUND
 server name: linear
-resolved: npm / linear-mcp / any version
+resolved: https://mcp.linear.app/mcp
 ```
+
+For Claude Code the server comes from the hook payload's `mcp_server` field,
+which names the server's configuration key and the scope Claude Code loaded it
+from, so pass both from the payload: `--server` is `mcp_server.name` and
+`--server-source` is `mcp_server.source`. Only that scope is read, and the key is
+matched exactly:
+
+| `source` | Read from |
+|---|---|
+| `user` | `mcpServers` in `.claude.json` |
+| `local` | the project's entry in `.claude.json` (keyed by the git root, or a linked worktree's main checkout) |
+| `project` | every `.mcp.json` from the session's launch directory upward, a deeper file winning |
+| `plugin` | the installed plugins in `plugins/installed_plugins.json` |
+| `enterprise` | `managed-mcp.json` |
+| `managed` | `managedMcpServers` in the managed settings files |
+| `claudeai` | nothing: the claude.ai connector's display name is its identity |
+
+Servers from `--mcp-config`, the Agent SDK, or an agent definition (`dynamic`,
+`sdk` and `agent`) are left unresolved, since the hook cannot read their
+definitions, and so is an MCP call whose payload has no `mcp_server`, which
+Claude Code releases before it did not send.
+
+A session's launch directory is recovered from its transcript path, so pass
+`--transcript-path` from a hook payload to reproduce a call made after the
+session changed directories. A resumed session keeps its original transcript, so
+when that names a directory above the current one, each directory in between may
+be the one the session loaded, and a server they define differently is left
+unresolved. Claude Code's files are parsed as strict JSON, as Claude Code parses
+them, so a file with comments or trailing commas is skipped. A plugin from a
+marketplace added from a local folder or catalog file is read from that folder,
+which is where Claude Code loads it.
 
 An unidentified server prints the reason on the last line and exits 1:
 
@@ -207,8 +235,9 @@ Claude Code's hooks are installed in its managed settings file, which Claude
 Code reads from a fixed path. Starting Claude Code with a different
 `CLAUDE_CONFIG_DIR` therefore does not skip them, and they keep running when an
 administrator sets `allowManagedHooksOnly`. MCP servers are resolved against
-`$CLAUDE_CONFIG_DIR/.claude.json` when the session sets that variable, which is
-the file Claude Code itself reads in that case. The variable has to hold an
+`$CLAUDE_CONFIG_DIR/.claude.json` and `$CLAUDE_CONFIG_DIR/plugins` when the
+session sets that variable, which are the files Claude Code itself reads in that
+case. The variable has to hold an
 absolute path: Claude Code resolves a relative one against the directory it was
 started from, which the hook cannot determine, so MCP calls from such a session
 are blocked with a reason that says so.

@@ -15,10 +15,21 @@ import (
 
 // preToolPayload is the pre-tool envelope Claude Code and Codex share.
 type preToolPayload struct {
-	ToolName  string `json:"tool_name"`
-	ToolUseID string `json:"tool_use_id,omitempty"`
-	SessionID string `json:"session_id,omitempty"`
-	CWD       string `json:"cwd,omitempty"`
+	ToolName       string `json:"tool_name"`
+	ToolUseID      string `json:"tool_use_id,omitempty"`
+	SessionID      string `json:"session_id,omitempty"`
+	CWD            string `json:"cwd,omitempty"`
+	TranscriptPath string `json:"transcript_path,omitempty"`
+	// MCPServer is Claude Code's identification of the server behind an mcp__
+	// tool. Codex does not send it.
+	MCPServer *claudeMCPServer `json:"mcp_server,omitempty"`
+}
+
+// claudeMCPServer is Claude Code's mcp_server field: the server's configuration
+// key exactly as written, and the scope Claude Code loaded it from.
+type claudeMCPServer struct {
+	Name   string `json:"name"`
+	Source string `json:"source"`
 }
 
 type cursorPreToolPayload struct {
@@ -222,11 +233,14 @@ func normalizeCallContext(ctx context.Context, env Env, agent localagent.Agent, 
 }
 
 const (
-	maxToolNameBytes      = 1024
-	maxServerNameBytes    = 1024
-	maxWorkingDirBytes    = 4096
-	maxWorkspaceRoots     = 64
-	maxWorkspaceRootBytes = 4096
+	maxToolNameBytes   = 1024
+	maxServerNameBytes = 1024
+	maxWorkingDirBytes = 4096
+	// maxTranscriptPathBytes leaves room for the configuration directory, the
+	// launch directory's slug, and the session file around a maximal cwd.
+	maxTranscriptPathBytes = 2 * maxWorkingDirBytes
+	maxWorkspaceRoots      = 64
+	maxWorkspaceRootBytes  = 4096
 )
 
 func boundedField(name, value string, maximum int) error {
@@ -251,13 +265,70 @@ func normalizePreTool(ctx context.Context, env Env, agent localagent.Agent, raw 
 	if err := boundedField("cwd", hook.CWD, maxWorkingDirBytes); err != nil {
 		return Call{}, err
 	}
+	// The transcript path only refines which project the call came from, so one
+	// too long to trust is dropped rather than failing the whole payload.
+	transcriptPath := hook.TranscriptPath
+	if len(transcriptPath) > maxTranscriptPathBytes {
+		transcriptPath = ""
+	}
 
+	req := ResolveRequest{Agent: agent, CWD: hook.CWD, TranscriptPath: transcriptPath}
+	if agent == localagent.ClaudeCode {
+		class, err := classifyClaudeCodePreTool(toolName, hook.MCPServer)
+		if err != nil {
+			return Call{}, err
+		}
+		req.ServerName = class.ServerName
+		if hook.MCPServer != nil {
+			req.ServerSource = strings.TrimSpace(hook.MCPServer.Source)
+		}
+		return buildCall(ctx, env, agent, class, req), nil
+	}
 	class := classifyPreTool(toolName)
-	return buildCall(ctx, env, agent, class, ResolveRequest{
-		Agent:      agent,
-		ServerName: class.ServerName,
-		CWD:        hook.CWD,
-	}), nil
+	req.ServerName = class.ServerName
+	return buildCall(ctx, env, agent, class, req), nil
+}
+
+// classifyClaudeCodePreTool classifies a Claude Code pre-tool call.
+//
+// The server comes only from mcp_server, never from the tool name, whose
+// namespacing loses characters ("my.server" and "my_server" both become
+// my_server) and whose "__" delimiter is ambiguous. Claude Code sends mcp_server
+// for every MCP tool, so an MCP tool without it is unresolved. The tool name is
+// read only for the tool half, below the prefix Claude Code builds from the
+// server's name; a name that does not carry that prefix is unresolved too.
+func classifyClaudeCodePreTool(toolName string, server *claudeMCPServer) (classification, error) {
+	if server == nil {
+		class := classifyPreTool(toolName)
+		if class.Kind != toolkind.KindMCP {
+			return class, nil
+		}
+		return classification{
+			Kind:          toolkind.KindMCP,
+			Tool:          toolName,
+			InvalidReason: "Claude Code did not identify the MCP server (the hook payload has no mcp_server); update Claude Code",
+		}, nil
+	}
+	name, source := strings.TrimSpace(server.Name), strings.TrimSpace(server.Source)
+	if err := boundedField("mcp_server.name", name, maxServerNameBytes); err != nil {
+		return classification{}, err
+	}
+	if err := boundedField("mcp_server.source", source, maxServerNameBytes); err != nil {
+		return classification{}, err
+	}
+	class := classification{Kind: toolkind.KindMCP, Tool: toolName, ServerName: name}
+	switch {
+	case name == "" || source == "":
+		class.InvalidReason = "Claude Code's mcp_server field did not name the MCP server and its source"
+	default:
+		tool, ok := strings.CutPrefix(toolName, mcpToolPrefix+formClaudeCode(name)+"__")
+		if !ok || tool == "" {
+			class.InvalidReason = fmt.Sprintf("the tool name does not belong to MCP server %q, which Claude Code reported for it", name)
+		} else {
+			class.Tool = tool
+		}
+	}
+	return class, nil
 }
 
 func normalizeCursorPreTool(ctx context.Context, env Env, raw []byte) (Call, error) {
