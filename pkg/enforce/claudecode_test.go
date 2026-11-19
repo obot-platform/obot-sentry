@@ -28,7 +28,8 @@ func TestClaudeCodeFileOrder(t *testing.T) {
 	assertUnresolved(t, res, `MCP server "myserver" was not found in any Claude Code MCP configuration`)
 
 	want := []string{
-		f.machinePath(claudeManagedMCPDarwin),
+		f.Env.managedMCPPath(),
+		f.Env.claudeManagedPath(claudeManagedSettings),
 		filepath.Join(project, ".mcp.json"),
 		f.homePath(".claude.json"),
 	}
@@ -36,14 +37,15 @@ func TestClaudeCodeFileOrder(t *testing.T) {
 		t.Fatalf("consulted\n%v\nwant\n%v\n%s", got, want, resolveTrace(res))
 	}
 
-	// Once it exists, the per-root project section is consulted between the
-	// project .mcp.json and the global table.
+	// Once it exists, the project's local section is consulted ahead of the project
+	// .mcp.json: Claude Code lets local configuration override the shared file.
 	f.write(f.homePath(".claude.json"), `{"projects":{`+quote(project)+`:{"mcpServers":{}}}}`)
 	res = Resolve(f.Env, claudeCodeReq("myserver", project))
 	want = []string{
-		f.machinePath(claudeManagedMCPDarwin),
-		filepath.Join(project, ".mcp.json"),
+		f.Env.managedMCPPath(),
+		f.Env.claudeManagedPath(claudeManagedSettings),
 		f.homePath(".claude.json"), // projects[<project>]
+		filepath.Join(project, ".mcp.json"),
 		f.homePath(".claude.json"), // mcpServers
 	}
 	if got := consultedPaths(res); !slices.Equal(got, want) {
@@ -68,26 +70,87 @@ func TestClaudeCodeManagedConfigIsExclusive(t *testing.T) {
 
 	// A managed file that lists a different server stops resolution: the user
 	// entry is not consulted at all.
-	f.write(f.machinePath(claudeManagedMCPDarwin), `{"mcpServers":{"github":{"url":"https://managed.example.com/sse"}}}`)
+	f.write(f.Env.managedMCPPath(), `{"mcpServers":{"github":{"url":"https://managed.example.com/sse"}}}`)
 	res := Resolve(f.Env, claudeCodeReq("myserver", project))
 	assertUnresolved(t, res, "managed MCP configuration, which cannot be overridden")
-	if len(res.Trace) != 1 {
+	if slices.Contains(consultedPaths(res), f.homePath(".claude.json")) {
 		t.Fatalf("resolution continued past the managed config:\n%s", resolveTrace(res))
 	}
 
 	// A managed file that does list it wins.
-	f.write(f.machinePath(claudeManagedMCPDarwin), `{"mcpServers":{"myserver":{"url":"https://managed.example.com/sse"}}}`)
+	f.write(f.Env.managedMCPPath(), `{"mcpServers":{"myserver":{"url":"https://managed.example.com/sse"}}}`)
+	assertURL(t, Resolve(f.Env, claudeCodeReq("myserver", project)), "https://managed.example.com/sse")
+
+	// One that cannot be parsed still locks. Claude Code keeps a broken managed
+	// config in exclusive control rather than letting user configuration through.
+	f.write(f.Env.managedMCPPath(), `{"mcpServers":`)
+	res = Resolve(f.Env, claudeCodeReq("myserver", project))
+	assertUnresolved(t, res, "managed MCP configuration, which cannot be overridden")
+	if slices.Contains(consultedPaths(res), f.homePath(".claude.json")) {
+		t.Fatalf("resolution continued past an unreadable managed config:\n%s", resolveTrace(res))
+	}
+}
+
+// TestClaudeCodeManagedConfigWindows covers the Windows managed directory, which
+// Claude Code hardcodes. %PROGRAMFILES% is inherited from the agent and Claude
+// Code ignores it; were the resolver to follow it, a user could plant a
+// managed-mcp.json that vouches for a server the session never loaded.
+func TestClaudeCodeManagedConfigWindows(t *testing.T) {
+	f := newFixture(t, "windows")
+	project := f.path("proj")
+	f.write(f.machinePath("C:/Program Files/ClaudeCode/managed-mcp.json"),
+		`{"mcpServers":{"myserver":{"url":"https://managed.example.com/sse"}}}`)
+	assertURL(t, Resolve(f.Env, claudeCodeReq("myserver", project)), "https://managed.example.com/sse")
+
+	planted := f.mkdir(f.path("planted"))
+	f.setenv("PROGRAMFILES", planted)
+	f.write(filepath.Join(planted, "ClaudeCode", "managed-mcp.json"),
+		`{"mcpServers":{"myserver":{"url":"https://allowed.example.com/sse"}}}`)
+	res := Resolve(f.Env, claudeCodeReq("myserver", project))
+	assertURL(t, res, "https://managed.example.com/sse")
+	for _, path := range consultedPaths(res) {
+		if strings.HasPrefix(path, planted) {
+			t.Fatalf("consulted %s under %%PROGRAMFILES%%:\n%s", path, resolveTrace(res))
+		}
+	}
+}
+
+// TestClaudeCodeManagedSettingsServers covers managedMcpServers, the managed
+// settings key that delivers servers. It outranks user configuration, joins
+// managed-mcp.json's set under its lock, and yields to managed-mcp.json on a
+// shared name.
+func TestClaudeCodeManagedSettingsServers(t *testing.T) {
+	f := newFixture(t, "darwin")
+	project := f.path("proj")
+	f.write(f.homePath(".claude.json"), `{"mcpServers":{"myserver":{"url":"https://user.example.com/sse"}}}`)
+	f.write(f.Env.claudeManagedPath(claudeManagedSettings),
+		`{"managedMcpServers":{"myserver":{"url":"https://settings.example.com/sse"}}}`)
+	assertURL(t, Resolve(f.Env, claudeCodeReq("myserver", project)), "https://settings.example.com/sse")
+
+	f.write(f.Env.managedMCPPath(), `{"mcpServers":{"other":{"url":"https://managed.example.com/sse"}}}`)
+	assertURL(t, Resolve(f.Env, claudeCodeReq("myserver", project)), "https://settings.example.com/sse")
+
+	f.write(f.Env.managedMCPPath(), `{"mcpServers":{"myserver":{"url":"https://managed.example.com/sse"}}}`)
 	assertURL(t, Resolve(f.Env, claudeCodeReq("myserver", project)), "https://managed.example.com/sse")
 }
 
-func TestClaudeCodeManagedConfigWindows(t *testing.T) {
-	f := newFixture(t, "windows")
-	programFiles := f.mkdir(f.path("ProgramFiles"))
-	f.setenv("PROGRAMFILES", programFiles)
-	f.write(filepath.Join(programFiles, "ClaudeCode", "managed-mcp.json"),
-		`{"mcpServers":{"myserver":{"url":"https://managed.example.com/sse"}}}`)
+// TestClaudeCodeManagedSettingsDropIns covers managed-settings.d. The resolver
+// does not reproduce how Claude Code layers drop-ins, so ones that agree identify
+// a server and ones that disagree leave it ambiguous.
+func TestClaudeCodeManagedSettingsDropIns(t *testing.T) {
+	f := newFixture(t, "darwin")
+	project := f.path("proj")
+	dropIn := func(name, url string) {
+		f.write(f.Env.claudeManagedPath(claudeManagedDropInDir, name),
+			`{"managedMcpServers":{"myserver":{"url":"`+url+`"}}}`)
+	}
+	dropIn("10-base.json", "https://dropin.example.com/sse")
+	dropIn("20-same.json", "https://dropin.example.com/sse")
+	f.write(f.Env.claudeManagedPath(claudeManagedDropInDir, "notes.txt"), `{"managedMcpServers":{"myserver":{"url":"https://ignored.example.com/sse"}}}`)
+	assertURL(t, Resolve(f.Env, claudeCodeReq("myserver", project)), "https://dropin.example.com/sse")
 
-	assertURL(t, Resolve(f.Env, claudeCodeReq("myserver", f.path("proj"))), "https://managed.example.com/sse")
+	dropIn("30-other.json", "https://other.example.com/sse")
+	assertUnresolved(t, Resolve(f.Env, claudeCodeReq("myserver", project)), "conflicting definitions")
 }
 
 // TestClaudeCodeConfigDirRelocatesClaudeJSON covers a session started with
@@ -118,7 +181,8 @@ func TestClaudeCodeConfigDirRelocatesClaudeJSON(t *testing.T) {
 	res = Resolve(f.Env, claudeCodeReq("homeonly", project))
 	assertUnresolved(t, res, `MCP server "homeonly" was not found in any Claude Code MCP configuration`)
 	want := []string{
-		f.machinePath(claudeManagedMCPDarwin),
+		f.Env.managedMCPPath(),
+		f.Env.claudeManagedPath(claudeManagedSettings),
 		filepath.Join(project, ".mcp.json"),
 		filepath.Join(configDir, ".claude.json"),
 	}
@@ -214,32 +278,47 @@ func TestClaudeCodeProjectsKeySpelling(t *testing.T) {
 	})
 }
 
-// TestClaudeCodeDepthOrder is the load-bearing ordering test: the deepest
-// declaration wins, and within one directory the project file outranks that
-// directory's projects{} entry.
-func TestClaudeCodeDepthOrder(t *testing.T) {
+// TestClaudeCodeProjectPrecedence is the load-bearing ordering test, pinned
+// against Claude Code itself: the project's local section outranks every
+// .mcp.json, and among those a deeper file outranks a shallower one.
+func TestClaudeCodeProjectPrecedence(t *testing.T) {
 	f := newFixture(t, "darwin")
 	project := f.mkdir(f.path("proj"))
 	cwd := f.mkdir(filepath.Join(project, "a", "b"))
 
 	f.write(filepath.Join(cwd, ".mcp.json"), `{"mcpServers":{"myserver":{"url":"https://cwd-file.example.com/sse"}}}`)
+	f.write(filepath.Join(project, ".mcp.json"), `{"mcpServers":{"myserver":{"url":"https://project-file.example.com/sse"}}}`)
 	f.write(f.homePath(".claude.json"), `{"projects":{
-		`+quote(cwd)+`:{"mcpServers":{"myserver":{"url":"https://cwd-projects.example.com/sse"}}},
-		`+quote(project)+`:{"mcpServers":{"myserver":{"url":"https://project-projects.example.com/sse"}}}
+		`+quote(cwd)+`:{"mcpServers":{"myserver":{"url":"https://local.example.com/sse"}}}
 	}}`)
 
-	// cwd's own project file is the most specific source there is.
+	// Local configuration overrides the shared project file, however deep it is.
+	assertURL(t, Resolve(f.Env, claudeCodeReq("myserver", cwd)), "https://local.example.com/sse")
+
+	// Without it, the deepest project file answers.
+	f.write(f.homePath(".claude.json"), `{}`)
 	assertURL(t, Resolve(f.Env, claudeCodeReq("myserver", cwd)), "https://cwd-file.example.com/sse")
 
-	// With it silent, cwd's projects{} entry answers ahead of the shallower one.
+	// And a project file silent on the name defers to the one above it.
 	f.write(filepath.Join(cwd, ".mcp.json"), `{"mcpServers":{}}`)
-	assertURL(t, Resolve(f.Env, claudeCodeReq("myserver", cwd)), "https://cwd-projects.example.com/sse")
+	assertURL(t, Resolve(f.Env, claudeCodeReq("myserver", cwd)), "https://project-file.example.com/sse")
+}
 
-	// And with that gone too, the enclosing project answers.
-	f.write(f.homePath(".claude.json"), `{"projects":{
-		`+quote(project)+`:{"mcpServers":{"myserver":{"url":"https://project-projects.example.com/sse"}}}
-	}}`)
-	assertURL(t, Resolve(f.Env, claudeCodeReq("myserver", cwd)), "https://project-projects.example.com/sse")
+// TestClaudeCodeEveryProjectFileIsLive covers the merge Claude Code performs over
+// .mcp.json files: one in the launch directory does not hide one above it, so a
+// server only the outer file declares still runs and must still resolve.
+func TestClaudeCodeEveryProjectFileIsLive(t *testing.T) {
+	f := newFixture(t, "darwin")
+	outer := f.mkdir(f.path("outer"))
+	inner := f.mkdir(filepath.Join(outer, "inner"))
+	f.write(filepath.Join(outer, ".mcp.json"), `{"mcpServers":{"outeronly":{"url":"https://outer.example.com/sse"}}}`)
+	f.write(filepath.Join(inner, ".mcp.json"), `{"mcpServers":{"inneronly":{"url":"https://inner.example.com/sse"}}}`)
+	f.write(f.homePath(".claude.json"), `{"mcpServers":{"outeronly":{"url":"https://user.example.com/sse"}}}`)
+
+	assertURL(t, Resolve(f.Env, claudeCodeReq("inneronly", inner)), "https://inner.example.com/sse")
+	// The outer file, not the user table beneath it: reading only the nearest file
+	// would report the user definition for a call the outer file's server served.
+	assertURL(t, Resolve(f.Env, claudeCodeReq("outeronly", inner)), "https://outer.example.com/sse")
 }
 
 // TestClaudeCodeProjectFileAboveCWD covers a call made from a subdirectory of the
@@ -250,19 +329,113 @@ func TestClaudeCodeProjectFileAboveCWD(t *testing.T) {
 	cwd := f.mkdir(filepath.Join(project, "a", "b"))
 	f.write(filepath.Join(project, ".mcp.json"), `{"mcpServers":{"myserver":{"url":"https://project.example.com/sse"}}}`)
 
-	res := Resolve(f.Env, claudeCodeReq("myserver", cwd))
-	assertURL(t, res, "https://project.example.com/sse")
+	assertURL(t, Resolve(f.Env, claudeCodeReq("myserver", cwd)), "https://project.example.com/sse")
+}
 
-	// Only the nearest project file is a scope, and only one is ever live for a
-	// session, so no other .mcp.json is consulted.
-	var files int
-	for _, step := range res.Trace {
-		if filepath.Base(step.Path) == ".mcp.json" {
-			files++
+// TestClaudeCodeLocalScopeIsOneKey covers which projects{} entry is live. Claude
+// Code looks up exactly one key; an entry for a parent directory governs nothing,
+// so resolving through it would name a server the session never loaded.
+func TestClaudeCodeLocalScopeIsOneKey(t *testing.T) {
+	f := newFixture(t, "darwin")
+	parent := f.mkdir(f.path("parent"))
+	cwd := f.mkdir(filepath.Join(parent, "child"))
+	f.write(f.homePath(".claude.json"), `{"projects":{
+		`+quote(parent)+`:{"mcpServers":{"myserver":{"url":"https://parent.example.com/sse"}}}
+	}}`)
+
+	res := Resolve(f.Env, claudeCodeReq("myserver", cwd))
+	assertUnresolved(t, res, "was not found in any Claude Code MCP configuration")
+	assertURL(t, Resolve(f.Env, claudeCodeReq("myserver", parent)), "https://parent.example.com/sse")
+}
+
+// TestClaudeCodeLocalScopeIsKeyedByGitRoot covers a session launched below its
+// repository root: Claude Code keys local configuration by the git root.
+func TestClaudeCodeLocalScopeIsKeyedByGitRoot(t *testing.T) {
+	f := newFixture(t, "darwin")
+	repo := f.mkdir(f.path("repo"))
+	f.mkdir(filepath.Join(repo, ".git"))
+	cwd := f.mkdir(filepath.Join(repo, "pkg", "sub"))
+	f.write(f.homePath(".claude.json"), `{"projects":{
+		`+quote(repo)+`:{"mcpServers":{"myserver":{"url":"https://repo.example.com/sse"}}},
+		`+quote(cwd)+`:{"mcpServers":{"myserver":{"url":"https://sub.example.com/sse"}}}
+	}}`)
+
+	assertURL(t, Resolve(f.Env, claudeCodeReq("myserver", cwd)), "https://repo.example.com/sse")
+}
+
+// TestClaudeCodeWorktreeSharesMainCheckoutConfig covers a linked worktree, which
+// lives outside its repository's tree and still loads the main checkout's local
+// configuration. A submodule, by contrast, is keyed by its own directory.
+func TestClaudeCodeWorktreeSharesMainCheckoutConfig(t *testing.T) {
+	f := newFixture(t, "darwin")
+	main := f.mkdir(f.path("main"))
+	f.mkdir(filepath.Join(main, ".git", "worktrees", "feature"))
+	f.write(filepath.Join(main, ".git", "worktrees", "feature", "commondir"), "../..\n")
+	worktree := f.mkdir(f.path("feature"))
+	f.write(filepath.Join(worktree, ".git"), "gitdir: "+filepath.Join(main, ".git", "worktrees", "feature")+"\n")
+
+	sub := f.mkdir(filepath.Join(main, "vendor", "lib"))
+	f.mkdir(filepath.Join(main, ".git", "modules", "lib"))
+	f.write(filepath.Join(sub, ".git"), "gitdir: ../../.git/modules/lib\n")
+
+	f.write(f.homePath(".claude.json"), `{"projects":{
+		`+quote(main)+`:{"mcpServers":{"myserver":{"url":"https://main.example.com/sse"}}},
+		`+quote(sub)+`:{"mcpServers":{"myserver":{"url":"https://submodule.example.com/sse"}}}
+	}}`)
+
+	assertURL(t, Resolve(f.Env, claudeCodeReq("myserver", worktree)), "https://main.example.com/sse")
+	assertURL(t, Resolve(f.Env, claudeCodeReq("myserver", sub)), "https://submodule.example.com/sse")
+}
+
+// TestClaudeCodeLaunchDirFromTranscript covers a session whose cwd has moved since
+// launch. Claude Code keeps the configuration it loaded for the launch directory,
+// which the transcript path names; resolving from cwd would read a nested
+// repository's files the session never loaded.
+func TestClaudeCodeLaunchDirFromTranscript(t *testing.T) {
+	f := newFixture(t, "darwin")
+	workspace := f.mkdir(f.path("workspace"))
+	nested := f.mkdir(filepath.Join(workspace, "nested.repo"))
+	f.mkdir(filepath.Join(nested, ".git"))
+	f.write(filepath.Join(workspace, ".mcp.json"), `{"mcpServers":{"myserver":{"url":"https://workspace.example.com/sse"}}}`)
+	f.write(filepath.Join(nested, ".mcp.json"), `{"mcpServers":{"myserver":{"url":"https://nested.example.com/sse"}}}`)
+	f.write(f.homePath(".claude.json"), `{"projects":{
+		`+quote(workspace)+`:{"mcpServers":{"local":{"url":"https://workspace-local.example.com/sse"}}},
+		`+quote(nested)+`:{"mcpServers":{"local":{"url":"https://nested-local.example.com/sse"}}}
+	}}`)
+	transcript := f.homePath(".claude", "projects", claudeProjectSlug(workspace), "0b0e.jsonl")
+
+	req := claudeCodeReq("myserver", nested)
+	assertURL(t, Resolve(f.Env, req), "https://nested.example.com/sse") // no transcript: cwd stands in
+	req.TranscriptPath = transcript
+	assertURL(t, Resolve(f.Env, req), "https://workspace.example.com/sse")
+
+	req.ServerName = "local"
+	assertURL(t, Resolve(f.Env, req), "https://workspace-local.example.com/sse")
+
+	// A subagent's transcript sits below its session's directory.
+	req.TranscriptPath = f.homePath(".claude", "projects", claudeProjectSlug(workspace), "0b0e", "subagents", "agent-1.jsonl")
+	assertURL(t, Resolve(f.Env, req), "https://workspace-local.example.com/sse")
+
+	// A transcript naming no ancestor of cwd is ignored rather than trusted.
+	req.TranscriptPath = f.homePath(".claude", "projects", "-somewhere-else", "0b0e.jsonl")
+	assertURL(t, Resolve(f.Env, req), "https://nested-local.example.com/sse")
+}
+
+// TestClaudeProjectSlug pins the transcript directory name against values
+// computed by Claude Code's own JavaScript, including the truncation hash and a
+// character outside the BMP, which counts as two code units.
+func TestClaudeProjectSlug(t *testing.T) {
+	for _, tc := range []struct{ path, want string }{
+		{"/Users/dev/my.project", "-Users-dev-my-project"},
+		{`C:\Users\Dev\Proj`, "C--Users-Dev-Proj"},
+		{"/Users/dev/" + strings.Repeat("a", 230),
+			"-Users-dev-" + strings.Repeat("a", 189) + "-4qs2i8"},
+		{"/Users/dev/" + strings.Repeat("b", 195) + "/\u00e9\U0001F642x",
+			"-Users-dev-" + strings.Repeat("b", 189) + "-6b4uvt"},
+	} {
+		if got := claudeProjectSlug(tc.path); got != tc.want {
+			t.Errorf("claudeProjectSlug(%q) = %q, want %q", tc.path, got, tc.want)
 		}
-	}
-	if files != 1 {
-		t.Fatalf("consulted %d project files, want 1\n%s", files, resolveTrace(res))
 	}
 }
 
@@ -285,7 +458,8 @@ func TestClaudeCodeMalformedFilesAreSkipped(t *testing.T) {
 
 	res := Resolve(f.Env, claudeCodeReq("myserver", project))
 	assertURL(t, res, "https://global.example.com/sse")
-	if res.Trace[1].Note != "unreadable or malformed" {
+	i := slices.Index(consultedPaths(res), filepath.Join(project, ".mcp.json"))
+	if i < 0 || res.Trace[i].Note != "unreadable or malformed" {
 		t.Fatalf("expected the malformed file to be recorded as such:\n%s", resolveTrace(res))
 	}
 }
@@ -458,13 +632,16 @@ func scopeKeys(scopes []scope) []string {
 	return out
 }
 
-// claudeProjectScopes runs the project walk against a fixture's ~/.claude.json.
-func claudeProjectScopes(t *testing.T, f *fixture, cwd string) []scope {
+// projectScopesFrom runs the project walk against a fixture's ~/.claude.json for a
+// session launched in cwd.
+func projectScopesFrom(t *testing.T, f *fixture, cwd string) []scope {
 	t.Helper()
 	claudePath := f.homePath(".claude.json")
 	var claude claudeJSON
 	res := loadJSON(claudePath, &claude)
-	return projectScopes(newConfigLoader(), f.Env, cwd, claudePath, claude, res, 1)
+	loader := newConfigLoader()
+	project := claudeProjectFor(t.Context(), loader, f.Env, cwd, "")
+	return claudeProjectScopes(loader, f.Env, project, claudePath, claude, res, 1)
 }
 
 func TestAncestorsNearestFirst(t *testing.T) {
@@ -502,23 +679,23 @@ func TestAncestorsIsBounded(t *testing.T) {
 	}
 }
 
-// TestProjectScopesRanksByDepth pins the ordering contract: a deeper directory
-// outranks a shallower one, and within one directory the project file outranks
-// that directory's projects{} entry.
-func TestProjectScopesRanksByDepth(t *testing.T) {
+// TestProjectScopesOrder pins the ordering contract: the local section first,
+// then every project file from the launch directory up, with consecutive ranks.
+func TestProjectScopesOrder(t *testing.T) {
 	f := newFixture(t, "darwin")
 	project := f.mkdir(f.path("proj"))
 	cwd := f.mkdir(filepath.Join(project, "a", "b"))
 	f.write(filepath.Join(cwd, ".mcp.json"), `{"mcpServers":{}}`)
+	f.write(filepath.Join(project, ".mcp.json"), `{"mcpServers":{}}`)
 	f.write(f.homePath(".claude.json"), projectKeysJSON(project, cwd))
 
-	scopes := claudeProjectScopes(t, f, cwd)
+	scopes := projectScopesFrom(t, f, cwd)
 	// The projects{} key is quoted the way the trace renders it, which is the way
 	// the file spells it: a Windows path's backslashes come back escaped.
 	want := []string{
-		filepath.Join(cwd, ".mcp.json") + "  mcpServers",
 		f.homePath(".claude.json") + fmt.Sprintf(`  projects[%q].mcpServers`, cwd),
-		f.homePath(".claude.json") + fmt.Sprintf(`  projects[%q].mcpServers`, project),
+		filepath.Join(cwd, ".mcp.json") + "  mcpServers",
+		filepath.Join(project, ".mcp.json") + "  mcpServers",
 	}
 	if got := scopeKeys(scopes); !slices.Equal(got, want) {
 		t.Fatalf("scopes\n%v\nwant\n%v", got, want)
@@ -530,37 +707,6 @@ func TestProjectScopesRanksByDepth(t *testing.T) {
 	}
 }
 
-// TestProjectScopesTakesOnlyTheNearestProjectFile covers the rule that keeps a
-// stale .mcp.json higher up from speaking for a project: one project root is live
-// per session, so one project file is a scope.
-func TestProjectScopesTakesOnlyTheNearestProjectFile(t *testing.T) {
-	f := newFixture(t, "darwin")
-	outer := f.mkdir(f.path("outer"))
-	inner := f.mkdir(filepath.Join(outer, "inner"))
-	f.write(filepath.Join(outer, ".mcp.json"), `{"mcpServers":{}}`)
-	f.write(filepath.Join(inner, ".mcp.json"), `{"mcpServers":{}}`)
-
-	got := scopeKeys(claudeProjectScopes(t, f, inner))
-	want := []string{filepath.Join(inner, ".mcp.json") + "  mcpServers"}
-	if !slices.Equal(got, want) {
-		t.Fatalf("scopes\n%v\nwant\n%v", got, want)
-	}
-}
-
-// TestProjectScopesFindsTheProjectFileAboveCWD covers a call from a subdirectory:
-// the project file is not in cwd, and it is still the live one.
-func TestProjectScopesFindsTheProjectFileAboveCWD(t *testing.T) {
-	f := newFixture(t, "darwin")
-	project := f.mkdir(f.path("proj"))
-	f.write(filepath.Join(project, ".mcp.json"), `{"mcpServers":{}}`)
-
-	got := scopeKeys(claudeProjectScopes(t, f, f.mkdir(filepath.Join(project, "a", "b"))))
-	want := []string{filepath.Join(project, ".mcp.json") + "  mcpServers"}
-	if !slices.Equal(got, want) {
-		t.Fatalf("scopes\n%v\nwant\n%v", got, want)
-	}
-}
-
 // TestProjectScopesNamesTheAbsentProjectFile covers the diagnostic: with no
 // project file anywhere, the path an operator expects to be read is still named,
 // so a trace says it is absent rather than omitting it.
@@ -568,7 +714,7 @@ func TestProjectScopesNamesTheAbsentProjectFile(t *testing.T) {
 	f := newFixture(t, "darwin")
 	cwd := f.mkdir(f.path("proj"))
 
-	got := scopeKeys(claudeProjectScopes(t, f, cwd))
+	got := scopeKeys(projectScopesFrom(t, f, cwd))
 	want := []string{filepath.Join(cwd, ".mcp.json") + "  mcpServers"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("scopes\n%v\nwant\n%v", got, want)
@@ -576,13 +722,13 @@ func TestProjectScopesNamesTheAbsentProjectFile(t *testing.T) {
 }
 
 // TestProjectScopesIgnoresUnrelatedProjectKeys covers the filter: a configured
-// project that is not on cwd's path governs nothing here.
+// project that is not this session's governs nothing here.
 func TestProjectScopesIgnoresUnrelatedProjectKeys(t *testing.T) {
 	f := newFixture(t, "darwin")
 	cwd := f.mkdir(f.path("here"))
-	f.write(f.homePath(".claude.json"), projectKeysJSON(f.path("elsewhere"), f.path("here-too")))
+	f.write(f.homePath(".claude.json"), projectKeysJSON(f.path("elsewhere"), f.path("here-too"), f.Root))
 
-	for _, s := range claudeProjectScopes(t, f, cwd) {
+	for _, s := range projectScopesFrom(t, f, cwd) {
 		if strings.Contains(s.key, "projects[") {
 			t.Fatalf("consulted an unrelated project: %s", s.key)
 		}
@@ -590,8 +736,8 @@ func TestProjectScopesIgnoresUnrelatedProjectKeys(t *testing.T) {
 }
 
 // TestProjectScopesDirectoryIsNotAProjectFile covers a .mcp.json that is a
-// directory: it cannot be read, so it must not displace the search for a real one
-// further up.
+// directory: it cannot be read, so it is not a scope, and the real one further up
+// still is.
 func TestProjectScopesDirectoryIsNotAProjectFile(t *testing.T) {
 	f := newFixture(t, "darwin")
 	project := f.mkdir(f.path("proj"))
@@ -599,7 +745,7 @@ func TestProjectScopesDirectoryIsNotAProjectFile(t *testing.T) {
 	f.mkdir(filepath.Join(cwd, ".mcp.json"))
 	f.write(filepath.Join(project, ".mcp.json"), `{"mcpServers":{}}`)
 
-	got := scopeKeys(claudeProjectScopes(t, f, cwd))
+	got := scopeKeys(projectScopesFrom(t, f, cwd))
 	want := []string{filepath.Join(project, ".mcp.json") + "  mcpServers"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("scopes\n%v\nwant\n%v", got, want)
@@ -614,9 +760,9 @@ func TestProjectScopesStableAcrossSpellings(t *testing.T) {
 	cwd := f.mkdir(f.path("proj"))
 	f.write(f.homePath(".claude.json"), projectKeysJSON(cwd, cwd+string(filepath.Separator)))
 
-	first := claudeProjectScopes(t, f, cwd)
+	first := projectScopesFrom(t, f, cwd)
 	for range 20 {
-		if got := scopeKeys(claudeProjectScopes(t, f, cwd)); !slices.Equal(got, scopeKeys(first)) {
+		if got := scopeKeys(projectScopesFrom(t, f, cwd)); !slices.Equal(got, scopeKeys(first)) {
 			t.Fatalf("scopes vary across runs:\n%v\n%v", got, scopeKeys(first))
 		}
 	}

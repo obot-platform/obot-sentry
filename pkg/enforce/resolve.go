@@ -86,6 +86,9 @@ type ResolveRequest struct {
 	ServerName string
 	// CWD is the working directory the call was made from.
 	CWD string
+	// TranscriptPath is Claude Code's session transcript, whose directory is named
+	// for the directory the session was launched in. Optional.
+	TranscriptPath string
 	// WorkspaceRoots are Cursor's open workspace roots. They are the only project
 	// context a Cursor payload carries: it sends no usable cwd.
 	WorkspaceRoots []string

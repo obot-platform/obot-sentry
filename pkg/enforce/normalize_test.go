@@ -580,6 +580,38 @@ func TestNormalizeUnresolvedMCPCall(t *testing.T) {
 	}
 }
 
+// TestNormalizeClaudeCodeTranscriptPath covers the payload field that recovers a
+// session's launch directory: it reaches the resolver, and one too long to trust
+// is dropped rather than failing the call.
+func TestNormalizeClaudeCodeTranscriptPath(t *testing.T) {
+	f := newFixture(t, "darwin")
+	launch := f.mkdir(f.path("launch"))
+	cwd := f.mkdir(filepath.Join(launch, "moved"))
+	f.write(filepath.Join(cwd, ".mcp.json"), `{"mcpServers":{"probe":{"url":"https://cwd.example.com/mcp"}}}`)
+	f.write(f.homePath(".claude.json"), `{"projects":{`+quote(launch)+`:{"mcpServers":{"probe":{"url":"https://launch.example.com/mcp"}}}}}`)
+
+	payload := func(transcript string) []byte {
+		return mustJSON(map[string]string{"tool_name": "mcp__probe__echo", "cwd": cwd, "transcript_path": transcript})
+	}
+	call, err := normalizeCall(f.Env, localagent.ClaudeCode, EventPreToolUse,
+		payload(f.homePath(".claude", "projects", claudeProjectSlug(launch), "s.jsonl")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := call.Request.Server.URL; got != "https://launch.example.com/mcp" {
+		t.Fatalf("URL = %q, want the launch directory's server", got)
+	}
+
+	call, err = normalizeCall(f.Env, localagent.ClaudeCode, EventPreToolUse,
+		payload("/"+strings.Repeat("x", maxTranscriptPathBytes)))
+	if err != nil {
+		t.Fatalf("an over-long transcript path failed the call: %v", err)
+	}
+	if got := call.Request.Server.URL; got != "https://cwd.example.com/mcp" {
+		t.Fatalf("URL = %q, want cwd to stand in", got)
+	}
+}
+
 // TestNormalizeMissingToolNameIsAnError covers a payload we cannot understand at
 // all, which the caller turns into a deny.
 func TestNormalizeMissingToolNameIsAnError(t *testing.T) {

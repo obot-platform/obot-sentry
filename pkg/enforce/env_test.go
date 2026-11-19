@@ -116,7 +116,7 @@ func TestEnvPathFallsBackToTheConventionalLocation(t *testing.T) {
 // it, with no fixture root prepended.
 func TestMachinePathIsAbsoluteInProduction(t *testing.T) {
 	env := Env{Home: "/Users/dev", GOOS: "darwin"}
-	for _, abs := range []string{claudeManagedMCPDarwin, "/etc/codex/managed_config.toml"} {
+	for _, abs := range []string{claudeManagedDirDarwin, "/etc/codex/managed_config.toml"} {
 		if got, want := env.machinePath(abs), filepath.FromSlash(abs); got != want {
 			t.Errorf("machinePath(%q) = %q, want %q with nothing prepended", abs, got, want)
 		}
@@ -124,11 +124,11 @@ func TestMachinePathIsAbsoluteInProduction(t *testing.T) {
 
 	// Since nothing is prepended, what comes back is absolute wherever the path
 	// given belongs. Those above are the macOS locations, which are absolute on
-	// macOS; on Windows the equivalent is the drive-letter fallback %PROGRAMFILES%
-	// stands in for.
-	native, nativeEnv := claudeManagedMCPDarwin, env
+	// macOS; on Windows the equivalent is Claude Code's drive-letter managed
+	// directory.
+	native, nativeEnv := claudeManagedDirDarwin, env
 	if runtime.GOOS == "windows" {
-		native, nativeEnv.GOOS = windowsProgramFilesDefault, "windows"
+		native, nativeEnv.GOOS = claudeManagedDirWindows, "windows"
 	}
 	if got := nativeEnv.machinePath(native); !filepath.IsAbs(got) {
 		t.Errorf("machinePath(%q) = %q, want an absolute path", native, got)

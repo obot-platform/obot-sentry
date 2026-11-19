@@ -15,10 +15,11 @@ import (
 
 // preToolPayload is the pre-tool envelope Claude Code and Codex share.
 type preToolPayload struct {
-	ToolName  string `json:"tool_name"`
-	ToolUseID string `json:"tool_use_id,omitempty"`
-	SessionID string `json:"session_id,omitempty"`
-	CWD       string `json:"cwd,omitempty"`
+	ToolName       string `json:"tool_name"`
+	ToolUseID      string `json:"tool_use_id,omitempty"`
+	SessionID      string `json:"session_id,omitempty"`
+	CWD            string `json:"cwd,omitempty"`
+	TranscriptPath string `json:"transcript_path,omitempty"`
 }
 
 type cursorPreToolPayload struct {
@@ -222,11 +223,14 @@ func normalizeCallContext(ctx context.Context, env Env, agent localagent.Agent, 
 }
 
 const (
-	maxToolNameBytes      = 1024
-	maxServerNameBytes    = 1024
-	maxWorkingDirBytes    = 4096
-	maxWorkspaceRoots     = 64
-	maxWorkspaceRootBytes = 4096
+	maxToolNameBytes   = 1024
+	maxServerNameBytes = 1024
+	maxWorkingDirBytes = 4096
+	// maxTranscriptPathBytes leaves room for the configuration directory, the
+	// launch directory's slug, and the session file around a maximal cwd.
+	maxTranscriptPathBytes = 2 * maxWorkingDirBytes
+	maxWorkspaceRoots      = 64
+	maxWorkspaceRootBytes  = 4096
 )
 
 func boundedField(name, value string, maximum int) error {
@@ -251,12 +255,19 @@ func normalizePreTool(ctx context.Context, env Env, agent localagent.Agent, raw 
 	if err := boundedField("cwd", hook.CWD, maxWorkingDirBytes); err != nil {
 		return Call{}, err
 	}
+	// The transcript path only refines which project the call came from, so one
+	// too long to trust is dropped rather than failing the whole payload.
+	transcriptPath := hook.TranscriptPath
+	if len(transcriptPath) > maxTranscriptPathBytes {
+		transcriptPath = ""
+	}
 
 	class := classifyPreTool(toolName)
 	return buildCall(ctx, env, agent, class, ResolveRequest{
-		Agent:      agent,
-		ServerName: class.ServerName,
-		CWD:        hook.CWD,
+		Agent:          agent,
+		ServerName:     class.ServerName,
+		CWD:            hook.CWD,
+		TranscriptPath: transcriptPath,
 	}), nil
 }
 
