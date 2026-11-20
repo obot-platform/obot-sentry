@@ -74,6 +74,18 @@ func claudeMCPPayload(t *testing.T, tool, server, source, cwd string) string {
 	return string(data)
 }
 
+// jsonString encodes s as a JSON string literal, quotes included, for payloads
+// hookPayload does not cover. Like hookPayload, it keeps a Windows path's
+// backslashes from being read as escapes.
+func jsonString(t *testing.T, s string) string {
+	t.Helper()
+	data, err := json.Marshal(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
+}
+
 func writeTempFile(t *testing.T, content string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "payload.json")
@@ -273,7 +285,7 @@ func TestEnforceServerURLIgnoresEnvironment(t *testing.T) {
 
 func TestEnforceProtocolFlagsIgnoreEnvironment(t *testing.T) {
 	home := homeFixture(t)
-	input := writeTempFile(t, `{"tool_name":"Bash","cwd":"`+home+`"}`)
+	input := writeTempFile(t, hookPayload(t, "Bash", home))
 	root := enforceRoot(t, mdmconfig.Config{})
 
 	// These names used to be implicit bindings created by the command builder.
@@ -307,10 +319,10 @@ func TestEnforceProtocolFlagsIgnoreEnvironment(t *testing.T) {
 func TestEnforceInputIgnoresEnvironment(t *testing.T) {
 	home := homeFixture(t)
 	root := enforceRoot(t, mdmconfig.Config{})
-	fake := writeTempFile(t, `{"tool_name":"Read","cwd":"`+home+`"}`)
+	fake := writeTempFile(t, hookPayload(t, "Read", home))
 	t.Setenv("ENFORCE_INPUT", fake)
 
-	stdinPath := writeTempFile(t, `{"tool_name":"Bash","cwd":"`+home+`"}`)
+	stdinPath := writeTempFile(t, hookPayload(t, "Bash", home))
 	stdin, err := os.Open(stdinPath)
 	if err != nil {
 		t.Fatal(err)
@@ -338,7 +350,7 @@ func TestEnforceInputIgnoresEnvironment(t *testing.T) {
 
 func TestEnforceAgentAndEventIgnoreEnvironment(t *testing.T) {
 	home := homeFixture(t)
-	input := writeTempFile(t, `{"tool_name":"Bash","cwd":"`+home+`"}`)
+	input := writeTempFile(t, hookPayload(t, "Bash", home))
 	root := enforceRoot(t, mdmconfig.Config{})
 	t.Setenv("ENFORCE_AGENT", "claude-code")
 	t.Setenv("ENFORCE_EVENT", "PreToolUse")
@@ -355,7 +367,7 @@ func TestEnforceAgentAndEventIgnoreEnvironment(t *testing.T) {
 
 func TestEnforceManagedByIgnoresEnvironment(t *testing.T) {
 	home := homeFixture(t)
-	input := writeTempFile(t, `{"tool_name":"Bash","cwd":"`+home+`"}`)
+	input := writeTempFile(t, hookPayload(t, "Bash", home))
 	root := enforceRoot(t, mdmconfig.Config{})
 	t.Setenv("ENFORCE_MANAGED_BY", "someone-else")
 
@@ -484,7 +496,7 @@ func TestEnforceResolveRejectsUnsupportedAgent(t *testing.T) {
 // on stdout, and a quiet exit 2 that main does not log over.
 func TestEnforceKiroDenyExitsTwoQuietly(t *testing.T) {
 	home := homeFixture(t)
-	input := writeTempFile(t, `{"session_id":"sess_x","hook_event_name":"PreToolUse","cwd":"`+home+`","tool_name":"execute_bash","tool_input":{"command":"ls"}}`)
+	input := writeTempFile(t, `{"session_id":"sess_x","hook_event_name":"PreToolUse","cwd":`+jsonString(t, home)+`,"tool_name":"execute_bash","tool_input":{"command":"ls"}}`)
 
 	stdout, stderr, err := runCommand(t, enforceRoot(t, mdmconfig.Config{}),
 		"enforce", "--agent", "kiro", "--event", "PreToolUse", "--input", input)

@@ -92,20 +92,23 @@ func TestConfigLoaderCancellationDoesNotPoisonCache(t *testing.T) {
 func TestEnvPathFallsBackToTheConventionalLocation(t *testing.T) {
 	f := newFixture(t, "windows")
 
-	got := f.Env.envPath("ProgramData", `C:\ProgramData`, "OpenAI", "Codex", "managed_config.toml")
-	want := filepath.Join(f.Env.MachineRoot, `C:\ProgramData`, "OpenAI", "Codex", "managed_config.toml")
+	got := f.Env.envPath("ProgramData", "C:/ProgramData", "OpenAI", "Codex", "managed_config.toml")
+	want := filepath.Join(f.machinePath("C:/ProgramData"), "OpenAI", "Codex", "managed_config.toml")
+	if strings.Contains(strings.TrimPrefix(want, filepath.VolumeName(want)), ":") {
+		t.Fatalf("fallback %q carries a drive letter below the machine root", want)
+	}
 	if got != want {
 		t.Fatalf("envPath = %q, want %q", got, want)
 	}
 
 	f.setenv("ProgramData", f.path("ProgramData"))
-	got = f.Env.envPath("ProgramData", `C:\ProgramData`, "OpenAI", "Codex", "managed_config.toml")
+	got = f.Env.envPath("ProgramData", "C:/ProgramData", "OpenAI", "Codex", "managed_config.toml")
 	if want := f.path("ProgramData", "OpenAI", "Codex", "managed_config.toml"); got != want {
 		t.Fatalf("envPath = %q, want %q", got, want)
 	}
 
 	f.setenv("ProgramData", "relative-program-data")
-	got = f.Env.envPath("ProgramData", `C:\ProgramData`, "OpenAI", "Codex", "managed_config.toml")
+	got = f.Env.envPath("ProgramData", "C:/ProgramData", "OpenAI", "Codex", "managed_config.toml")
 	if got != want {
 		t.Fatalf("envPath with relative override = %q, want fallback %q", got, want)
 	}

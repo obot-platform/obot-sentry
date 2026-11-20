@@ -68,7 +68,7 @@ unless the answer is an explicit allow.
 
 | Agent | File | Events added |
 |---|---|---|
-| Claude Code | `/Library/Application Support/ClaudeCode/managed-settings.json` (macOS), `%ProgramFiles%\ClaudeCode\managed-settings.json` | `PreToolUse` |
+| Claude Code | `/Library/Application Support/ClaudeCode/managed-settings.json` (macOS), `C:\Program Files\ClaudeCode\managed-settings.json` | `PreToolUse` |
 | Codex | `/etc/codex/requirements.toml` (macOS), `%ProgramData%\OpenAI\Codex\requirements.toml` | `PreToolUse` |
 | Cursor | `/Library/Application Support/Cursor/hooks.json` (macOS), `%ProgramData%\Cursor\hooks.json` | `beforeMCPExecution`, `preToolUse` |
 | Kiro | `~/.kiro/hooks/obot-sentry.json` | `PreToolUse` |
@@ -256,7 +256,9 @@ can delete it. The hourly `hook-install` task re-converges it, so the bypass
 window is bounded by that interval rather than permanent.
 
 Claude Code's hooks are installed in its managed settings file, which Claude
-Code reads from a fixed path. Starting Claude Code with a different
+Code reads from a fixed path. On Windows that path is always on drive `C:`,
+even on a machine whose Program Files folder has been moved, so `hook-install`
+writes there too. Starting Claude Code with a different
 `CLAUDE_CONFIG_DIR` therefore does not skip them, and they keep running when an
 administrator sets `allowManagedHooksOnly`. MCP servers are resolved against
 `$CLAUDE_CONFIG_DIR/.claude.json` and `$CLAUDE_CONFIG_DIR/plugins` when the
@@ -320,7 +322,7 @@ are:
 
 | Agent | macOS | Windows |
 |---|---|---|
-| Claude Code | `/Library/Application Support/ClaudeCode/managed-settings.json` | `%ProgramFiles%\ClaudeCode\managed-settings.json` |
+| Claude Code | `/Library/Application Support/ClaudeCode/managed-settings.json` | `C:\Program Files\ClaudeCode\managed-settings.json` |
 | Claude Code (user settings, earlier releases) | `~/.claude/settings.json` | `%USERPROFILE%\.claude\settings.json` |
 | Codex | `/etc/codex/requirements.toml` | `%ProgramData%\OpenAI\Codex\requirements.toml` |
 | Copilot (VS Code) hook | `~/.copilot/hooks/obot-sentry.json` | `%USERPROFILE%\.copilot\hooks\obot-sentry.json` |

@@ -233,11 +233,11 @@ func normalizeCallContext(ctx context.Context, env Env, agent localagent.Agent, 
 }
 
 const (
-	maxToolNameBytes   = 1024
-	maxServerNameBytes = 1024
-	maxWorkingDirBytes = 4096
-	maxWorkspaceRoots      = 64
-	maxWorkspaceRootBytes  = 4096
+	maxToolNameBytes      = 1024
+	maxServerNameBytes    = 1024
+	maxWorkingDirBytes    = 4096
+	maxWorkspaceRoots     = 64
+	maxWorkspaceRootBytes = 4096
 )
 
 func boundedField(name, value string, maximum int) error {

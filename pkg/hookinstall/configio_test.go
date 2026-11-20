@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -307,5 +308,39 @@ func TestRootForMachineUsesVolumeRoot(t *testing.T) {
 	}
 	if filepath.Join(rootDir, rel) != filepath.Clean(abs) {
 		t.Fatalf("root+rel = %q, want %q", filepath.Join(rootDir, rel), filepath.Clean(abs))
+	}
+}
+
+// TestWriteAtomicErrorsNameTheAbsolutePath covers a failed replace. os.Root
+// reports paths relative to the root, which for a machine file on Windows is
+// the path without its drive ("Program Files\..."), so the error has to name
+// the file the caller knows instead.
+func TestWriteAtomicErrorsNameTheAbsolutePath(t *testing.T) {
+	dir := t.TempDir()
+	// A non-empty directory where the file belongs: no platform renames a file
+	// over one.
+	if err := os.MkdirAll(filepath.Join(dir, "managed-settings.json", "occupied"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = root.Close() })
+
+	abs := filepath.Join(dir, "managed-settings.json")
+	err = writeAtomic(root, "managed-settings.json", abs, []byte("{}"), 0o644)
+	if err == nil {
+		t.Fatal("writeAtomic replaced a non-empty directory")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, fmt.Sprintf("%q", abs)) {
+		t.Fatalf("error %q does not name %s", msg, abs)
+	}
+	if strings.Contains(msg, "obot-sentry-tmp") {
+		t.Fatalf("error %q leaks the root-relative temporary path", msg)
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 1 {
+		t.Fatalf("temporary file left behind: %v", entries)
 	}
 }

@@ -390,13 +390,23 @@ func TestClaudeCodeConfigDirRelocatesClaudeJSON(t *testing.T) {
 // variable, so trimming it here would read a file the session does not.
 func TestClaudeCodeConfigDirIsUsedVerbatim(t *testing.T) {
 	f := newFixture(t, "darwin")
-	req := claudeCodeReq(claudeSourceUser, "myserver", f.path("proj"))
+	project := f.path("proj")
+	req := claudeCodeReq(claudeSourceUser, "myserver", project)
 	f.write(f.homePath(".claude.json"), `{"mcpServers":{"myserver":{"type":"http","url":"https://home.example.com/sse"}}}`)
 	f.write(filepath.Join(f.path("alt"), ".claude.json"), `{"mcpServers":{"myserver":{"type":"http","url":"https://alt.example.com/sse"}}}`)
-	f.write(filepath.Join(f.path("alt "), ".claude.json"), `{"mcpServers":{"myserver":{"type":"http","url":"https://alt-space.example.com/sse"}}}`)
 
-	f.setenv(claudeConfigDirEnv, f.path("alt "))
-	assertURL(t, Resolve(f.Env, req), "https://alt-space.example.com/sse")
+	// Windows strips trailing spaces from a path's final name, so a directory
+	// named "alt " cannot exist there.
+	if runtime.GOOS != "windows" {
+		f.write(filepath.Join(f.path("alt "), ".claude.json"), `{"mcpServers":{"myserver":{"type":"http","url":"https://alt-space.example.com/sse"}}}`)
+		f.setenv(claudeConfigDirEnv, f.path("alt "))
+		assertURL(t, Resolve(f.Env, req), "https://alt-space.example.com/sse")
+	}
+
+	// Leading whitespace makes an absolute directory relative. Trimmed, it
+	// would read the "alt" file, which this session does not.
+	f.setenv(claudeConfigDirEnv, " "+f.path("alt"))
+	assertUnresolved(t, Resolve(f.Env, req), "relative path")
 
 	// Only spaces is a relative directory name to Claude Code, not unset, so it
 	// must not fall back to the home file.
