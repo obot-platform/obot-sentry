@@ -213,25 +213,26 @@ func resolveClaudeCode(ctx context.Context, loader *configLoader, env Env, req R
 		}})
 	}
 
-	// The local, project, and plugin scopes depend on the directory the session
-	// was started or resumed in.
-	project, ok := claudeProjectFor(ctx, loader, req.ProjectDir)
-	if !ok {
-		return unresolved(serverName, fmt.Sprintf(
-			"Claude Code did not give the hook a usable %s, so the directory it loaded %s MCP servers for is not known",
-			ClaudeProjectDirEnv, source))
-	}
 	var (
 		scopes     []scope
 		incomplete bool
 	)
-	switch source {
-	case claudeSourceLocal:
-		scopes = claudeLocalScopes(env, project, claudePath, claude, claudeRes)
-	case claudeSourceProject:
-		scopes = claudeProjectFileScopes(loader, project)
-	case claudeSourcePlugin:
-		scopes = claudePluginScopes(ctx, loader, env, configDir, project, serverName, 0, &incomplete)
+	if source == claudeSourcePlugin {
+		scopes = claudePluginScopes(ctx, loader, configDir, serverName, 0, &incomplete)
+	} else {
+		// The local and project scopes depend on the directory the session was
+		// started or resumed in.
+		project, ok := claudeProjectFor(ctx, loader, req.ProjectDir)
+		if !ok {
+			return unresolved(serverName, fmt.Sprintf(
+				"Claude Code did not give the hook a usable %s, so the directory it loaded %s MCP servers for is not known",
+				ClaudeProjectDirEnv, source))
+		}
+		if source == claudeSourceLocal {
+			scopes = claudeLocalScopes(env, project, claudePath, claude, claudeRes)
+		} else {
+			scopes = claudeProjectFileScopes(loader, project)
+		}
 	}
 	m, out := resolveScopes(ctx, scopes, names, tr)
 	if incomplete {

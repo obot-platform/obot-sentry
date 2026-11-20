@@ -86,9 +86,9 @@ func TestClaudeCodePluginInlineManifest(t *testing.T) {
 }
 
 // TestClaudeCodePluginInstallScopes covers which installations can serve a
-// session: a project- or local-scoped one only serves the project it was
-// installed for, and installations that disagree about a server leave it
-// ambiguous rather than picking one.
+// session: every one, whatever its scope, since a project's settings can enable
+// a plugin installed for another project. Installations that disagree about a
+// server leave it ambiguous rather than picking one.
 func TestClaudeCodePluginInstallScopes(t *testing.T) {
 	f := newFixture(t, "darwin")
 	project := f.mkdir(f.path("proj"))
@@ -97,19 +97,25 @@ func TestClaudeCodePluginInstallScopes(t *testing.T) {
 	v2 := f.mkdir(f.path("cache", "p", "2.0.0"))
 	f.write(filepath.Join(v1, ".mcp.json"), `{"s":{"type":"http","url":"https://v1.example.com/mcp"}}`)
 	f.write(filepath.Join(v2, ".mcp.json"), `{"s":{"type":"http","url":"https://v2.example.com/mcp"}}`)
+
 	f.pluginRegistry(f.homePath(".claude"), `{"version":2,"plugins":{"p@mkt":[`+
-		`{"scope":"project","installPath":`+quote(v1)+`,"projectPath":`+quote(project)+`},`+
-		`{"scope":"local","installPath":`+quote(v2)+`,"projectPath":`+quote(other)+`}]}}`)
-
+		`{"scope":"project","installPath":`+quote(v1)+`,"projectPath":`+quote(project)+`}]}}`)
 	assertURL(t, Resolve(f.Env, pluginReq("p", "s", project)), "https://v1.example.com/mcp")
-	assertURL(t, Resolve(f.Env, pluginReq("p", "s", other)), "https://v2.example.com/mcp")
-	assertUnresolved(t, Resolve(f.Env, pluginReq("p", "s", f.mkdir(f.path("third")))), "did not find it there")
+	assertURL(t, Resolve(f.Env, pluginReq("p", "s", other)), "https://v1.example.com/mcp")
 
+	// A user-scoped installation and a local-scoped one for another project:
+	// that project's install can be enabled here too, so neither identifies it.
 	f.pluginRegistry(f.homePath(".claude"), `{"version":2,"plugins":{"p@mkt":[`+
 		`{"scope":"user","installPath":`+quote(v1)+`},`+
 		`{"scope":"local","installPath":`+quote(v2)+`,"projectPath":`+quote(project)+`}]}}`)
 	assertUnresolved(t, Resolve(f.Env, pluginReq("p", "s", project)), "conflicting definitions")
-	assertURL(t, Resolve(f.Env, pluginReq("p", "s", other)), "https://v1.example.com/mcp")
+	assertUnresolved(t, Resolve(f.Env, pluginReq("p", "s", other)), "conflicting definitions")
+
+	// The same holds across plugins of one name from different marketplaces.
+	f.pluginRegistry(f.homePath(".claude"), `{"version":2,"plugins":{`+
+		`"p@good":[{"scope":"user","installPath":`+quote(v1)+`}],`+
+		`"p@evil":[{"scope":"project","installPath":`+quote(v2)+`,"projectPath":`+quote(project)+`}]}}`)
+	assertUnresolved(t, Resolve(f.Env, pluginReq("p", "s", other)), "conflicting definitions")
 }
 
 // TestClaudeCodePluginRegistryFollowsConfigDir covers CLAUDE_CONFIG_DIR, which

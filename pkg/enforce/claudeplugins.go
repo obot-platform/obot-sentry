@@ -33,26 +33,25 @@ const (
 
 // claudePluginInstall is one installation recorded in installed_plugins.json.
 type claudePluginInstall struct {
-	Scope       string
 	InstallPath string
-	ProjectPath string
 }
 
-// claudePluginScopes returns one scope per plugin installation that may serve
-// this project, all at rank: peers, because which installation a session loads
-// depends on settings the resolver does not reproduce. Installations that define
-// a server alike identify it; ones that disagree leave it ambiguous.
+// claudePluginScopes returns one scope per plugin installation, all at rank:
+// peers, because which installation a session loads depends on settings the
+// resolver does not reproduce. Installations that define a server alike identify
+// it; ones that disagree leave it ambiguous.
 //
-// A user-scoped installation serves every project. A project- or local-scoped one
-// records the directory it was installed from, and serves only a session
-// started or resumed there or keyed to that project root.
+// Every installation is a candidate, whatever its scope. A project- or
+// local-scoped one records the directory it was installed from, but Claude Code
+// loads it in any session whose settings enable the plugin, so a project's
+// committed settings can switch on a plugin installed for another project.
 //
 // Only installations of a plugin that can define server, whose name begins
 // "plugin:<plugin>:", are considered: no other plugin can define or override it.
 // incomplete is set when one of them, or one of its server files, went unread
 // for a bound (see maxClaudePluginInstalls), either here or when a scope loads;
 // the scopes then do not settle which definition the session runs.
-func claudePluginScopes(ctx context.Context, loader *configLoader, env Env, configDir string, project claudeProject, server string, rank int, incomplete *bool) []scope {
+func claudePluginScopes(ctx context.Context, loader *configLoader, configDir, server string, rank int, incomplete *bool) []scope {
 	registryPath := filepath.Join(configDir, "plugins", claudePluginRegistry)
 	var raw json.RawMessage
 	res := loader.loadStrictJSON(ctx, registryPath, &raw, maxConfigBytes)
@@ -85,7 +84,7 @@ func claudePluginScopes(ctx context.Context, loader *configLoader, env Env, conf
 				*incomplete = true
 				return scopes
 			}
-			if !filepath.IsAbs(install.InstallPath) || !pluginServesProject(env, install, project) {
+			if !filepath.IsAbs(install.InstallPath) {
 				continue
 			}
 			s := scope{key: "plugin " + id, rank: rank}
@@ -303,25 +302,10 @@ func decodePluginInstalls(raw json.RawMessage) []claudePluginInstall {
 			continue
 		}
 		var install claudePluginInstall
-		install.Scope, _, _ = exactString(members, "scope")
 		install.InstallPath, _, _ = exactString(members, "installPath")
-		install.ProjectPath, _, _ = exactString(members, "projectPath")
 		installs = append(installs, install)
 	}
 	return installs
-}
-
-func pluginServesProject(env Env, install claudePluginInstall, project claudeProject) bool {
-	switch install.Scope {
-	case "project", "local":
-	default:
-		return true
-	}
-	if install.ProjectPath == "" || project.projectDir == "" {
-		return false
-	}
-	at := env.comparableDir(install.ProjectPath)
-	return at == env.comparableDir(project.projectDir) || at == env.comparableDir(project.root)
 }
 
 // pluginServers loads one installation's servers the way Claude Code merges

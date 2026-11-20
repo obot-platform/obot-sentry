@@ -227,9 +227,13 @@ denied.
 
 Plugin servers are resolved only while the managed settings set
 `disableSideloadFlags` (see above); otherwise a plugin loaded for the session
-alone could pass for an installed one, and they are left unresolved.
+alone could pass for an installed one, and they are left unresolved. Every
+installation of the plugin counts, whatever its scope: Claude Code loads a
+plugin installed for one project in any session whose settings enable it, so a
+project's committed settings can switch on another project's installation.
+Installations that define the server differently leave it unresolved.
 
-`local`, `project` and `plugin` servers are read for the directory the session
+`local` and `project` servers are read for the directory the session
 was started or resumed in, which Claude Code gives every hook as
 `CLAUDE_PROJECT_DIR`; a session keeps that configuration after changing
 directories, and a resumed session loads it from wherever it was resumed. Pass
