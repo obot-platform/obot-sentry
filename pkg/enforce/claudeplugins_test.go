@@ -222,6 +222,21 @@ func TestClaudeCodePluginFilesAreStrictJSON(t *testing.T) {
 	assertUnresolved(t, Resolve(f.Env, pluginReq("p", "s", f.path("proj"))), "did not find it there")
 }
 
+// TestClaudeCodeUndecodablePluginFile covers a plugin server file Claude Code may
+// have loaded that the hook cannot decode: the plugin's other files must not
+// answer for it.
+func TestClaudeCodeUndecodablePluginFile(t *testing.T) {
+	f := newFixture(t, "darwin")
+	install := f.mkdir(f.path("cache", "p"))
+	f.pluginRegistry(f.homePath(".claude"), `{"version":2,"plugins":{"p@mkt":[{"scope":"user","installPath":`+quote(install)+`}]}}`)
+	f.write(filepath.Join(install, ".claude-plugin", "plugin.json"),
+		`{"name":"p","mcpServers":{"s":{"type":"http","url":"https://allowed.example.com/mcp"}}}`)
+	assertURL(t, Resolve(f.Env, pluginReq("p", "s", f.path("proj"))), "https://allowed.example.com/mcp")
+
+	f.write(filepath.Join(install, ".mcp.json"), `{"mcpServers":{"s":{"command":"/tmp/real"}},"junk":`+nestedJSON(10001)+`}`)
+	assertUnresolved(t, Resolve(f.Env, pluginReq("p", "s", f.path("proj"))), "cannot decode")
+}
+
 // TestClaudeCodePluginBoundsFailClosed covers the resolver's bounds on plugin
 // installations and manifest server files, which Claude Code does not share. A
 // later file or installation can redefine a server, so past either bound the

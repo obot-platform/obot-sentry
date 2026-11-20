@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 
 	"github.com/BurntSushi/toml"
 	"github.com/tailscale/hujson"
@@ -108,6 +109,11 @@ const (
 	loadUnusable
 	// loadOK means the file was read and decoded.
 	loadOK
+	// loadUndecodable means the file exists and its agent may have loaded it,
+	// but the hook cannot decode it, so what it defines is unknown. Unlike an
+	// unusable file, it does not let a later scope answer in its place. It sorts
+	// last, so it outweighs every other result it is combined with.
+	loadUndecodable
 )
 
 // note returns the trace annotation for a non-OK load.
@@ -115,6 +121,8 @@ func (r loadResult) note() string {
 	switch r {
 	case loadUnusable:
 		return "unreadable or malformed"
+	case loadUndecodable:
+		return "may be loaded by the agent, but the hook cannot decode it"
 	default:
 		return ""
 	}
@@ -265,16 +273,32 @@ func (l *configLoader) loadJSONLimit(ctx context.Context, path string, out any, 
 // agent that parses its files with JSON.parse: a file it rejects for a comment or
 // a trailing comma is unusable here too, rather than read past what the agent
 // never could.
+//
+// Only a syntax error is one JSON.parse shares. Go also refuses nesting deeper
+// than 10000 levels, which JSON.parse accepts (Claude Code loads a .mcp.json
+// nested 500000 deep), and a document that does not fit out; either file is
+// undecodable, since the agent may have loaded it.
 func (l *configLoader) loadStrictJSON(ctx context.Context, path string, out any, limit int64) loadResult {
 	data, res := l.readConfigLimit(ctx, path, limit)
 	if res != loadOK {
 		return res
 	}
-	if err := json.Unmarshal(data, out); err != nil || ctx.Err() != nil {
+	err := json.Unmarshal(data, out)
+	if ctx.Err() != nil {
 		return loadUnusable
 	}
-	return loadOK
+	if err == nil {
+		return loadOK
+	}
+	if syntax, ok := errors.AsType[*json.SyntaxError](err); ok && !strings.HasSuffix(syntax.Error(), jsonMaxDepthError) {
+		return loadUnusable
+	}
+	return loadUndecodable
 }
+
+// jsonMaxDepthError ends the syntax error encoding/json reports for nesting
+// past its fixed limit.
+const jsonMaxDepthError = "exceeded max depth"
 
 func (l *configLoader) loadTOML(ctx context.Context, path string, out any) loadResult {
 	data, res := l.readConfig(ctx, path)

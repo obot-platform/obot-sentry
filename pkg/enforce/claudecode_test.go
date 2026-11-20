@@ -335,6 +335,77 @@ func TestClaudeCodeProjectFileSizeCap(t *testing.T) {
 	assertUnresolved(t, Resolve(f.Env, req), "did not find it there")
 }
 
+// nestedJSON is a JSON array nested depth levels deep.
+func nestedJSON(depth int) string {
+	return strings.Repeat("[", depth) + strings.Repeat("]", depth)
+}
+
+// TestClaudeCodeUndecodableFileDoesNotFallThrough covers a file Claude Code may
+// have loaded that the hook cannot decode. encoding/json refuses nesting past
+// 10000 levels, which JSON.parse accepts, so Claude Code loads such a .mcp.json
+// (verified 500000 deep). Skipping it would let a shallower file's definition
+// answer for the one Claude Code runs. Only a file JSON.parse also rejects may
+// be skipped.
+func TestClaudeCodeUndecodableFileDoesNotFallThrough(t *testing.T) {
+	f := newFixture(t, "darwin")
+	repo := f.mkdir(f.path("repo"))
+	sub := f.mkdir(filepath.Join(repo, "sub"))
+	f.write(filepath.Join(repo, ".mcp.json"), `{"mcpServers":{"probe":{"type":"http","url":"https://allowed.example.com/mcp"}}}`)
+	req := claudeCodeReq(claudeSourceProject, "probe", sub)
+	deep := func(depth int) string {
+		return `{"mcpServers":{"probe":{"command":"/tmp/real"}},"junk":` + nestedJSON(depth) + `}`
+	}
+
+	f.write(filepath.Join(sub, ".mcp.json"), deep(9000))
+	assertCommand(t, Resolve(f.Env, req), "/tmp/real")
+
+	for name, doc := range map[string]string{
+		"nested past encoding/json's limit": deep(10001),
+		"not an object":                     `[]`,
+		"mcpServers not an object":          `{"mcpServers":[]}`,
+	} {
+		f.write(filepath.Join(sub, ".mcp.json"), doc)
+		if res := Resolve(f.Env, req); !res.Unresolved || !strings.Contains(res.Reason, "cannot decode") {
+			t.Errorf("%s: want unresolved as undecodable, got unresolved=%v reason=%q\n%s", name, res.Unresolved, res.Reason, resolveTrace(res))
+		}
+	}
+
+	// A file JSON.parse rejects is skipped by Claude Code too.
+	f.write(filepath.Join(sub, ".mcp.json"), `{"mcpServers":{"probe":{"command":"/tmp/real"},}}`)
+	assertURL(t, Resolve(f.Env, req), "https://allowed.example.com/mcp")
+
+	// A managed-settings.d drop-in that cannot be decoded may override the base
+	// file's definition.
+	f.write(f.Env.claudeManagedPath(claudeManagedSettings), `{"managedMcpServers":{"myserver":`+managedServer("https://base.example.com/sse")+`}}`)
+	managed := claudeCodeReq(claudeSourceManaged, "myserver", sub)
+	assertURL(t, Resolve(f.Env, managed), "https://base.example.com/sse")
+	f.write(f.Env.claudeManagedPath(claudeManagedDropInDir, "10.json"),
+		`{"managedMcpServers":{"myserver":`+managedServer("https://override.example.com/sse")+`},"junk":`+nestedJSON(10001)+`}`)
+	assertUnresolved(t, Resolve(f.Env, managed), "cannot decode")
+}
+
+// TestClaudeCodeProjectDirKeepsWhitespace covers a project directory whose name
+// ends in a space, which macOS allows. It is not its sibling without the space,
+// so the sibling's .mcp.json must not answer for it.
+func TestClaudeCodeProjectDirKeepsWhitespace(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows strips trailing spaces from a path's final name")
+	}
+	f := newFixture(t, "darwin")
+	sibling := f.mkdir(f.path("work", "app"))
+	spaced := f.mkdir(f.path("work", "app "))
+	f.write(filepath.Join(sibling, ".mcp.json"), `{"mcpServers":{"probe":{"type":"http","url":"https://allowed.example.com/mcp"}}}`)
+	req := claudeCodeReq(claudeSourceProject, "probe", spaced)
+	assertUnresolved(t, Resolve(f.Env, req), "did not find it there")
+
+	f.write(filepath.Join(spaced, ".mcp.json"), `{"mcpServers":{"probe":{"command":"/tmp/real"}}}`)
+	assertCommand(t, Resolve(f.Env, req), "/tmp/real")
+
+	// Nor does the sibling's projects{} entry.
+	f.write(f.homePath(".claude.json"), `{"projects":{`+quote(sibling)+`:{"mcpServers":{"local":{"type":"http","url":"https://allowed.example.com/mcp"}}}}}`)
+	assertUnresolved(t, Resolve(f.Env, claudeCodeReq(claudeSourceLocal, "local", spaced)), "did not find it there")
+}
+
 // TestClaudeCodeClaudeJSONMustBeRead covers .claude.json, which holds the local
 // and user scopes. Claude Code reads it whole however large it grows, so the
 // resolver reads past its general limit, and says so when it cannot read it.
@@ -943,10 +1014,11 @@ func TestComparableDirCaseFoldsOnWindows(t *testing.T) {
 	if got := darwin.comparableDir(mixed); got != mixed {
 		t.Fatalf("comparableDir = %q, want the path unchanged", got)
 	}
-	if got := darwin.comparableDir("  " + mixed + string(filepath.Separator) + "  "); got != mixed {
-		t.Fatalf("comparableDir = %q, want it trimmed and cleaned", got)
+	if got := darwin.comparableDir(mixed + string(filepath.Separator)); got != mixed {
+		t.Fatalf("comparableDir = %q, want it cleaned", got)
 	}
-	if got := darwin.comparableDir("   "); got != "" {
-		t.Fatalf("comparableDir = %q, want empty", got)
+	// Whitespace is part of a directory's name.
+	if got := darwin.comparableDir(mixed + " "); got != mixed+" " {
+		t.Fatalf("comparableDir = %q, want the trailing space kept", got)
 	}
 }

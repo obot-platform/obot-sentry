@@ -88,6 +88,9 @@ const (
 	outcomeFound
 	// outcomeAmbiguous means peer scopes defined the name differently.
 	outcomeAmbiguous
+	// outcomeUndecodable means a scope the agent may have loaded the name from
+	// could not be decoded; the match's key is that scope's path.
+	outcomeUndecodable
 )
 
 // match is a server declaration found in some scope.
@@ -109,6 +112,10 @@ func resolveScopes(ctx context.Context, scopes []scope, names lookup, tr *tracer
 		for ; j < len(scopes) && scopes[j].rank == scopes[i].rank; j++ {
 			s := scopes[j]
 			set, res := s.load(ctx)
+			if res == loadUndecodable {
+				tr.miss(s.path, s.traceKey(""), res)
+				return match{key: s.path}, outcomeUndecodable
+			}
 			if res != loadOK {
 				tr.miss(s.path, s.traceKey(""), res)
 				continue

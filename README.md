@@ -236,7 +236,10 @@ directories, and a resumed session loads it from wherever it was resumed. Pass
 `--project-dir` to reproduce a hook call; without it, the current directory
 stands in. A hook run without `CLAUDE_PROJECT_DIR` leaves those servers
 unresolved. Claude Code's files are parsed as strict JSON, as Claude Code parses
-them, so a file with comments or trailing commas is skipped. A plugin from a
+them, so a file with comments or trailing commas is skipped. A file Claude Code
+may have loaded but the hook cannot decode, such as one nested more than 10000
+levels deep or a `.mcp.json` that isn't an object, leaves the server unresolved
+rather than letting another file answer for it. A plugin from a
 marketplace added from a local folder or catalog file is read from that folder,
 which is where Claude Code loads it.
 

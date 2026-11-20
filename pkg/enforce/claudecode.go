@@ -241,6 +241,8 @@ func resolveClaudeCode(ctx context.Context, loader *configLoader, env Env, req R
 	switch out {
 	case outcomeAmbiguous:
 		return ambiguous(req.Agent, serverName)
+	case outcomeUndecodable:
+		return claudeUndecodable(serverName, m.key)
 	case outcomeFound:
 	default:
 		return claudeNotFound(serverName, source)
@@ -275,8 +277,19 @@ func claudeResolveIn(ctx context.Context, env Env, req ResolveRequest, serverNam
 		return resolved(env, m.key, m.entry)
 	case outcomeAmbiguous:
 		return ambiguous(req.Agent, serverName)
+	case outcomeUndecodable:
+		return claudeUndecodable(serverName, m.key)
 	}
 	return claudeNotFound(serverName, source)
+}
+
+// claudeUndecodable reports a file Claude Code may have loaded the server from
+// that the hook cannot decode, such as one nested deeper than encoding/json
+// allows. Skipping it would let a file Claude Code did not use answer instead.
+func claudeUndecodable(serverName, path string) Resolution {
+	return unresolved(serverName, fmt.Sprintf(
+		"Claude Code may have loaded MCP server %q from %s, which the hook cannot decode, so its definition cannot be settled",
+		serverName, path))
 }
 
 // claudeNotFound reports a server Claude Code loaded from source that the
@@ -409,7 +422,7 @@ func managedSettingsServers(loader *configLoader, path string) func(context.Cont
 		}
 		members, ok := exactObject(raw)
 		if !ok {
-			return nil, loadUnusable
+			return nil, loadUndecodable
 		}
 		table, _ := objectMember(members, claudeManagedServersKey)
 		accepted := make(map[string]json.RawMessage, len(table))
@@ -667,8 +680,9 @@ func projectFiles(dir string) []string {
 
 // ancestors returns an absolute cwd and each directory above it, nearest first.
 // A relative cwd cannot identify a stable configuration scope and is ignored.
+// Whitespace is part of a directory's name ("/work/app " is not "/work/app"), so
+// it is not trimmed.
 func ancestors(cwd string) []string {
-	cwd = strings.TrimSpace(cwd)
 	if cwd == "" || !filepath.IsAbs(cwd) {
 		return nil
 	}
@@ -686,9 +700,8 @@ func ancestors(cwd string) []string {
 }
 
 // comparableDir is the form of a directory path used to decide whether two paths
-// name the same directory.
+// name the same directory. Like ancestors, it keeps whitespace.
 func (e Env) comparableDir(path string) string {
-	path = strings.TrimSpace(path)
 	if path == "" {
 		return ""
 	}

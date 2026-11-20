@@ -399,7 +399,7 @@ func pluginServerFile(ctx context.Context, loader *configLoader, path string) (s
 	}
 	doc, ok := exactObject(raw)
 	if !ok {
-		return nil, loadUnusable
+		return nil, loadUndecodable
 	}
 	if wrapped, ok := objectMember(doc, mcpServersKey); ok && wrapped != nil {
 		return claudeServers(wrapped), loadOK

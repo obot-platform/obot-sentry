@@ -165,8 +165,10 @@ func objectMember(members map[string]json.RawMessage, key string) (table map[str
 // claudeJSONServers reads the mcpServers table of a Claude Code JSON
 // configuration file, such as .mcp.json or managed-mcp.json.
 //
-// Claude Code skips such a file over claudeMCPConfigMaxBytes, so it is unusable
-// here too, and a shallower .mcp.json answers in its place.
+// Claude Code skips such a file over claudeMCPConfigMaxBytes, or one JSON.parse
+// rejects, so it is unusable here too, and a shallower .mcp.json answers in its
+// place. One that parses but is not an object, or whose mcpServers is not one, is
+// undecodable instead: whatever Claude Code makes of it, the hook cannot match.
 func claudeJSONServers(loader *configLoader, path string) func(context.Context) (serverSet, loadResult) {
 	return func(ctx context.Context) (serverSet, loadResult) {
 		var raw json.RawMessage
@@ -175,11 +177,11 @@ func claudeJSONServers(loader *configLoader, path string) func(context.Context) 
 		}
 		members, ok := exactObject(raw)
 		if !ok {
-			return nil, loadUnusable
+			return nil, loadUndecodable
 		}
 		table, ok := objectMember(members, mcpServersKey)
 		if !ok {
-			return nil, loadUnusable
+			return nil, loadUndecodable
 		}
 		return claudeServers(table), loadOK
 	}
