@@ -203,16 +203,30 @@ matched exactly:
 
 Servers from `--mcp-config`, the Agent SDK, or an agent definition (`dynamic`,
 `sdk` and `agent`) are left unresolved, since the hook cannot read their
-definitions, and so is an MCP call whose payload has no `mcp_server`. Claude
+definitions, apart from Claude Code's built-in servers, which are reported by
+name. So is an MCP call whose payload has no `mcp_server`. Claude
 Code first sends `mcp_server` in 2.1.274, so MCP calls from earlier releases are
 denied.
 
+A plugin server is resolved only when the session cannot have loaded a plugin
+for itself alone, since such a plugin reports the same name and source as an
+installed one and replaces an installed plugin of the same name. The hook reads
+the arguments of the Claude Code process that ran it (named by `CLAUDE_PID` and
+confirmed as an ancestor), and leaves plugin servers unresolved when Claude Code
+was started with `--plugin-dir`, `--plugin-dir-no-mcp` or `--plugin-url`, by an
+Agent SDK host (`--input-format stream-json`), or with `CLAUDE_CODE_PLUGIN_DIRS`
+set, or when that process cannot be read. `enforce resolve` run by hand has no
+such process, so it reports plugin servers unresolved.
+
 A session's launch directory is recovered from its transcript path, so pass
 `--transcript-path` from a hook payload to reproduce a call made after the
-session changed directories. A resumed session keeps its original transcript, so
-when that names a directory above the current one, each directory in between may
-be the one the session loaded, and a server they define differently is left
-unresolved. Claude Code's files are parsed as strict JSON, as Claude Code parses
+session changed directories; without one, the current directory stands in. A
+resumed session keeps its original transcript, so when that names a directory
+above the current one, each directory in between may be the one the session
+loaded, and a server they define differently is left unresolved. A transcript
+that names no directory above the current one, as after changing into a
+directory added with `--add-dir`, leaves `local`, `project` and `plugin` servers
+unresolved: the directory the session loaded them for is not known. Claude Code's files are parsed as strict JSON, as Claude Code parses
 them, so a file with comments or trailing commas is skipped. A plugin from a
 marketplace added from a local folder or catalog file is read from that folder,
 which is where Claude Code loads it.

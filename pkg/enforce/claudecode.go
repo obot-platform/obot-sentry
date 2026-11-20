@@ -145,7 +145,7 @@ func resolveClaudeCode(ctx context.Context, loader *configLoader, env Env, req R
 		return unresolved(serverName,
 			"Claude Code did not report which configuration the MCP server came from (the hook payload has no mcp_server); update Claude Code")
 	}
-	if isBuiltinAgentMCP(req.Agent, serverName) && claudeBuiltinSource(source) {
+	if builtin, ok := claudeBuiltinSources[serverName]; ok && source == builtin {
 		return Resolution{ServerName: serverName}
 	}
 	claudePath, configDir, ok := env.claudeConfigPaths()
@@ -179,7 +179,12 @@ func resolveClaudeCode(ctx context.Context, loader *configLoader, env Env, req R
 		}
 		return claudeResolveIn(ctx, env, req, serverName, source, names, tr, settings)
 
-	case claudeSourceUser, claudeSourceLocal, claudeSourceProject, claudeSourcePlugin:
+	case claudeSourcePlugin:
+		if why := claudeSessionPlugins(env); why != "" {
+			return unresolved(serverName, fmt.Sprintf(
+				"%s, so plugin MCP server %q may come from a plugin loaded for this session only rather than an installed one", why, serverName))
+		}
+	case claudeSourceUser, claudeSourceLocal, claudeSourceProject:
 	default:
 		where, known := claudeUnreadableSources[source]
 		if !known {
@@ -213,7 +218,12 @@ func resolveClaudeCode(ctx context.Context, loader *configLoader, env Env, req R
 	// launched in. Each directory it may have launched in is resolved, and those
 	// whose configuration defines the server must agree on it. One that does not
 	// define it cannot be where the session loaded it.
-	projects := claudeProjectsFor(ctx, loader, env, configDir, req.CWD, req.TranscriptPath)
+	projects, ok := claudeProjectsFor(ctx, loader, env, configDir, req.CWD, req.TranscriptPath)
+	if !ok {
+		return unresolved(serverName, fmt.Sprintf(
+			"the session's transcript does not name %s or a directory above it, so the directory Claude Code loaded %s MCP servers for is not known; the session may have changed to a directory outside the one it started in",
+			req.CWD, source))
+	}
 	var (
 		m          match
 		found      bool
@@ -227,7 +237,7 @@ func resolveClaudeCode(ctx context.Context, loader *configLoader, env Env, req R
 		case claudeSourceProject:
 			scopes = claudeProjectFileScopes(loader, project)
 		case claudeSourcePlugin:
-			scopes = claudePluginScopes(ctx, loader, env, configDir, project, 0, &incomplete)
+			scopes = claudePluginScopes(ctx, loader, env, configDir, project, serverName, 0, &incomplete)
 		}
 		pm, out := resolveScopes(ctx, scopes, names, tr)
 		if incomplete {
@@ -252,14 +262,23 @@ func resolveClaudeCode(ctx context.Context, loader *configLoader, env Env, req R
 	return resolved(env, m.key, m.entry)
 }
 
-// claudeBuiltinSource reports whether source is one Claude Code's built-in
-// servers report. computer-use and claude-in-chrome are registered as stdio
-// servers in the dynamic scope, and the desktop host supplies Claude Preview
-// and Claude Browser as SDK servers. Claude Code refuses a built-in name from a
-// configuration file or --mcp-config, so under these sources the name is the
-// built-in. Under any other source it is not, and is resolved as reported.
-func claudeBuiltinSource(source string) bool {
-	return source == "dynamic" || source == "sdk"
+// claudeBuiltinSources maps each of Claude Code's built-in MCP servers, by its
+// exact name, to the one source it reports. computer-use and claude-in-chrome are
+// registered as stdio servers in the dynamic scope; the desktop host supplies
+// Claude Preview, Claude Browser and workspace as SDK servers. Claude Code
+// refuses these names from configuration files and --mcp-config, so under its
+// own source a name is the built-in; from any other source it is resolved as
+// reported. An Agent SDK host can still register an SDK server under one of the
+// SDK built-ins' names, and cannot be told apart from the desktop host.
+//
+// The names are builtinAgentMCPServers' Claude Code entries, which must agree
+// with obot.
+var claudeBuiltinSources = map[string]string{
+	"computer-use":     "dynamic",
+	"claude-in-chrome": "dynamic",
+	"Claude Preview":   "sdk",
+	"Claude Browser":   "sdk",
+	"workspace":        "sdk",
 }
 
 // claudeResolveIn resolves the server in one source's scopes.
@@ -402,13 +421,12 @@ type claudeProject struct {
 }
 
 // claudeProjectsFor establishes the project contexts a call made from cwd may
-// have been loaded in, cwd's first.
+// have been loaded in, cwd's first. ok is false when no context can be trusted.
 //
 // The hook's cwd is where the session is now, which is not necessarily where it
 // started: a session that cd's into a subdirectory or a nested repository keeps
 // the configuration it loaded at launch. Claude Code names the transcript
-// directory after the launch directory, so the transcript path recovers it; when
-// it does not, cwd stands in.
+// directory after the launch directory, so the transcript path recovers it.
 //
 // A resumed session breaks that. It loads its configuration from the directory
 // it was resumed in, but goes on writing the transcript it started, named after
@@ -416,20 +434,34 @@ type claudeProject struct {
 // cwd, the payload looks the same for a session that launched there and cd'd
 // down as for one resumed from anywhere between there and cwd, so every one of
 // those directories is a candidate.
-func claudeProjectsFor(ctx context.Context, loader *configLoader, env Env, configDir, cwd, transcriptPath string) []claudeProject {
+//
+// A transcript that names no directory above cwd is a session that cd'd outside
+// its launch directory, into a directory added with --add-dir for instance, or
+// one resumed somewhere unrelated; its slug cannot be turned back into a path,
+// so nothing is trusted. Neither is a transcript path that is unusable, being
+// outside Claude Code's configuration directory or too long. With no transcript
+// path at all, as for the enforce resolve diagnostic, cwd stands in.
+func claudeProjectsFor(ctx context.Context, loader *configLoader, env Env, configDir, cwd, transcriptPath string) (projects []claudeProject, ok bool) {
 	dirs := ancestors(cwd)
 	if len(dirs) == 0 {
-		return []claudeProject{{}}
+		return []claudeProject{{}}, true
 	}
 	candidates := dirs[:1]
-	if n, ok := claudeLaunchDir(env, dirs, configDir, transcriptPath); ok {
+	if transcriptPath != "" {
+		if len(transcriptPath) > maxTranscriptPathBytes {
+			return nil, false
+		}
+		n, ok := claudeLaunchDir(env, dirs, configDir, transcriptPath)
+		if !ok {
+			return nil, false
+		}
 		candidates = dirs[:n+1]
 	}
-	projects := make([]claudeProject, len(candidates))
+	projects = make([]claudeProject, len(candidates))
 	for i, dir := range candidates {
 		projects[i] = claudeProject{launchDir: dir, root: claudeProjectRoot(ctx, loader, dir)}
 	}
-	return projects
+	return projects, true
 }
 
 // claudeLaunchDir finds which of dirs, an absolute cwd and its ancestors, names
@@ -614,17 +646,24 @@ const maxProjectDepth = 40
 
 // claudeLocalScopes returns the session's projects{} entry in .claude.json.
 // Claude Code looks up exactly one key, the project root, so an entry for a
-// parent directory or a sibling project governs nothing here.
+// parent directory or a sibling project governs nothing here. Two keys can spell
+// that root differently ("C:/proj" and "c:/proj", or a doubled separator), and
+// which one Claude Code reads cannot be reproduced reliably, so every key naming
+// the root is a peer scope: they must agree on a server, or it is ambiguous.
 func claudeLocalScopes(env Env, project claudeProject, claudePath string, claude claudeJSON, claudeRes loadResult) []scope {
-	key, ok := claudeProjectKey(env, claude, project.root)
-	if !ok {
+	keys := claudeProjectKeys(env, claude, project.root)
+	if len(keys) == 0 {
 		return []scope{{path: claudePath, key: "projects", load: fixedServers(nil, claudeRes)}}
 	}
-	return []scope{{
-		path: claudePath,
-		key:  fmt.Sprintf("projects[%q].%s", key, mcpServersKey),
-		load: fixedServers(claudeServers(claude.Projects[key].MCPServers), claudeRes),
-	}}
+	scopes := make([]scope, len(keys))
+	for i, key := range keys {
+		scopes[i] = scope{
+			path: claudePath,
+			key:  fmt.Sprintf("projects[%q].%s", key, mcpServersKey),
+			load: fixedServers(claudeServers(claude.Projects[key].MCPServers), claudeRes),
+		}
+	}
+	return scopes
 }
 
 // claudeProjectFileScopes returns each .mcp.json from the launch directory up,
@@ -651,24 +690,21 @@ func claudeProjectFileScopes(loader *configLoader, project claudeProject) []scop
 	return scopes
 }
 
-// claudeProjectKey returns the projects{} key naming dir. Two keys can name one
-// directory through spelling alone; taking the lowest keeps resolution stable
-// across runs, since map order is not.
-func claudeProjectKey(env Env, claude claudeJSON, dir string) (string, bool) {
+// claudeProjectKeys returns every projects{} key naming dir, sorted so the
+// trace is stable across runs, since map order is not.
+func claudeProjectKeys(env Env, claude claudeJSON, dir string) []string {
 	want := env.comparableDir(dir)
 	if want == "" {
-		return "", false
+		return nil
 	}
-	var found string
+	var keys []string
 	for key := range claude.Projects {
-		if env.comparableDir(key) != want {
-			continue
-		}
-		if found == "" || key < found {
-			found = key
+		if env.comparableDir(key) == want {
+			keys = append(keys, key)
 		}
 	}
-	return found, found != ""
+	slices.Sort(keys)
+	return keys
 }
 
 // projectFiles returns each .mcp.json from dir up to, but not including, the

@@ -597,7 +597,7 @@ func TestNormalizeUnresolvedMCPCall(t *testing.T) {
 
 // TestNormalizeClaudeCodeTranscriptPath covers the payload field that recovers a
 // session's launch directory: it reaches the resolver, and one too long to trust
-// is dropped rather than failing the call.
+// leaves the call unresolved rather than failing the payload.
 func TestNormalizeClaudeCodeTranscriptPath(t *testing.T) {
 	f := newFixture(t, "darwin")
 	launch := f.mkdir(f.path("launch"))
@@ -622,8 +622,8 @@ func TestNormalizeClaudeCodeTranscriptPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("an over-long transcript path failed the call: %v", err)
 	}
-	if got := call.Request.Server.URL; got != "" {
-		t.Fatalf("URL = %q, want cwd to stand in, where nothing defines the server", got)
+	if !call.Request.Unresolved || !strings.Contains(call.Request.UnresolvedReason, "does not name") {
+		t.Fatalf("request = %+v, want it unresolved: an over-long transcript names no launch directory", call.Request)
 	}
 }
 

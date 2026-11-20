@@ -245,6 +245,15 @@ func TestClaudeCodePluginBoundsFailClosed(t *testing.T) {
 
 		f.write(manifest, `{"name":"p","mcpServers":[`+strings.Join(refs, ",")+`]}`)
 		assertUnresolved(t, Resolve(f.Env, pluginReq("p", "s", f.path("proj"))), "more installations or server files than the hook reads")
+
+		// Another plugin cannot define p's servers, so its bounds do not matter to
+		// them, and p's do not matter to it.
+		other := f.mkdir(f.path("cache", "q"))
+		f.write(filepath.Join(other, ".mcp.json"), `{"s":{"type":"http","url":"https://other.example.com/mcp"}}`)
+		f.pluginRegistry(f.homePath(".claude"), `{"version":2,"plugins":{`+
+			`"p@mkt":[{"scope":"user","installPath":`+quote(install)+`}],`+
+			`"q@mkt":[{"scope":"user","installPath":`+quote(other)+`}]}}`)
+		assertURL(t, Resolve(f.Env, pluginReq("q", "s", f.path("proj"))), "https://other.example.com/mcp")
 	})
 
 	t.Run("installations", func(t *testing.T) {
@@ -261,5 +270,11 @@ func TestClaudeCodePluginBoundsFailClosed(t *testing.T) {
 
 		f.pluginRegistry(f.homePath(".claude"), registry(maxClaudePluginInstalls+1))
 		assertUnresolved(t, Resolve(f.Env, pluginReq("p", "s", f.path("proj"))), "more installations or server files than the hook reads")
+
+		// Installations of other plugins do not count toward p's bound.
+		other := `"q@mkt":[` + strings.TrimSuffix(strings.Repeat(entry+",", maxClaudePluginInstalls), ",") + `]`
+		f.pluginRegistry(f.homePath(".claude"), `{"version":2,"plugins":{`+other+`,`+
+			`"p@mkt":[`+entry+`]}}`)
+		assertURL(t, Resolve(f.Env, pluginReq("p", "s", f.path("proj"))), "https://allowed.example.com/mcp")
 	})
 }

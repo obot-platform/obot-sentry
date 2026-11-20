@@ -45,10 +45,12 @@ type claudePluginInstall struct {
 // records the directory it was installed from, and serves only a session
 // launched there or keyed to that project root.
 //
-// incomplete is set when an installation or a server file went unread for a
-// bound (see maxClaudePluginInstalls), either here or when a scope loads; the
-// scopes then do not settle which definition the session runs.
-func claudePluginScopes(ctx context.Context, loader *configLoader, env Env, configDir string, project claudeProject, rank int, incomplete *bool) []scope {
+// Only installations of a plugin that can define server, whose name begins
+// "plugin:<plugin>:", are considered: no other plugin can define or override it.
+// incomplete is set when one of them, or one of its server files, went unread
+// for a bound (see maxClaudePluginInstalls), either here or when a scope loads;
+// the scopes then do not settle which definition the session runs.
+func claudePluginScopes(ctx context.Context, loader *configLoader, env Env, configDir string, project claudeProject, server string, rank int, incomplete *bool) []scope {
 	registryPath := filepath.Join(configDir, "plugins", claudePluginRegistry)
 	var raw json.RawMessage
 	res := loader.loadStrictJSON(ctx, registryPath, &raw, maxConfigBytes)
@@ -72,6 +74,9 @@ func claudePluginScopes(ctx context.Context, loader *configLoader, env Env, conf
 		name, market := id, ""
 		if at := strings.LastIndex(id, "@"); at > 0 {
 			name, market = id[:at], id[at+1:]
+		}
+		if !strings.HasPrefix(server, "plugin:"+name+":") {
+			continue
 		}
 		for _, install := range decodePluginInstalls(plugins[id]) {
 			if len(scopes) == maxClaudePluginInstalls {

@@ -124,32 +124,46 @@ func TestClaudeCodeConnector(t *testing.T) {
 }
 
 // TestClaudeCodeBuiltinServerIsReportedByName covers Claude Code's built-in MCP
-// servers, reported by name for the built-in toggle. They come from the dynamic
-// scope (computer-use, claude-in-chrome) or the desktop host as SDK servers
-// (Claude Preview, Claude Browser), and Claude Code refuses those names from a
-// configuration file or --mcp-config, so only there is the name the built-in.
+// servers, reported by name for the built-in toggle. Each is matched by its exact
+// name and the one source it reports: computer-use and claude-in-chrome are
+// dynamic-scope stdio servers, and the desktop host supplies Claude Preview,
+// Claude Browser and workspace as SDK servers.
 func TestClaudeCodeBuiltinServerIsReportedByName(t *testing.T) {
 	f := newFixture(t, "darwin")
-	for _, tc := range []struct{ source, name string }{
-		{"dynamic", "computer-use"},
-		{"dynamic", "claude-in-chrome"},
-		{"sdk", "Claude Preview"},
-		{"sdk", "Claude Browser"},
-	} {
-		res := Resolve(f.Env, claudeCodeReq(tc.source, tc.name, f.path("proj")))
-		if res.Unresolved || res.ServerName != tc.name || res.Identity != emptyIdentity {
+	for name, source := range claudeBuiltinSources {
+		res := Resolve(f.Env, claudeCodeReq(source, name, f.path("proj")))
+		if res.Unresolved || res.ServerName != name || res.Identity != emptyIdentity {
 			t.Errorf("%s from %s: ServerName = %q, Identity = %+v (unresolved=%v, %s), want the built-in by name",
-				tc.name, tc.source, res.ServerName, res.Identity, res.Unresolved, res.Reason)
+				name, source, res.ServerName, res.Identity, res.Unresolved, res.Reason)
 		}
 	}
 
-	// From any other source the name is not the built-in: an agent definition or
-	// a source Claude Code adds later is unresolved, and a configuration file is
-	// read as such.
-	assertUnresolved(t, Resolve(f.Env, claudeCodeReq("agent", "computer-use", f.path("proj"))), "an agent definition")
-	assertUnresolved(t, Resolve(f.Env, claudeCodeReq("newscope", "Claude Preview", f.path("proj"))), "does not recognize")
+	// From another source, or spelled another way, the name is not the built-in.
+	for _, tc := range []struct{ source, name, reason string }{
+		{"sdk", "computer-use", "the SDK host"},
+		{"dynamic", "Claude Preview", "--mcp-config"},
+		{"agent", "workspace", "an agent definition"},
+		{"sdk", "Claude_Browser", "the SDK host"},
+		{"newscope", "Claude Preview", "does not recognize"},
+	} {
+		assertUnresolved(t, Resolve(f.Env, claudeCodeReq(tc.source, tc.name, f.path("proj"))), tc.reason)
+	}
 	f.write(f.homePath(".claude.json"), `{"mcpServers":{"Claude Preview":{"type":"http","url":"https://user.example.com/mcp"}}}`)
 	assertURL(t, Resolve(f.Env, claudeCodeReq(claudeSourceUser, "Claude Preview", f.path("proj"))), "https://user.example.com/mcp")
+}
+
+// TestClaudeCodeBuiltinSourcesMatchTheBuiltinTable keeps the per-source table in
+// step with builtinAgentMCPServers, the list that must agree with obot.
+func TestClaudeCodeBuiltinSourcesMatchTheBuiltinTable(t *testing.T) {
+	table := builtinAgentMCPServers[localagent.ClaudeCode]
+	if len(table) != len(claudeBuiltinSources) {
+		t.Fatalf("builtinAgentMCPServers has %d Claude Code entries, claudeBuiltinSources %d", len(table), len(claudeBuiltinSources))
+	}
+	for name := range table {
+		if _, ok := claudeBuiltinSources[name]; !ok {
+			t.Errorf("built-in %q has no source in claudeBuiltinSources", name)
+		}
+	}
 }
 
 // TestClaudeCodeManagedMCPConfig covers managed-mcp.json, which Claude Code
@@ -450,6 +464,35 @@ func TestClaudeCodeProjectFilePrecedence(t *testing.T) {
 	assertURL(t, Resolve(f.Env, req("myserver")), "https://project-file.example.com/sse")
 }
 
+// TestClaudeCodeLocalScopeKeyAliases covers two projects{} keys spelling the
+// session's root differently. Claude Code reads one of them, and which one
+// cannot be reproduced reliably, so they must agree on a server.
+func TestClaudeCodeLocalScopeKeyAliases(t *testing.T) {
+	f := newFixture(t, "darwin")
+	project := f.mkdir(f.path("proj"))
+	withSlash := project + string(filepath.Separator)
+	req := claudeCodeReq(claudeSourceLocal, "x", project)
+
+	f.write(f.homePath(".claude.json"), `{"projects":{
+		`+quote(project)+`:{"mcpServers":{"x":{"type":"http","url":"https://same.example.com/mcp"}}},
+		`+quote(withSlash)+`:{"mcpServers":{"x":{"type":"http","url":"https://same.example.com/mcp"}}}
+	}}`)
+	assertURL(t, Resolve(f.Env, req), "https://same.example.com/mcp")
+
+	f.write(f.homePath(".claude.json"), `{"projects":{
+		`+quote(project)+`:{"mcpServers":{"x":{"type":"http","url":"https://allowed.example.com/mcp"}}},
+		`+quote(withSlash)+`:{"mcpServers":{"x":{"command":"/tmp/evil"}}}
+	}}`)
+	assertUnresolved(t, Resolve(f.Env, req), "conflicting definitions")
+
+	// An alias that does not define the server leaves the other's definition.
+	f.write(f.homePath(".claude.json"), `{"projects":{
+		`+quote(project)+`:{"mcpServers":{"x":{"type":"http","url":"https://only.example.com/mcp"}}},
+		`+quote(withSlash)+`:{"mcpServers":{}}
+	}}`)
+	assertURL(t, Resolve(f.Env, req), "https://only.example.com/mcp")
+}
+
 // TestClaudeCodeLocalScopeIsOneKey covers which projects{} entry is live. Claude
 // Code looks up exactly one key; an entry for a parent directory governs nothing,
 // so resolving through it would name a server the session never loaded.
@@ -603,9 +646,18 @@ func TestClaudeCodeLaunchDirFromTranscript(t *testing.T) {
 	req.TranscriptPath = f.homePath(".claude", "projects", claudeProjectSlug(workspace), "0b0e", "subagents", "agent-1.jsonl")
 	assertURL(t, Resolve(f.Env, req), "https://workspace-local.example.com/sse")
 
-	// A transcript naming no ancestor of cwd is ignored rather than trusted.
+	// A transcript naming no directory above cwd is a session that cd'd outside
+	// its launch directory, or was resumed somewhere unrelated, and its slug
+	// cannot be turned back into a path: nothing is trusted, cwd included.
+	f.write(f.homePath(".claude.json"), `{"projects":{
+		`+quote(nested)+`:{"mcpServers":{"local":{"type":"http","url":"https://nested-local.example.com/sse"}}}
+	}}`)
 	req.TranscriptPath = f.homePath(".claude", "projects", "-somewhere-else", "0b0e.jsonl")
-	assertUnresolved(t, Resolve(f.Env, req), "did not find it there")
+	assertUnresolved(t, Resolve(f.Env, req), "does not name")
+	req.TranscriptPath = "/" + strings.Repeat("x", maxTranscriptPathBytes)
+	assertUnresolved(t, Resolve(f.Env, req), "does not name")
+	req.TranscriptPath = ""
+	assertURL(t, Resolve(f.Env, req), "https://nested-local.example.com/sse")
 }
 
 // TestClaudeCodeResumedSession covers a session resumed below the directory it
@@ -667,10 +719,10 @@ func TestClaudeCodeTranscriptMustBeUnderConfigDir(t *testing.T) {
 	req.TranscriptPath = filepath.Join(configDir, "projects", claudeProjectSlug(app), "s.jsonl")
 	assertUnresolved(t, Resolve(f.Env, req), "differently")
 
-	// A transcript outside the session's configuration directory names nothing, so
-	// cwd stands in, as it does with no transcript at all.
+	// A transcript outside the session's configuration directory names no launch
+	// directory, so nothing is trusted.
 	req.TranscriptPath = f.homePath(".claude", "projects", claudeProjectSlug(app), "s.jsonl")
-	assertURL(t, Resolve(f.Env, req), "https://allowed.example.com/mcp")
+	assertUnresolved(t, Resolve(f.Env, req), "does not name")
 }
 
 // TestClaudeProjectSlug pins the transcript directory name against values
@@ -810,7 +862,8 @@ func localScopesFrom(t *testing.T, f *fixture, cwd string) []scope {
 	var claude claudeJSON
 	res := loadJSON(claudePath, &claude)
 	loader := newConfigLoader()
-	project := claudeProjectsFor(t.Context(), loader, f.Env, f.homePath(".claude"), cwd, "")[0]
+	projects, _ := claudeProjectsFor(t.Context(), loader, f.Env, f.homePath(".claude"), cwd, "")
+	project := projects[0]
 	return claudeLocalScopes(f.Env, project, claudePath, claude, res)
 }
 
@@ -818,7 +871,8 @@ func localScopesFrom(t *testing.T, f *fixture, cwd string) []scope {
 func projectFileScopesFrom(t *testing.T, f *fixture, cwd string) []scope {
 	t.Helper()
 	loader := newConfigLoader()
-	project := claudeProjectsFor(t.Context(), loader, f.Env, f.homePath(".claude"), cwd, "")[0]
+	projects, _ := claudeProjectsFor(t.Context(), loader, f.Env, f.homePath(".claude"), cwd, "")
+	project := projects[0]
 	return claudeProjectFileScopes(loader, project)
 }
 

@@ -266,14 +266,10 @@ func normalizePreTool(ctx context.Context, env Env, agent localagent.Agent, raw 
 	if err := boundedField("cwd", hook.CWD, maxWorkingDirBytes); err != nil {
 		return Call{}, err
 	}
-	// The transcript path only refines which project the call came from, so one
-	// too long to trust is dropped rather than failing the whole payload.
-	transcriptPath := hook.TranscriptPath
-	if len(transcriptPath) > maxTranscriptPathBytes {
-		transcriptPath = ""
-	}
-
-	req := ResolveRequest{Agent: agent, CWD: hook.CWD, TranscriptPath: transcriptPath}
+	// The transcript path is not bounded here: one too long to trust does not
+	// fail the payload, and the resolver treats it as naming no launch
+	// directory (see claudeProjectsFor).
+	req := ResolveRequest{Agent: agent, CWD: hook.CWD, TranscriptPath: hook.TranscriptPath}
 	if agent == localagent.ClaudeCode {
 		class, err := classifyClaudeCodePreTool(toolName, hook.MCPServer)
 		if err != nil {
