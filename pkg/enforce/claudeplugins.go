@@ -162,17 +162,18 @@ func claudeMarketplaces(ctx context.Context, loader *configLoader, configDir str
 // without a reinstall. Any other source, including a string in another form, is
 // loaded from the installed copy.
 //
-// local is false when the installed copy is what loads. Otherwise a res other
-// than loadOK means Claude Code cannot locate the plugin and loads none of its
-// servers, or, for an unreadable registry, that the resolver cannot tell where it
-// loads from.
+// local is false when the installed copy is what loads. Otherwise loadAbsent or
+// loadUnusable means Claude Code cannot locate the plugin and loads none of its
+// servers, and loadUndecodable that the resolver cannot tell where it loads from.
+// Only cases verified to load nothing may be skipped: a skipped installation
+// leaves a same-named plugin's installation to answer alone.
 func claudeLocalPluginDir(ctx context.Context, loader *configLoader, markets claudeMarketplaceSet, market, name string) (dir string, res loadResult, local bool) {
 	switch markets.res {
 	case loadOK:
 	case loadAbsent:
 		return "", loadOK, false
 	default:
-		return "", markets.res, true
+		return "", loadUndecodable, true
 	}
 	marketDir, ok := markets.dirs[market]
 	if !ok {
@@ -180,7 +181,9 @@ func claudeLocalPluginDir(ctx context.Context, loader *configLoader, markets cla
 	}
 	catalog := markets.catalogs[market]
 	if !filepath.IsAbs(marketDir) || !filepath.IsAbs(catalog) {
-		return "", loadUnusable, true
+		// Claude Code resolves a relative path against a directory the hook cannot
+		// determine.
+		return "", loadUndecodable, true
 	}
 	var raw json.RawMessage
 	if res := loader.loadStrictJSON(ctx, catalog, &raw, maxConfigBytes); res != loadOK {
@@ -211,8 +214,9 @@ func claudeLocalPluginDir(ctx context.Context, loader *configLoader, markets cla
 			rel = "./" + path.Join(root, rel)
 		}
 		if strings.HasPrefix(rel, `.\`) {
-			// Not a form Claude Code was observed to take either way.
-			return "", loadUnusable, true
+			// Not a form Claude Code was observed to take either way, and on Windows
+			// a relative path it may load in place.
+			return "", loadUndecodable, true
 		}
 		if rel != "." && !strings.HasPrefix(rel, "./") {
 			return "", loadOK, false

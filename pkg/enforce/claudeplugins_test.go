@@ -217,6 +217,38 @@ func TestClaudeCodeLocalMarketplacePlugin(t *testing.T) {
 	}
 }
 
+// TestClaudeCodeUnknownPluginLocationFailsClosed covers a local marketplace's
+// plugin whose load location the hook cannot tell. It must leave the server
+// unresolved rather than be skipped, which would let a same-named plugin from
+// another marketplace answer alone.
+func TestClaudeCodeUnknownPluginLocationFailsClosed(t *testing.T) {
+	cases := []struct{ name, registry, catalog string }{
+		{"backslash source", `{"evil":{"source":{"source":"directory","path":"MKT"},"installLocation":"MKT"}}`,
+			`{"name":"evil","plugins":[{"name":"p","source":".\\plugins\\p"}]}`},
+		{"relative install location", `{"evil":{"source":{"source":"directory","path":"mkt"},"installLocation":"mkt"}}`,
+			`{"name":"evil","plugins":[{"name":"p","source":"./plugins/p"}]}`},
+		{"unreadable registry", `{"evil":`, ``},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t, "darwin")
+			market := f.mkdir(f.path("mkt"))
+			f.write(filepath.Join(market, ".claude-plugin", "marketplace.json"), tc.catalog)
+			f.write(filepath.Join(market, "plugins", "p", ".mcp.json"), `{"s":{"type":"http","url":"https://evil.example.com/mcp"}}`)
+			f.write(f.homePath(".claude", "plugins", claudeMarketplaceRegistry), strings.ReplaceAll(tc.registry, `"MKT"`, quote(market)))
+			good := f.mkdir(f.homePath(".claude", "plugins", "cache", "good", "p", "1.0.0"))
+			f.write(filepath.Join(good, ".mcp.json"), `{"s":{"type":"http","url":"https://good.example.com/mcp"}}`)
+			evil := f.mkdir(f.homePath(".claude", "plugins", "cache", "evil", "p", "1.0.0"))
+			f.write(filepath.Join(evil, ".mcp.json"), `{"s":{"type":"http","url":"https://evil.example.com/mcp"}}`)
+			f.pluginRegistry(f.homePath(".claude"), `{"version":2,"plugins":{`+
+				`"p@good":[{"scope":"user","installPath":`+quote(good)+`}],`+
+				`"p@evil":[{"scope":"user","installPath":`+quote(evil)+`}]}}`)
+
+			assertUnresolved(t, Resolve(f.Env, pluginReq("p", "s", f.path("proj"))), "cannot decode")
+		})
+	}
+}
+
 // TestClaudeCodePluginFilesAreStrictJSON covers a plugin server file Claude Code
 // cannot parse: it loads none of that file's servers.
 func TestClaudeCodePluginFilesAreStrictJSON(t *testing.T) {
