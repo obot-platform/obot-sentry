@@ -595,9 +595,6 @@ func absFrom(base, path string) string {
 	return filepath.Join(base, path)
 }
 
-// maxProjectDepth bounds the ancestor walk.
-const maxProjectDepth = 40
-
 // claudeLocalScopes returns the session's projects{} entry in .claude.json.
 // Claude Code looks up exactly one key, the project root, so an entry for a
 // parent directory or a sibling project governs nothing here. Two keys can spell
@@ -682,13 +679,18 @@ func projectFiles(dir string) []string {
 // A relative cwd cannot identify a stable configuration scope and is ignored.
 // Whitespace is part of a directory's name ("/work/app " is not "/work/app"), so
 // it is not trimmed.
+//
+// The walk is not capped: Claude Code's walks for .mcp.json files and for the git
+// root go all the way up, and stopping short would skip a file it loads or key
+// the session by the wrong root. The path length cap on the project directory
+// bounds it.
 func ancestors(cwd string) []string {
 	if cwd == "" || !filepath.IsAbs(cwd) {
 		return nil
 	}
 	dir := filepath.Clean(cwd)
 	dirs := make([]string, 0, 8)
-	for range maxProjectDepth {
+	for {
 		dirs = append(dirs, dir)
 		parent := filepath.Dir(dir)
 		if parent == dir {

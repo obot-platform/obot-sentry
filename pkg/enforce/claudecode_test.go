@@ -895,13 +895,22 @@ func TestAncestorsRejectsRelativeCWD(t *testing.T) {
 	}
 }
 
-// TestAncestorsIsBounded keeps a pathological path from turning into a scope per
-// level.
-func TestAncestorsIsBounded(t *testing.T) {
-	deep := hostRoot(t) + strings.Repeat("a"+string(filepath.Separator), maxProjectDepth*2)
-	if got := ancestors(deep); len(got) != maxProjectDepth {
-		t.Fatalf("ancestors returned %d entries, want %d", len(got), maxProjectDepth)
-	}
+// TestClaudeCodeDeepProjectDir covers a session started far below its
+// repository: Claude Code walks all the way up for the git root and for .mcp.json
+// files, so the resolver must too.
+func TestClaudeCodeDeepProjectDir(t *testing.T) {
+	f := newFixture(t, "darwin")
+	repo := f.mkdir(f.path("repo"))
+	f.mkdir(filepath.Join(repo, ".git"))
+	cwd := f.mkdir(filepath.Join(repo, strings.Repeat("d"+string(filepath.Separator), 60)))
+	f.write(filepath.Join(repo, ".mcp.json"), `{"mcpServers":{"p":{"type":"http","url":"https://repo-file.example.com/mcp"}}}`)
+	f.write(f.homePath(".claude.json"), `{"projects":{
+		`+quote(repo)+`:{"mcpServers":{"x":{"command":"/tmp/repo"}}},
+		`+quote(cwd)+`:{"mcpServers":{"x":{"type":"http","url":"https://allowed.example.com/mcp"}}}
+	}}`)
+
+	assertCommand(t, Resolve(f.Env, claudeCodeReq(claudeSourceLocal, "x", cwd)), "/tmp/repo")
+	assertURL(t, Resolve(f.Env, claudeCodeReq(claudeSourceProject, "p", cwd)), "https://repo-file.example.com/mcp")
 }
 
 // TestProjectFileScopesOrder pins the ordering contract: every project file from
