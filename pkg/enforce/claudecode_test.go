@@ -3,6 +3,7 @@ package enforce
 import (
 	"fmt"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -80,14 +81,23 @@ func TestClaudeCodeManagedConfigIsExclusive(t *testing.T) {
 	assertURL(t, Resolve(f.Env, claudeCodeReq("myserver", project)), "https://managed.example.com/sse")
 }
 
+// TestClaudeCodeManagedConfigWindows covers the fixed Windows location. Claude
+// Code reads C:\Program Files\ClaudeCode whatever %PROGRAMFILES% says, so a file
+// at a relocated Program Files is not its managed configuration.
 func TestClaudeCodeManagedConfigWindows(t *testing.T) {
 	f := newFixture(t, "windows")
-	programFiles := f.mkdir(f.path("ProgramFiles"))
-	f.setenv("PROGRAMFILES", programFiles)
-	f.write(filepath.Join(programFiles, "ClaudeCode", "managed-mcp.json"),
+	relocated := f.mkdir(f.path("D", "Program Files"))
+	f.setenv("PROGRAMFILES", relocated)
+	f.write(filepath.Join(relocated, "ClaudeCode", "managed-mcp.json"),
+		`{"mcpServers":{"myserver":{"url":"https://relocated.example.com/sse"}}}`)
+	f.write(f.machinePath(claudeManagedMCPWindows),
 		`{"mcpServers":{"myserver":{"url":"https://managed.example.com/sse"}}}`)
 
-	assertURL(t, Resolve(f.Env, claudeCodeReq("myserver", f.path("proj"))), "https://managed.example.com/sse")
+	res := Resolve(f.Env, claudeCodeReq("myserver", f.path("proj")))
+	assertURL(t, res, "https://managed.example.com/sse")
+	if got := consultedPaths(res); len(got) == 0 || got[0] != f.machinePath(claudeManagedMCPWindows) {
+		t.Fatalf("first consulted path = %v, want %s\n%s", got, f.machinePath(claudeManagedMCPWindows), resolveTrace(res))
+	}
 }
 
 // TestClaudeCodeConfigDirRelocatesClaudeJSON covers a session started with
@@ -154,10 +164,19 @@ func TestClaudeCodeConfigDirIsUsedVerbatim(t *testing.T) {
 	project := f.path("proj")
 	f.write(f.homePath(".claude.json"), `{"mcpServers":{"myserver":{"url":"https://home.example.com/sse"}}}`)
 	f.write(filepath.Join(f.path("alt"), ".claude.json"), `{"mcpServers":{"myserver":{"url":"https://alt.example.com/sse"}}}`)
-	f.write(filepath.Join(f.path("alt "), ".claude.json"), `{"mcpServers":{"myserver":{"url":"https://alt-space.example.com/sse"}}}`)
 
-	f.setenv(claudeConfigDirEnv, f.path("alt "))
-	assertURL(t, Resolve(f.Env, claudeCodeReq("myserver", project)), "https://alt-space.example.com/sse")
+	// Windows strips trailing spaces from a path's final name, so a directory
+	// named "alt " cannot exist there.
+	if runtime.GOOS != "windows" {
+		f.write(filepath.Join(f.path("alt "), ".claude.json"), `{"mcpServers":{"myserver":{"url":"https://alt-space.example.com/sse"}}}`)
+		f.setenv(claudeConfigDirEnv, f.path("alt "))
+		assertURL(t, Resolve(f.Env, claudeCodeReq("myserver", project)), "https://alt-space.example.com/sse")
+	}
+
+	// Leading whitespace makes an absolute directory relative. Trimmed, it
+	// would read the "alt" file, which this session does not.
+	f.setenv(claudeConfigDirEnv, " "+f.path("alt"))
+	assertUnresolved(t, Resolve(f.Env, claudeCodeReq("myserver", project)), "relative path")
 
 	// Only spaces is a relative directory name to Claude Code, not unset, so it
 	// must not fall back to the home file.

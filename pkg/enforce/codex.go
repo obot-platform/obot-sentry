@@ -19,7 +19,7 @@ func (e Env) codexConfigPaths() []string {
 		e.homePath(".codex", "managed_config.toml"),
 	}
 	if e.windows() {
-		return append(paths, e.envPath("ProgramData", `C:\ProgramData`, "OpenAI", "Codex", "managed_config.toml"))
+		return append(paths, e.envPath("ProgramData", "C:/ProgramData", "OpenAI", "Codex", "managed_config.toml"))
 	}
 	return append(paths, e.machinePath("/etc/codex/managed_config.toml"))
 }

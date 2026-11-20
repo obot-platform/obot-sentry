@@ -92,20 +92,23 @@ func TestConfigLoaderCancellationDoesNotPoisonCache(t *testing.T) {
 func TestEnvPathFallsBackToTheConventionalLocation(t *testing.T) {
 	f := newFixture(t, "windows")
 
-	got := f.Env.envPath("ProgramData", `C:\ProgramData`, "OpenAI", "Codex", "managed_config.toml")
-	want := filepath.Join(f.Env.MachineRoot, `C:\ProgramData`, "OpenAI", "Codex", "managed_config.toml")
+	got := f.Env.envPath("ProgramData", "C:/ProgramData", "OpenAI", "Codex", "managed_config.toml")
+	want := filepath.Join(f.machinePath("C:/ProgramData"), "OpenAI", "Codex", "managed_config.toml")
+	if strings.Contains(strings.TrimPrefix(want, filepath.VolumeName(want)), ":") {
+		t.Fatalf("fallback %q carries a drive letter below the machine root", want)
+	}
 	if got != want {
 		t.Fatalf("envPath = %q, want %q", got, want)
 	}
 
 	f.setenv("ProgramData", f.path("ProgramData"))
-	got = f.Env.envPath("ProgramData", `C:\ProgramData`, "OpenAI", "Codex", "managed_config.toml")
+	got = f.Env.envPath("ProgramData", "C:/ProgramData", "OpenAI", "Codex", "managed_config.toml")
 	if want := f.path("ProgramData", "OpenAI", "Codex", "managed_config.toml"); got != want {
 		t.Fatalf("envPath = %q, want %q", got, want)
 	}
 
 	f.setenv("ProgramData", "relative-program-data")
-	got = f.Env.envPath("ProgramData", `C:\ProgramData`, "OpenAI", "Codex", "managed_config.toml")
+	got = f.Env.envPath("ProgramData", "C:/ProgramData", "OpenAI", "Codex", "managed_config.toml")
 	if got != want {
 		t.Fatalf("envPath with relative override = %q, want fallback %q", got, want)
 	}
@@ -124,11 +127,10 @@ func TestMachinePathIsAbsoluteInProduction(t *testing.T) {
 
 	// Since nothing is prepended, what comes back is absolute wherever the path
 	// given belongs. Those above are the macOS locations, which are absolute on
-	// macOS; on Windows the equivalent is the drive-letter fallback %PROGRAMFILES%
-	// stands in for.
+	// macOS; on Windows the equivalent is Claude Code's fixed drive-letter path.
 	native, nativeEnv := claudeManagedMCPDarwin, env
 	if runtime.GOOS == "windows" {
-		native, nativeEnv.GOOS = windowsProgramFilesDefault, "windows"
+		native, nativeEnv.GOOS = claudeManagedMCPWindows, "windows"
 	}
 	if got := nativeEnv.machinePath(native); !filepath.IsAbs(got) {
 		t.Errorf("machinePath(%q) = %q, want an absolute path", native, got)

@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -298,7 +297,7 @@ func TestKiroSecondWorkspaceRoot(t *testing.T) {
 	f.write(f.homePath(".kiro", "settings", "mcp.json"), `{"mcpServers": {"docs": {"url": "https://allowed.example.com/mcp"}}}`)
 	f.write(filepath.Join(second, ".kiro", "settings", "mcp.json"), `{"mcpServers": {"docs": {"url": "https://other.example.com/mcp"}}}`)
 	f.write(f.homePath(".kiro", "sessions", "abc123", "sess_1111-2222", "session.json"),
-		`{"schemaVersion": "1.0.0", "workspacePaths": ["`+first+`", "`+second+`"]}`)
+		`{"schemaVersion": "1.0.0", "workspacePaths": [`+quote(first)+`, `+quote(second)+`]}`)
 
 	// With the session record, the second root's definition wins over the user file.
 	assertURL(t, callResolution(kiroCallInSession(t, f, "mcp_docs_search", first, "sess_1111-2222")), "https://other.example.com/mcp")
@@ -324,16 +323,9 @@ func TestKiroAgentProfilesIncomplete(t *testing.T) {
 }
 
 func TestKiroAgentDirUnreadable(t *testing.T) {
-	if os.Geteuid() == 0 {
-		t.Skip("root reads any directory")
-	}
 	f := newFixture(t, "darwin")
 	f.write(f.homePath(".kiro", "settings", "mcp.json"), `{"mcpServers": {"docs": {"url": "https://allowed.example.com/mcp"}}}`)
-	locked := f.mkdir(f.homePath(".kiro", "agents", "team"))
-	if err := os.Chmod(locked, 0); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Chmod(locked, 0o755) })
+	makeUnreadable(t, f.mkdir(f.homePath(".kiro", "agents", "team")))
 	assertUnresolved(t, callResolution(kiroCall(t, f, "mcp_docs_search", f.Home, nil)), "could not all be read")
 }
 

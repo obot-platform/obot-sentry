@@ -13,11 +13,18 @@ import (
 
 func TestSpoolStoresPlaintextAndDrainsOldestEntries(t *testing.T) {
 	dir := t.TempDir()
+	// Every reading is a millisecond later than the last. Two back-to-back
+	// enqueues can read the same wall-clock time from time.Now, Windows' clock
+	// being coarse, and their order is then left to the random name suffix.
+	clock := time.Now()
 	spool := &Spool{
 		Dir:      dir + "/spool",
 		MaxBytes: 50 * 1024 * 1024,
 		MaxAge:   time.Hour,
-		Now:      time.Now,
+		Now: func() time.Time {
+			clock = clock.Add(time.Millisecond)
+			return clock
+		},
 	}
 	first := []types.LocalAgentToolCallAuditLogInput{validSpoolLog("first")}
 	second := []types.LocalAgentToolCallAuditLogInput{validSpoolLog("second")}

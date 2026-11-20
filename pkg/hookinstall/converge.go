@@ -111,6 +111,9 @@ func removeJSONHooks(existing []byte, nested bool) (mergeOutcome, error) {
 	if removed == 0 {
 		return mergeOutcome{data: existing, status: StatusUnchanged}, nil
 	}
+	// The events our hooks emptied are gone; a hooks object they leave with
+	// nothing in it goes too.
+	removeEmptyObjectMember(obj, "hooks")
 	return mergeOutcome{data: cfg.pack(), status: StatusRemoved, removed: removed, write: true}, nil
 }
 

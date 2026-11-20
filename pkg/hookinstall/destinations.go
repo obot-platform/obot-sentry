@@ -66,6 +66,11 @@ const kiroHookRel = ".kiro/hooks/obot-sentry.json"
 // allowManagedHooksOnly.
 const (
 	claudeManagedSettingsDarwin = "/Library/Application Support/ClaudeCode/managed-settings.json"
+	// claudeManagedSettingsWindows is fixed on drive C:, unlike the ProgramData
+	// destinations. Claude Code does not consult %ProgramFiles% or the Program
+	// Files known folder for its managed directory, so on a machine whose
+	// Program Files lives elsewhere either would install hooks it never reads.
+	claudeManagedSettingsWindows = `C:\Program Files\ClaudeCode\managed-settings.json`
 	// claudeUserSettingsRel is where the hooks were installed before they moved
 	// to managed settings. It stays as a retired destination so the old hooks are
 	// removed.
@@ -93,7 +98,7 @@ func Destinations(goos string) []Destination {
 	case "windows":
 		pd := windowsProgramData()
 		return []Destination{
-			{Agent: localagent.ClaudeCode, Label: localagent.ClaudeCode.DisplayName(), Scope: ScopeMachine, Format: FormatJSON, Abs: winJoin(windowsProgramFiles(), "ClaudeCode", "managed-settings.json")},
+			{Agent: localagent.ClaudeCode, Label: localagent.ClaudeCode.DisplayName(), Scope: ScopeMachine, Format: FormatJSON, Abs: claudeManagedSettingsWindows},
 			{Agent: localagent.ClaudeCode, Label: claudeUserSettingsLabel, Scope: ScopeUser, Format: FormatJSON, Rel: claudeUserSettingsRel, Retired: true},
 			{Agent: localagent.Codex, Label: localagent.Codex.DisplayName(), Scope: ScopeMachine, Format: FormatTOML, Abs: winJoin(pd, "OpenAI", "Codex", "requirements.toml")},
 			{Agent: localagent.VSCode, Label: localagent.VSCode.DisplayName(), Scope: ScopeUser, Format: FormatJSON, Rel: ".copilot/hooks/obot-sentry.json"},

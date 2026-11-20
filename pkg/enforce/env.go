@@ -70,17 +70,24 @@ func (e Env) homePath(elem ...string) string {
 }
 
 // machinePath resolves a fixed machine-scoped absolute path, honoring
-// MachineRoot. The argument is always written slash-separated.
+// MachineRoot. The argument is always written slash-separated, and a Windows
+// one starts with its drive letter ("C:/Program Files/..."). Under a
+// MachineRoot the drive letter is dropped, since a colon cannot appear inside a
+// Windows path below the root.
 func (e Env) machinePath(abs string) string {
 	if e.MachineRoot == "" {
 		return filepath.FromSlash(abs)
+	}
+	if len(abs) >= 2 && abs[1] == ':' {
+		abs = abs[2:]
 	}
 	return filepath.Join(e.MachineRoot, filepath.FromSlash(abs))
 }
 
 // envPath resolves a Windows machine path rooted at an absolute environment
 // variable, falling back to the conventional location when it is unset or
-// relative.
+// relative. The fallback goes through machinePath, so it is written
+// slash-separated too ("C:/ProgramData").
 func (e Env) envPath(key, fallback string, elem ...string) string {
 	base := e.getenv(key)
 	if base == "" || !filepath.IsAbs(base) {
