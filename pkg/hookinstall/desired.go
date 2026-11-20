@@ -64,8 +64,10 @@ type claudeDocument struct {
 // Code honors it only from managed settings, which is the file the Claude Code
 // hooks go in.
 //
-// Neither an audit-only run nor an uninstall turns it off: nothing records
-// whether obot-sentry or an administrator set it.
+// An enforcing install replaces any existing value, false included. Neither an
+// audit-only run nor an uninstall turns it off, since nothing records whether
+// obot-sentry or an administrator set it; the README tells administrators to
+// delete the key to allow those flags again.
 const claudeDisableSideloadKey = enforce.ClaudeDisableSideloadKey
 
 func desiredClaude(exe, goos string, enforcing bool) claudeDocument {

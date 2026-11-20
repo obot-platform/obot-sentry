@@ -16,11 +16,10 @@ import (
 
 // preToolPayload is the pre-tool envelope Claude Code and Codex share.
 type preToolPayload struct {
-	ToolName       string `json:"tool_name"`
-	ToolUseID      string `json:"tool_use_id,omitempty"`
-	SessionID      string `json:"session_id,omitempty"`
-	CWD            string `json:"cwd,omitempty"`
-	TranscriptPath string `json:"transcript_path,omitempty"`
+	ToolName  string `json:"tool_name"`
+	ToolUseID string `json:"tool_use_id,omitempty"`
+	SessionID string `json:"session_id,omitempty"`
+	CWD       string `json:"cwd,omitempty"`
 	// MCPServer is Claude Code's identification of the server behind an mcp__
 	// tool. Codex does not send it.
 	MCPServer *claudeMCPServer `json:"mcp_server,omitempty"`
@@ -237,9 +236,6 @@ const (
 	maxToolNameBytes   = 1024
 	maxServerNameBytes = 1024
 	maxWorkingDirBytes = 4096
-	// maxTranscriptPathBytes leaves room for the configuration directory, the
-	// launch directory's slug, and the session file around a maximal cwd.
-	maxTranscriptPathBytes = 2 * maxWorkingDirBytes
 	maxWorkspaceRoots      = 64
 	maxWorkspaceRootBytes  = 4096
 )
@@ -266,11 +262,12 @@ func normalizePreTool(ctx context.Context, env Env, agent localagent.Agent, raw 
 	if err := boundedField("cwd", hook.CWD, maxWorkingDirBytes); err != nil {
 		return Call{}, err
 	}
-	// The transcript path is not bounded here: one too long to trust does not
-	// fail the payload, and the resolver treats it as naming no launch
-	// directory (see claudeProjectsFor).
-	req := ResolveRequest{Agent: agent, CWD: hook.CWD, TranscriptPath: hook.TranscriptPath}
+	req := ResolveRequest{Agent: agent, CWD: hook.CWD}
 	if agent == localagent.ClaudeCode {
+		// The project directory is not bounded here: one too long to trust does
+		// not fail the payload, and the resolver treats it as unusable (see
+		// claudeProjectFor).
+		req.ProjectDir = env.getenv(ClaudeProjectDirEnv)
 		class, err := classifyClaudeCodePreTool(toolName, hook.MCPServer)
 		if err != nil {
 			return Call{}, err

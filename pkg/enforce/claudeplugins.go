@@ -43,7 +43,7 @@ type claudePluginInstall struct {
 //
 // A user-scoped installation serves every project. A project- or local-scoped one
 // records the directory it was installed from, and serves only a session
-// launched there or keyed to that project root.
+// started or resumed there or keyed to that project root.
 //
 // Only installations of a plugin that can define server, whose name begins
 // "plugin:<plugin>:", are considered: no other plugin can define or override it.
@@ -315,11 +315,11 @@ func pluginServesProject(env Env, install claudePluginInstall, project claudePro
 	default:
 		return true
 	}
-	if install.ProjectPath == "" || project.launchDir == "" {
+	if install.ProjectPath == "" || project.projectDir == "" {
 		return false
 	}
 	at := env.comparableDir(install.ProjectPath)
-	return at == env.comparableDir(project.launchDir) || at == env.comparableDir(project.root)
+	return at == env.comparableDir(project.projectDir) || at == env.comparableDir(project.root)
 }
 
 // pluginServers loads one installation's servers the way Claude Code merges

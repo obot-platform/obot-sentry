@@ -15,7 +15,7 @@ import (
 // claudeCodeReq builds a Claude Code resolve request for a server Claude Code
 // reported as loaded from source.
 func claudeCodeReq(source, serverName, cwd string) ResolveRequest {
-	return ResolveRequest{Agent: localagent.ClaudeCode, ServerName: serverName, ServerSource: source, CWD: cwd}
+	return ResolveRequest{Agent: localagent.ClaudeCode, ServerName: serverName, ServerSource: source, CWD: cwd, ProjectDir: cwd}
 }
 
 // TestClaudeCodeReadsOnlyTheReportedSource covers the resolver's contract: Claude
@@ -623,167 +623,37 @@ func TestClaudeCodeSymlinkedGitDir(t *testing.T) {
 	assertUnresolved(t, Resolve(f.Env, claudeCodeReq(claudeSourceLocal, "subonly", cwd)), "did not find it there")
 }
 
-// TestClaudeCodeLaunchDirFromTranscript covers a session whose cwd has moved since
-// launch. Claude Code keeps the configuration it loaded for the launch directory,
-// which the transcript path names, so a server only the launch directory's
-// configuration defines still resolves after a cd into a nested repository.
-func TestClaudeCodeLaunchDirFromTranscript(t *testing.T) {
+// TestClaudeCodeProjectDir covers a session whose cwd is not the directory it
+// loaded its configuration for: one that cd'd into a nested repository, or one
+// resumed elsewhere that cd'd into the directory it first started in. Claude
+// Code keeps the configuration of the directory it was started or resumed in,
+// which CLAUDE_PROJECT_DIR names, so that directory is read and cwd is not.
+func TestClaudeCodeProjectDir(t *testing.T) {
 	f := newFixture(t, "darwin")
 	workspace := f.mkdir(f.path("workspace"))
 	nested := f.mkdir(filepath.Join(workspace, "nested.repo"))
 	f.mkdir(filepath.Join(nested, ".git"))
 	f.write(f.homePath(".claude.json"), `{"projects":{
-		`+quote(workspace)+`:{"mcpServers":{"local":{"type":"http","url":"https://workspace-local.example.com/sse"}}}
-	}}`)
-	transcript := f.homePath(".claude", "projects", claudeProjectSlug(workspace), "0b0e.jsonl")
-
-	req := claudeCodeReq(claudeSourceLocal, "local", nested)
-	assertUnresolved(t, Resolve(f.Env, req), "did not find it there") // no transcript: cwd stands in
-	req.TranscriptPath = transcript
-	assertURL(t, Resolve(f.Env, req), "https://workspace-local.example.com/sse")
-
-	// A subagent's transcript sits below its session's directory.
-	req.TranscriptPath = f.homePath(".claude", "projects", claudeProjectSlug(workspace), "0b0e", "subagents", "agent-1.jsonl")
-	assertURL(t, Resolve(f.Env, req), "https://workspace-local.example.com/sse")
-
-	// A transcript naming no directory above cwd is a session that cd'd outside
-	// its launch directory, or was resumed somewhere unrelated, and its slug
-	// cannot be turned back into a path: nothing is trusted, cwd included.
-	f.write(f.homePath(".claude.json"), `{"projects":{
+		`+quote(workspace)+`:{"mcpServers":{"local":{"type":"http","url":"https://workspace-local.example.com/sse"}}},
 		`+quote(nested)+`:{"mcpServers":{"local":{"type":"http","url":"https://nested-local.example.com/sse"}}}
 	}}`)
-	req.TranscriptPath = f.homePath(".claude", "projects", "-somewhere-else", "0b0e.jsonl")
-	assertUnresolved(t, Resolve(f.Env, req), "does not name")
-	req.TranscriptPath = "/" + strings.Repeat("x", maxTranscriptPathBytes)
-	assertUnresolved(t, Resolve(f.Env, req), "does not name")
-	req.TranscriptPath = ""
-	assertURL(t, Resolve(f.Env, req), "https://nested-local.example.com/sse")
-}
-
-// TestClaudeCodeResumedSession covers a session resumed below the directory it
-// first launched in. Claude Code loads the configuration of the directory it was
-// resumed in but keeps writing the original transcript, so the payload is the
-// same as for a session that launched above and cd'd down. Each directory from
-// the transcript's down to cwd may be the one loaded; where those that define the
-// server disagree, the hook cannot tell which ran.
-func TestClaudeCodeResumedSession(t *testing.T) {
-	f := newFixture(t, "darwin")
-	repo := f.mkdir(f.path("repo"))
-	sub := f.mkdir(filepath.Join(repo, "sub"))
-	deep := f.mkdir(filepath.Join(sub, "deep"))
-	f.write(filepath.Join(repo, ".mcp.json"), `{"mcpServers":{
-		"linear":{"type":"http","url":"https://allowed.example.com/mcp"},
-		"shared":{"type":"http","url":"https://shared.example.com/mcp"}
-	}}`)
-	f.write(filepath.Join(sub, ".mcp.json"), `{"mcpServers":{
-		"linear":{"command":"/tmp/evil"},
-		"subonly":{"type":"http","url":"https://sub.example.com/mcp"}
-	}}`)
-	transcript := f.homePath(".claude", "projects", claudeProjectSlug(repo), "s.jsonl")
-
-	for _, cwd := range []string{sub, deep} {
-		req := claudeCodeReq(claudeSourceProject, "linear", cwd)
-		req.TranscriptPath = transcript
-		assertUnresolved(t, Resolve(f.Env, req), "defines \"linear\" differently")
-
-		req.ServerName = "shared"
-		assertURL(t, Resolve(f.Env, req), "https://shared.example.com/mcp")
-
-		// Only a session resumed in sub or below can have loaded this one.
-		req.ServerName = "subonly"
-		assertURL(t, Resolve(f.Env, req), "https://sub.example.com/mcp")
-	}
-
-	// Resumed in the directory it launched in, there is one candidate.
-	req := claudeCodeReq(claudeSourceProject, "linear", repo)
-	req.TranscriptPath = transcript
-	assertURL(t, Resolve(f.Env, req), "https://allowed.example.com/mcp")
-}
-
-// TestClaudeCodeTranscriptMustBeUnderConfigDir covers where the launch
-// directory's slug may come from: only the directory directly under the session's
-// own <config dir>/projects. A "projects" component elsewhere in the path, as a
-// crafted CLAUDE_CONFIG_DIR can supply, must not name the launch directory.
-func TestClaudeCodeTranscriptMustBeUnderConfigDir(t *testing.T) {
-	f := newFixture(t, "darwin")
-	app := f.mkdir(f.path("app"))
-	evil := f.mkdir(filepath.Join(app, "evil"))
-	f.write(filepath.Join(app, ".mcp.json"), `{"mcpServers":{"linear":{"command":"/tmp/real"}}}`)
-	f.write(filepath.Join(evil, ".mcp.json"), `{"mcpServers":{"linear":{"type":"http","url":"https://allowed.example.com/mcp"}}}`)
-
-	// The real slug makes app a candidate, which defines linear differently; the
-	// crafted one would leave evil the only candidate.
-	configDir := f.path("x", "projects", claudeProjectSlug(evil), "cfg")
-	f.setenv(claudeConfigDirEnv, configDir)
-	req := claudeCodeReq(claudeSourceProject, "linear", evil)
-	req.TranscriptPath = filepath.Join(configDir, "projects", claudeProjectSlug(app), "s.jsonl")
-	assertUnresolved(t, Resolve(f.Env, req), "differently")
-
-	// A transcript outside the session's configuration directory names no launch
-	// directory, so nothing is trusted.
-	req.TranscriptPath = f.homePath(".claude", "projects", claudeProjectSlug(app), "s.jsonl")
-	assertUnresolved(t, Resolve(f.Env, req), "does not name")
-}
-
-// TestClaudeCodeTranscriptSlugCollision covers two directories with one slug:
-// /work/my-app and /work/my/app both become -work-my-app. A session launched in
-// the first that cd's into the second has a transcript naming cwd, so the slug
-// matches it, yet the session loaded the other directory's configuration. When
-// another existing directory shares the slug, nothing is trusted.
-func TestClaudeCodeTranscriptSlugCollision(t *testing.T) {
-	f := newFixture(t, "darwin")
-	nested := f.mkdir(f.path("work", "my", "app"))
 	f.write(filepath.Join(nested, ".mcp.json"), `{"mcpServers":{"probe":{"type":"http","url":"https://allowed.example.com/mcp"}}}`)
-	req := claudeCodeReq(claudeSourceProject, "probe", nested)
-	req.TranscriptPath = f.homePath(".claude", "projects", claudeProjectSlug(nested), "s.jsonl")
+	resumed := f.mkdir(f.path("elsewhere"))
+	f.write(filepath.Join(resumed, ".mcp.json"), `{"mcpServers":{"probe":{"command":"/tmp/real"}}}`)
+
+	req := claudeCodeReq(claudeSourceLocal, "local", nested)
+	req.ProjectDir = workspace
+	assertURL(t, Resolve(f.Env, req), "https://workspace-local.example.com/sse")
+
+	req = claudeCodeReq(claudeSourceProject, "probe", nested)
 	assertURL(t, Resolve(f.Env, req), "https://allowed.example.com/mcp")
+	req.ProjectDir = resumed
+	assertCommand(t, Resolve(f.Env, req), "/tmp/real")
 
-	launched := f.mkdir(f.path("work", "my-app"))
-	f.write(filepath.Join(launched, ".mcp.json"), `{"mcpServers":{"probe":{"command":"/tmp/real"}}}`)
-	if claudeProjectSlug(launched) != claudeProjectSlug(nested) {
-		t.Fatalf("slugs differ: %q, %q", claudeProjectSlug(launched), claudeProjectSlug(nested))
-	}
-	assertUnresolved(t, Resolve(f.Env, req), "does not name")
-
-	// A file, not a directory, with the slug is no launch directory.
-	if err := os.Remove(filepath.Join(launched, ".mcp.json")); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Remove(launched); err != nil {
-		t.Fatal(err)
-	}
-	f.write(launched, "not a directory")
-	assertURL(t, Resolve(f.Env, req), "https://allowed.example.com/mcp")
-}
-
-// TestClaudeCodeTranscriptSlugTooLongToSearch covers a launch directory whose
-// slug is long enough for Claude Code to cut and hash, which the search for
-// another directory with the same slug cannot follow, so it is not trusted.
-func TestClaudeCodeTranscriptSlugTooLongToSearch(t *testing.T) {
-	f := newFixture(t, "darwin")
-	deep := f.mkdir(f.path(strings.Repeat("d", 120), strings.Repeat("e", 120)))
-	f.write(filepath.Join(deep, ".mcp.json"), `{"mcpServers":{"probe":{"type":"http","url":"https://allowed.example.com/mcp"}}}`)
-	req := claudeCodeReq(claudeSourceProject, "probe", deep)
-	assertURL(t, Resolve(f.Env, req), "https://allowed.example.com/mcp") // no transcript
-	req.TranscriptPath = f.homePath(".claude", "projects", claudeProjectSlug(deep), "s.jsonl")
-	assertUnresolved(t, Resolve(f.Env, req), "does not name")
-}
-
-// TestClaudeProjectSlug pins the transcript directory name against values
-// computed by Claude Code's own JavaScript, including the truncation hash and a
-// character outside the BMP, which counts as two code units.
-func TestClaudeProjectSlug(t *testing.T) {
-	for _, tc := range []struct{ path, want string }{
-		{"/Users/dev/my.project", "-Users-dev-my-project"},
-		{`C:\Users\Dev\Proj`, "C--Users-Dev-Proj"},
-		{"/Users/dev/" + strings.Repeat("a", 230),
-			"-Users-dev-" + strings.Repeat("a", 189) + "-4qs2i8"},
-		{"/Users/dev/" + strings.Repeat("b", 195) + "/\u00e9\U0001F642x",
-			"-Users-dev-" + strings.Repeat("b", 189) + "-6b4uvt"},
-	} {
-		if got := claudeProjectSlug(tc.path); got != tc.want {
-			t.Errorf("claudeProjectSlug(%q) = %q, want %q", tc.path, got, tc.want)
-		}
+	// Without a usable project directory nothing is trusted, cwd included.
+	for _, dir := range []string{"", "relative/dir", "/" + strings.Repeat("x", maxWorkingDirBytes)} {
+		req.ProjectDir = dir
+		assertUnresolved(t, Resolve(f.Env, req), ClaudeProjectDirEnv)
 	}
 }
 
@@ -898,7 +768,7 @@ func scopeKeys(scopes []scope) []string {
 	return out
 }
 
-// localScopesFrom returns the local scope for a session launched in cwd, against
+// localScopesFrom returns the local scope for a session started in cwd, against
 // a fixture's ~/.claude.json.
 func localScopesFrom(t *testing.T, f *fixture, cwd string) []scope {
 	t.Helper()
@@ -906,17 +776,15 @@ func localScopesFrom(t *testing.T, f *fixture, cwd string) []scope {
 	var claude claudeJSON
 	res := loadJSON(claudePath, &claude)
 	loader := newConfigLoader()
-	projects, _ := claudeProjectsFor(t.Context(), loader, f.Env, f.homePath(".claude"), cwd, "")
-	project := projects[0]
+	project, _ := claudeProjectFor(t.Context(), loader, cwd)
 	return claudeLocalScopes(f.Env, project, claudePath, claude, res)
 }
 
-// projectFileScopesFrom returns the .mcp.json scopes for a session launched in cwd.
+// projectFileScopesFrom returns the .mcp.json scopes for a session started in cwd.
 func projectFileScopesFrom(t *testing.T, f *fixture, cwd string) []scope {
 	t.Helper()
 	loader := newConfigLoader()
-	projects, _ := claudeProjectsFor(t.Context(), loader, f.Env, f.homePath(".claude"), cwd, "")
-	project := projects[0]
+	project, _ := claudeProjectFor(t.Context(), loader, cwd)
 	return claudeProjectFileScopes(loader, project)
 }
 
@@ -956,7 +824,7 @@ func TestAncestorsIsBounded(t *testing.T) {
 }
 
 // TestProjectFileScopesOrder pins the ordering contract: every project file from
-// the launch directory up, deepest first, with consecutive ranks.
+// the project directory up, deepest first, with consecutive ranks.
 func TestProjectFileScopesOrder(t *testing.T) {
 	f := newFixture(t, "darwin")
 	project := f.mkdir(f.path("proj"))
@@ -998,7 +866,7 @@ func TestProjectFileScopesNamesTheAbsentProjectFile(t *testing.T) {
 // placeholder must not name one: as a scope it would be loaded.
 func TestProjectFileScopesNeverReadTheRootProjectFile(t *testing.T) {
 	root := hostRoot(t)
-	if scopes := claudeProjectFileScopes(newConfigLoader(), claudeProject{launchDir: root, root: root}); len(scopes) != 0 {
+	if scopes := claudeProjectFileScopes(newConfigLoader(), claudeProject{projectDir: root, root: root}); len(scopes) != 0 {
 		t.Fatalf("root launch produced project file scopes: %v", scopeKeys(scopes))
 	}
 }

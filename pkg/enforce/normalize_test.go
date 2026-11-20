@@ -595,35 +595,36 @@ func TestNormalizeUnresolvedMCPCall(t *testing.T) {
 	}
 }
 
-// TestNormalizeClaudeCodeTranscriptPath covers the payload field that recovers a
-// session's launch directory: it reaches the resolver, and one too long to trust
-// leaves the call unresolved rather than failing the payload.
-func TestNormalizeClaudeCodeTranscriptPath(t *testing.T) {
+// TestNormalizeClaudeCodeProjectDir covers the CLAUDE_PROJECT_DIR Claude Code
+// gives the hook: it reaches the resolver in place of cwd, and without it, or
+// with one too long to trust, the call is unresolved rather than the payload
+// failing.
+func TestNormalizeClaudeCodeProjectDir(t *testing.T) {
 	f := newFixture(t, "darwin")
-	launch := f.mkdir(f.path("launch"))
-	cwd := f.mkdir(filepath.Join(launch, "moved"))
-	f.write(f.homePath(".claude.json"), `{"projects":{`+quote(launch)+`:{"mcpServers":{"probe":{"type":"http","url":"https://launch.example.com/mcp"}}}}}`)
+	project := f.mkdir(f.path("project"))
+	cwd := f.mkdir(filepath.Join(project, "moved"))
+	f.write(f.homePath(".claude.json"), `{"projects":{`+quote(project)+`:{"mcpServers":{"probe":{"type":"http","url":"https://project.example.com/mcp"}}}}}`)
+	payload := mustJSON(map[string]any{"tool_name": "mcp__probe__echo", "cwd": cwd,
+		"mcp_server": map[string]string{"name": "probe", "source": "local"}})
 
-	payload := func(transcript string) []byte {
-		return mustJSON(map[string]any{"tool_name": "mcp__probe__echo", "cwd": cwd, "transcript_path": transcript,
-			"mcp_server": map[string]string{"name": "probe", "source": "local"}})
-	}
-	call, err := normalizeCall(f.Env, localagent.ClaudeCode, EventPreToolUse,
-		payload(f.homePath(".claude", "projects", claudeProjectSlug(launch), "s.jsonl")))
+	f.setenv(ClaudeProjectDirEnv, project)
+	call, err := normalizeCall(f.Env, localagent.ClaudeCode, EventPreToolUse, payload)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := call.Request.Server.URL; got != "https://launch.example.com/mcp" {
-		t.Fatalf("URL = %q, want the launch directory's server", got)
+	if got := call.Request.Server.URL; got != "https://project.example.com/mcp" {
+		t.Fatalf("URL = %q, want the project directory's server", got)
 	}
 
-	call, err = normalizeCall(f.Env, localagent.ClaudeCode, EventPreToolUse,
-		payload("/"+strings.Repeat("x", maxTranscriptPathBytes)))
-	if err != nil {
-		t.Fatalf("an over-long transcript path failed the call: %v", err)
-	}
-	if !call.Request.Unresolved || !strings.Contains(call.Request.UnresolvedReason, "does not name") {
-		t.Fatalf("request = %+v, want it unresolved: an over-long transcript names no launch directory", call.Request)
+	for _, dir := range []string{"", "/" + strings.Repeat("x", maxWorkingDirBytes)} {
+		f.setenv(ClaudeProjectDirEnv, dir)
+		call, err = normalizeCall(f.Env, localagent.ClaudeCode, EventPreToolUse, payload)
+		if err != nil {
+			t.Fatalf("project directory %.20q failed the call: %v", dir, err)
+		}
+		if !call.Request.Unresolved || !strings.Contains(call.Request.UnresolvedReason, ClaudeProjectDirEnv) {
+			t.Fatalf("request = %+v, want it unresolved without a usable project directory", call.Request)
+		}
 	}
 }
 

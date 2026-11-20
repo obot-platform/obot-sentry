@@ -11,9 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
-	"unicode/utf16"
 )
 
 // Claude Code configuration file locations, slash-separated as machinePath
@@ -216,48 +214,35 @@ func resolveClaudeCode(ctx context.Context, loader *configLoader, env Env, req R
 	}
 
 	// The local, project, and plugin scopes depend on the directory the session
-	// launched in. Each directory it may have launched in is resolved, and those
-	// whose configuration defines the server must agree on it. One that does not
-	// define it cannot be where the session loaded it.
-	projects, ok := claudeProjectsFor(ctx, loader, env, configDir, req.CWD, req.TranscriptPath)
+	// was started or resumed in.
+	project, ok := claudeProjectFor(ctx, loader, req.ProjectDir)
 	if !ok {
 		return unresolved(serverName, fmt.Sprintf(
-			"the session's transcript does not name %s or a directory above it, so the directory Claude Code loaded %s MCP servers for is not known; the session may have changed to a directory outside the one it started in",
-			req.CWD, source))
+			"Claude Code did not give the hook a usable %s, so the directory it loaded %s MCP servers for is not known",
+			ClaudeProjectDirEnv, source))
 	}
 	var (
-		m          match
-		found      bool
+		scopes     []scope
 		incomplete bool
 	)
-	for _, project := range projects {
-		var scopes []scope
-		switch source {
-		case claudeSourceLocal:
-			scopes = claudeLocalScopes(env, project, claudePath, claude, claudeRes)
-		case claudeSourceProject:
-			scopes = claudeProjectFileScopes(loader, project)
-		case claudeSourcePlugin:
-			scopes = claudePluginScopes(ctx, loader, env, configDir, project, serverName, 0, &incomplete)
-		}
-		pm, out := resolveScopes(ctx, scopes, names, tr)
-		if incomplete {
-			return unresolved(serverName, fmt.Sprintf(
-				"Claude Code's plugins name more installations or server files than the hook reads, so the definition of MCP server %q cannot be settled", serverName))
-		}
-		switch {
-		case out == outcomeAmbiguous:
-			return ambiguous(req.Agent, serverName)
-		case out != outcomeFound:
-		case !found:
-			m, found = pm, true
-		case !sameEntry(pm.entry, m.entry):
-			return unresolved(serverName, fmt.Sprintf(
-				"the session started in %s or a directory between it and %s, and Claude Code's %s MCP configuration defines %q differently depending on which, so the hook cannot tell which one ran; rename one of them",
-				projects[len(projects)-1].launchDir, projects[0].launchDir, source, serverName))
-		}
+	switch source {
+	case claudeSourceLocal:
+		scopes = claudeLocalScopes(env, project, claudePath, claude, claudeRes)
+	case claudeSourceProject:
+		scopes = claudeProjectFileScopes(loader, project)
+	case claudeSourcePlugin:
+		scopes = claudePluginScopes(ctx, loader, env, configDir, project, serverName, 0, &incomplete)
 	}
-	if !found {
+	m, out := resolveScopes(ctx, scopes, names, tr)
+	if incomplete {
+		return unresolved(serverName, fmt.Sprintf(
+			"Claude Code's plugins name more installations or server files than the hook reads, so the definition of MCP server %q cannot be settled", serverName))
+	}
+	switch out {
+	case outcomeAmbiguous:
+		return ambiguous(req.Agent, serverName)
+	case outcomeFound:
+	default:
 		return claudeNotFound(serverName, source)
 	}
 	return resolved(env, m.key, m.entry)
@@ -461,206 +446,48 @@ func managedSettingsServerAccepted(raw json.RawMessage) bool {
 // claudeProject is the project context a Claude Code session loads its
 // project-scoped configuration from.
 type claudeProject struct {
-	// launchDir is the directory the session was started in. Claude Code reads
-	// .mcp.json from it and from every directory above it.
-	launchDir string
-	// root keys the session's projects{} entry: the launch directory's git root —
+	// projectDir is the directory the session was started or resumed in.
+	// Claude Code reads .mcp.json from it and from every directory above it.
+	projectDir string
+	// root keys the session's projects{} entry: the project directory's git root —
 	// the main checkout's, for a linked worktree — or, outside a repository, the
-	// launch directory itself.
+	// project directory itself.
 	root string
 }
 
-// claudeProjectsFor establishes the project contexts a call made from cwd may
-// have been loaded in, cwd's first. ok is false when no context can be trusted.
+// ClaudeProjectDirEnv is the variable Claude Code sets for every hook to the
+// directory the session was started or resumed in, the one it loaded
+// project-scoped configuration for.
+const ClaudeProjectDirEnv = "CLAUDE_PROJECT_DIR"
+
+// claudeProjectFor establishes the project context of a session whose project
+// directory is projectDir. ok is false when projectDir is not usable.
 //
-// The hook's cwd is where the session is now, which is not necessarily where it
-// started: a session that cd's into a subdirectory or a nested repository keeps
-// the configuration it loaded at launch. Claude Code names the transcript
-// directory after the launch directory, so the transcript path recovers it.
-//
-// A resumed session breaks that. It loads its configuration from the directory
-// it was resumed in, but goes on writing the transcript it started, named after
-// the directory the session first launched in. When that names a directory above
-// cwd, the payload looks the same for a session that launched there and cd'd
-// down as for one resumed from anywhere between there and cwd, so every one of
-// those directories is a candidate.
-//
-// A transcript that names no directory above cwd is a session that cd'd outside
-// its launch directory, into a directory added with --add-dir for instance, or
-// one resumed somewhere unrelated; its slug cannot be turned back into a path,
-// so nothing is trusted. Nor is one whose slug another existing directory also
-// has (see claudeSlugIsUnique), since the session may have launched there. Neither is a transcript path that is unusable, being
-// outside Claude Code's configuration directory or too long. With no transcript
-// path at all, as for the enforce resolve diagnostic, cwd stands in.
-func claudeProjectsFor(ctx context.Context, loader *configLoader, env Env, configDir, cwd, transcriptPath string) (projects []claudeProject, ok bool) {
-	dirs := ancestors(cwd)
-	if len(dirs) == 0 {
-		return []claudeProject{{}}, true
+// The hook's cwd is where the session is now, which is not necessarily where its
+// configuration came from: a session that cd's into a subdirectory, a nested
+// repository or a directory added with --add-dir keeps the configuration it
+// loaded at start, and a resumed session loads the configuration of the
+// directory it was resumed in, which can be anywhere. Claude Code passes that
+// directory to every hook as CLAUDE_PROJECT_DIR, set after any value in its own
+// environment or settings, so neither can replace it.
+func claudeProjectFor(ctx context.Context, loader *configLoader, projectDir string) (claudeProject, bool) {
+	if projectDir == "" || len(projectDir) > maxWorkingDirBytes || !filepath.IsAbs(projectDir) {
+		return claudeProject{}, false
 	}
-	candidates := dirs[:1]
-	if transcriptPath != "" {
-		if len(transcriptPath) > maxTranscriptPathBytes {
-			return nil, false
-		}
-		n, ok := claudeLaunchDir(env, dirs, configDir, transcriptPath)
-		if !ok || !claudeSlugIsUnique(ctx, env, dirs[n]) {
-			return nil, false
-		}
-		candidates = dirs[:n+1]
-	}
-	projects = make([]claudeProject, len(candidates))
-	for i, dir := range candidates {
-		projects[i] = claudeProject{launchDir: dir, root: claudeProjectRoot(ctx, loader, dir)}
-	}
-	return projects, true
-}
-
-// claudeLaunchDir finds which of dirs, an absolute cwd and its ancestors, names
-// the transcript directory the session writes to (projects/<slug>/<id>.jsonl in
-// Claude Code's configuration directory), and returns its index.
-func claudeLaunchDir(env Env, dirs []string, configDir, transcriptPath string) (int, bool) {
-	slug, ok := claudeTranscriptSlug(env, configDir, transcriptPath)
-	if !ok {
-		return 0, false
-	}
-	for i, dir := range dirs {
-		want := claudeProjectSlug(dir)
-		if slug == want || env.windows() && strings.EqualFold(slug, want) {
-			return i, true
-		}
-	}
-	return 0, false
-}
-
-// claudeTranscriptSlug returns the project slug of a transcript the session wrote
-// to configDir: the directory directly under configDir/projects, with the
-// transcript at or below it, which also covers a subagent transcript nested under
-// its session. A "projects" component anywhere else in the path is not the
-// session's; taking one would let a crafted configuration directory name any
-// launch directory.
-func claudeTranscriptSlug(env Env, configDir, transcriptPath string) (string, bool) {
-	if !filepath.IsAbs(transcriptPath) || !filepath.IsAbs(configDir) {
-		return "", false
-	}
-	projects := filepath.Join(configDir, "projects") + string(filepath.Separator)
-	path := filepath.Clean(transcriptPath)
-	if len(path) <= len(projects) {
-		return "", false
-	}
-	prefix := path[:len(projects)]
-	if prefix != projects && (!env.windows() || !strings.EqualFold(prefix, projects)) {
-		return "", false
-	}
-	slug, rest, ok := strings.Cut(path[len(projects):], string(filepath.Separator))
-	return slug, ok && slug != "" && rest != ""
-}
-
-// claudeSlugMax is the longest slug Claude Code writes before truncating.
-const claudeSlugMax = 200
-
-// claudeProjectSlug is the directory name Claude Code gives a project's
-// transcripts: every UTF-16 code unit outside [a-zA-Z0-9] becomes "-", and a
-// result over 200 characters is cut there and suffixed with a hash of the path.
-func claudeProjectSlug(path string) string {
-	units := utf16.Encode([]rune(path))
-	slug := claudeSlugUnits(units)
-	if len(slug) <= claudeSlugMax {
-		return slug
-	}
-	// JavaScript's 32-bit string hash, Math.abs'd and written in base 36. The abs
-	// is taken in 64 bits because Math.abs(-2^31) is 2^31, not an overflow.
-	var h int32
-	for _, u := range units {
-		h = 31*h + int32(u)
-	}
-	abs := int64(h)
-	if abs < 0 {
-		abs = -abs
-	}
-	return slug[:claudeSlugMax] + "-" + strconv.FormatInt(abs, 36)
-}
-
-// claudeSlugUnits maps each UTF-16 code unit outside [a-zA-Z0-9] to "-", the
-// part of claudeProjectSlug before any truncation.
-func claudeSlugUnits(units []uint16) string {
-	slug := make([]byte, len(units))
-	for i, u := range units {
-		switch {
-		case u >= 'a' && u <= 'z', u >= 'A' && u <= 'Z', u >= '0' && u <= '9':
-			slug[i] = byte(u)
-		default:
-			slug[i] = '-'
-		}
-	}
-	return string(slug)
-}
-
-// maxClaudeSlugSearchDirs bounds the directories listed while looking for
-// another directory with a launch directory's slug.
-const maxClaudeSlugSearchDirs = 256
-
-// claudeSlugIsUnique reports whether dir is the only existing directory whose
-// slug is its own. The slug is lossy: /work/my-app and /work/my/app both become
-// -work-my-app, so a transcript naming dir may belong to a session launched in
-// the other one, which then cd'd here. The search walks down from the volume
-// root, following every entry whose slug fits the rest of dir's; past
-// maxClaudeSlugSearchDirs listings, or for a slug long enough to be cut and
-// hashed, which this cannot follow, dir is not known to be unique.
-func claudeSlugIsUnique(ctx context.Context, env Env, dir string) bool {
-	root := filepath.VolumeName(dir) + string(filepath.Separator)
-	slug, rootSlug := claudeProjectSlug(dir), claudeProjectSlug(root)
-	if len(utf16.Encode([]rune(dir))) > claudeSlugMax || !strings.HasPrefix(slug, rootSlug) {
-		return false
-	}
-	same := func(a, b string) bool { return a == b || env.windows() && strings.EqualFold(a, b) }
-	listed, found := 0, 0
-	var search func(parent, rest string) bool
-	search = func(parent, rest string) bool {
-		if rest == "" {
-			found++
-			return found < 2
-		}
-		if listed == maxClaudeSlugSearchDirs || ctx.Err() != nil {
-			return false
-		}
-		listed++
-		// A directory the search cannot list may hold another match.
-		entries, err := os.ReadDir(parent)
-		if err != nil {
-			return false
-		}
-		for _, entry := range entries {
-			name := claudeSlugUnits(utf16.Encode([]rune(entry.Name())))
-			next, fits := "", same(name, rest)
-			if !fits && len(rest) > len(name) && same(rest[:len(name)], name) && rest[len(name)] == '-' {
-				next, fits = rest[len(name)+1:], true
-			}
-			if !fits {
-				continue
-			}
-			path := filepath.Join(parent, entry.Name())
-			if info, err := os.Stat(path); err != nil || !info.IsDir() {
-				continue
-			}
-			if !search(path, next) {
-				return false
-			}
-		}
-		return true
-	}
-	return search(root, slug[len(rootSlug):]) && found == 1
+	dir := filepath.Clean(projectDir)
+	return claudeProject{projectDir: dir, root: claudeProjectRoot(ctx, loader, dir)}, true
 }
 
 // claudeProjectRoot returns the directory that keys a session's projects{} entry.
 //
-// Claude Code walks up from the launch directory to the nearest .git. A .git
+// Claude Code walks up from the project directory to the nearest .git. A .git
 // directory makes that directory the root. A .git file is a linked worktree or a
 // submodule: a worktree, whose git directory names a commondir, is keyed by the
 // main checkout so all of a repository's worktrees share one entry; a submodule
 // keeps its own. A symlinked .git is followed, as Claude Code follows it: a
 // checkout made by a tool like repo is still its own root.
-func claudeProjectRoot(ctx context.Context, loader *configLoader, launchDir string) string {
-	for _, dir := range ancestors(launchDir) {
+func claudeProjectRoot(ctx context.Context, loader *configLoader, projectDir string) string {
+	for _, dir := range ancestors(projectDir) {
 		dotGit := filepath.Join(dir, ".git")
 		info, err := os.Stat(dotGit)
 		if err != nil {
@@ -674,7 +501,7 @@ func claudeProjectRoot(ctx context.Context, loader *configLoader, launchDir stri
 		}
 		return dir
 	}
-	return launchDir
+	return projectDir
 }
 
 // gitWorktreeMain returns the directory that keys the linked worktree at dir,
@@ -780,22 +607,22 @@ func claudeLocalScopes(env Env, project claudeProject, claudePath string, claude
 	return scopes
 }
 
-// claudeProjectFileScopes returns each .mcp.json from the launch directory up,
+// claudeProjectFileScopes returns each .mcp.json from the project directory up,
 // highest precedence first.
 //
-// Claude Code reads .mcp.json from the launch directory and every directory above
+// Claude Code reads .mcp.json from the project directory and every directory above
 // it short of the filesystem root, merging them so a deeper file overrides a
 // shallower one. Every one of them is live, so every one is a scope.
 func claudeProjectFileScopes(loader *configLoader, project claudeProject) []scope {
-	if project.launchDir == "" {
+	if project.projectDir == "" {
 		return nil
 	}
-	files := projectFiles(project.launchDir)
-	if len(files) == 0 && filepath.Dir(project.launchDir) != project.launchDir {
+	files := projectFiles(project.projectDir)
+	if len(files) == 0 && filepath.Dir(project.projectDir) != project.projectDir {
 		// Name the file an operator expects to be read, so the trace says it is
 		// absent rather than leaving it out. Not at the filesystem root, whose
 		// .mcp.json Claude Code never reads: there the placeholder would load it.
-		files = []string{filepath.Join(project.launchDir, ".mcp.json")}
+		files = []string{filepath.Join(project.projectDir, ".mcp.json")}
 	}
 	scopes := make([]scope, len(files))
 	for i, path := range files {

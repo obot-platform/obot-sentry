@@ -81,9 +81,16 @@ single session (`--plugin-dir`, `--plugin-dir-no-mcp`, `--plugin-url`,
 `CLAUDE_CODE_PLUGIN_DIRS`, and plugins an Agent SDK host passes at startup), as
 well as `--agents` and `--mcp-config`. Such a plugin reports the same server name
 as an installed plugin and replaces an installed plugin of the same name, so
-plugin MCP servers are resolved only while this setting is on. An audit-only run
-and an uninstall leave the setting in place, since the file does not record
-whether obot-sentry or an administrator set it.
+plugin MCP servers are resolved only while this setting is on. It replaces any
+value already there, including an explicit `false`.
+
+An audit-only run and an uninstall leave the setting in place, since the file
+does not record whether obot-sentry or an administrator set it. Claude Code
+therefore keeps refusing those flags after enforcement is turned off or
+obot-sentry is removed. To allow them again, delete `disableSideloadFlags` from
+Claude Code's managed settings file (`/Library/Application
+Support/ClaudeCode/managed-settings.json` on macOS,
+`C:\Program Files\ClaudeCode\managed-settings.json` on Windows).
 
 ### It fails closed
 
@@ -222,18 +229,13 @@ Plugin servers are resolved only while the managed settings set
 `disableSideloadFlags` (see above); otherwise a plugin loaded for the session
 alone could pass for an installed one, and they are left unresolved.
 
-A session's launch directory is recovered from its transcript path, so pass
-`--transcript-path` from a hook payload to reproduce a call made after the
-session changed directories; without one, the current directory stands in. A
-resumed session keeps its original transcript, so when that names a directory
-above the current one, each directory in between may be the one the session
-loaded, and a server they define differently is left unresolved. A transcript
-that names no directory above the current one, as after changing into a
-directory added with `--add-dir`, leaves `local`, `project` and `plugin` servers
-unresolved: the directory the session loaded them for is not known. So does one
-whose name another existing directory shares: Claude Code turns every character
-other than a letter or digit into `-`, so `/work/my-app` and `/work/my/app` have
-the same transcript directory. Claude Code's files are parsed as strict JSON, as Claude Code parses
+`local`, `project` and `plugin` servers are read for the directory the session
+was started or resumed in, which Claude Code gives every hook as
+`CLAUDE_PROJECT_DIR`; a session keeps that configuration after changing
+directories, and a resumed session loads it from wherever it was resumed. Pass
+`--project-dir` to reproduce a hook call; without it, the current directory
+stands in. A hook run without `CLAUDE_PROJECT_DIR` leaves those servers
+unresolved. Claude Code's files are parsed as strict JSON, as Claude Code parses
 them, so a file with comments or trailing commas is skipped. A plugin from a
 marketplace added from a local folder or catalog file is read from that folder,
 which is where Claude Code loads it.
