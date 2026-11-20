@@ -1,6 +1,7 @@
 package enforce
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"encoding/json"
@@ -8,6 +9,7 @@ import (
 	"path"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -390,8 +392,10 @@ func pluginServers(loader *configLoader, name, dir string, incomplete *bool) fun
 
 // pluginServerFile reads a plugin server file, which may hold its table under
 // mcpServers or be the table itself, and keeps the entries Claude Code loads.
-// Like Claude Code's "doc.mcpServers || doc", a mcpServers member that is not an
-// object leaves the file read as a flat table.
+// Claude Code reads "doc.mcpServers || doc", so the file is a flat table only
+// when mcpServers is absent or falsy. Any other mcpServers that is not an object,
+// such as an array, is read by Claude Code in ways the hook does not reproduce,
+// so the file is undecodable rather than read as a flat table it is not.
 func pluginServerFile(ctx context.Context, loader *configLoader, path string) (serverSet, loadResult) {
 	var raw json.RawMessage
 	if res := loader.loadStrictJSON(ctx, path, &raw, maxConfigBytes); res != loadOK {
@@ -401,10 +405,36 @@ func pluginServerFile(ctx context.Context, loader *configLoader, path string) (s
 	if !ok {
 		return nil, loadUndecodable
 	}
-	if wrapped, ok := objectMember(doc, mcpServersKey); ok && wrapped != nil {
-		return claudeServers(wrapped), loadOK
+	member, present := doc[mcpServersKey]
+	if !present || jsonFalsy(member) {
+		return claudeServers(doc), loadOK
 	}
-	return claudeServers(doc), loadOK
+	wrapped, ok := exactObject(member)
+	if !ok {
+		return nil, loadUndecodable
+	}
+	return claudeServers(wrapped), loadOK
+}
+
+// jsonFalsy reports whether a JSON value is falsy to JavaScript: null, false,
+// "", or a number that is zero, including one too small to represent.
+func jsonFalsy(raw json.RawMessage) bool {
+	raw = bytes.TrimSpace(raw)
+	switch {
+	case len(raw) == 0:
+		return false
+	case string(raw) == "null", string(raw) == "false":
+		return true
+	case raw[0] == '"':
+		value, ok := jsonString(raw)
+		return ok && value == ""
+	case raw[0] == '-' || raw[0] >= '0' && raw[0] <= '9':
+		// ParseFloat returns zero with a range error for an underflow, which
+		// JavaScript reads as zero too.
+		f, _ := strconv.ParseFloat(string(raw), 64)
+		return f == 0
+	}
+	return false
 }
 
 // pluginRelPath resolves a manifest's server file reference. Claude Code takes

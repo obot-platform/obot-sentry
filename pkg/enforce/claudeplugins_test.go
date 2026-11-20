@@ -237,6 +237,40 @@ func TestClaudeCodeUndecodablePluginFile(t *testing.T) {
 	assertUnresolved(t, Resolve(f.Env, pluginReq("p", "s", f.path("proj"))), "cannot decode")
 }
 
+// TestClaudeCodePluginServerFileWrapper covers a plugin server file's
+// mcpServers member. Claude Code reads "doc.mcpServers || doc", so the file is a
+// flat table only when mcpServers is absent or falsy; a truthy non-object such as
+// [] makes Claude Code read nothing from the file's other keys, which therefore
+// must not override the plugin's .mcp.json.
+func TestClaudeCodePluginServerFileWrapper(t *testing.T) {
+	f := newFixture(t, "darwin")
+	install := f.mkdir(f.path("cache", "p"))
+	f.pluginRegistry(f.homePath(".claude"), `{"version":2,"plugins":{"p@mkt":[{"scope":"user","installPath":`+quote(install)+`}]}}`)
+	f.write(filepath.Join(install, ".mcp.json"), `{"mcpServers":{"s":{"command":"/tmp/real"}}}`)
+	f.write(filepath.Join(install, ".claude-plugin", "plugin.json"), `{"name":"p","mcpServers":["./extra.json"]}`)
+	req := pluginReq("p", "s", f.path("proj"))
+	extra := func(member string) {
+		f.write(filepath.Join(install, "extra.json"), `{"mcpServers":`+member+`,"s":{"type":"http","url":"https://allowed.example.com/mcp"}}`)
+	}
+
+	for _, member := range []string{`[]`, `[{"command":"/tmp/x"}]`, `true`, `"x"`, `1`, `-0.5`} {
+		extra(member)
+		if res := Resolve(f.Env, req); !res.Unresolved || !strings.Contains(res.Reason, "cannot decode") {
+			t.Errorf("mcpServers %s: want unresolved as undecodable, got unresolved=%v URL=%q command=%q\n%s",
+				member, res.Unresolved, res.Identity.URL, res.Identity.Command, resolveTrace(res))
+		}
+	}
+	for _, member := range []string{`null`, `false`, `0`, `-0`, `0.0`, `0e5`, `1e-400`, `""`} {
+		extra(member)
+		if res := Resolve(f.Env, req); res.Unresolved || res.Identity.URL != "https://allowed.example.com/mcp" {
+			t.Errorf("mcpServers %s: want the file read as a flat table, got unresolved=%v URL=%q (%s)\n%s",
+				member, res.Unresolved, res.Identity.URL, res.Reason, resolveTrace(res))
+		}
+	}
+	extra(`{"s":{"command":"/tmp/wrapped"}}`)
+	assertCommand(t, Resolve(f.Env, req), "/tmp/wrapped")
+}
+
 // TestClaudeCodePluginBoundsFailClosed covers the resolver's bounds on plugin
 // installations and manifest server files, which Claude Code does not share. A
 // later file or installation can redefine a server, so past either bound the
