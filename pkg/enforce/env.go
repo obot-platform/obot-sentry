@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 
 	"github.com/BurntSushi/toml"
 	"github.com/tailscale/hujson"
@@ -108,6 +109,11 @@ const (
 	loadUnusable
 	// loadOK means the file was read and decoded.
 	loadOK
+	// loadUndecodable means the file exists and its agent may have loaded it,
+	// but the hook cannot decode it, so what it defines is unknown. Unlike an
+	// unusable file, it does not let a later scope answer in its place. It sorts
+	// last, so it outweighs every other result it is combined with.
+	loadUndecodable
 )
 
 // note returns the trace annotation for a non-OK load.
@@ -115,6 +121,8 @@ func (r loadResult) note() string {
 	switch r {
 	case loadUnusable:
 		return "unreadable or malformed"
+	case loadUndecodable:
+		return "may be loaded by the agent, but the hook cannot decode it"
 	default:
 		return ""
 	}
@@ -135,7 +143,7 @@ type cachedConfig struct {
 // repeated filesystem I/O. Operation lifetime belongs to the contexts passed
 // to its methods, not to the cache itself.
 type configLoader struct {
-	files           map[string]cachedConfig
+	files           map[configKey]cachedConfig
 	jsonServerSets  map[string]cachedServerSet
 	codexServerSets map[string]cachedServerSet
 	claudeDocs      map[string]cachedClaudeJSON
@@ -143,29 +151,44 @@ type configLoader struct {
 
 func newConfigLoader() *configLoader {
 	return &configLoader{
-		files:           map[string]cachedConfig{},
+		files:           map[configKey]cachedConfig{},
 		jsonServerSets:  map[string]cachedServerSet{},
 		codexServerSets: map[string]cachedServerSet{},
 		claudeDocs:      map[string]cachedClaudeJSON{},
 	}
 }
 
+// configKey caches a read by path and size limit: one file can be read under a
+// tighter limit by one agent than another.
+type configKey struct {
+	path  string
+	limit int64
+}
+
 func (l *configLoader) readConfig(ctx context.Context, path string) ([]byte, loadResult) {
+	return l.readConfigLimit(ctx, path, maxConfigBytes)
+}
+
+// readConfigLimit reads path, treating a file larger than limit bytes as
+// unusable. An agent that caps its own reads passes its cap, so a file it would
+// skip is skipped here too.
+func (l *configLoader) readConfigLimit(ctx context.Context, path string, limit int64) ([]byte, loadResult) {
 	if err := ctx.Err(); err != nil {
 		return nil, loadUnusable
 	}
-	if cached, ok := l.files[path]; ok {
+	key := configKey{path: path, limit: limit}
+	if cached, ok := l.files[key]; ok {
 		return cached.data, cached.res
 	}
-	data, res := l.readConfigUncached(ctx, path)
+	data, res := l.readConfigUncached(ctx, path, limit)
 	if ctx.Err() != nil {
 		return nil, loadUnusable
 	}
-	l.files[path] = cachedConfig{data: data, res: res}
+	l.files[key] = cachedConfig{data: data, res: res}
 	return data, res
 }
 
-func (l *configLoader) readConfigUncached(ctx context.Context, path string) ([]byte, loadResult) {
+func (l *configLoader) readConfigUncached(ctx context.Context, path string, limit int64) ([]byte, loadResult) {
 	if err := ctx.Err(); err != nil {
 		return nil, loadUnusable
 	}
@@ -184,17 +207,17 @@ func (l *configLoader) readConfigUncached(ctx context.Context, path string) ([]b
 	if err != nil {
 		return nil, loadUnusable
 	}
-	if !info.Mode().IsRegular() || info.Size() > maxConfigBytes {
+	if !info.Mode().IsRegular() || info.Size() > limit {
 		return nil, loadUnusable
 	}
-	data, err := io.ReadAll(io.LimitReader(f, maxConfigBytes+1))
+	data, err := io.ReadAll(io.LimitReader(f, limit+1))
 	if err != nil {
 		return nil, loadUnusable
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, loadUnusable
 	}
-	if len(data) > maxConfigBytes {
+	if int64(len(data)) > limit {
 		return nil, loadUnusable
 	}
 	return bytes.TrimPrefix(data, utf8BOM), loadOK
@@ -212,7 +235,12 @@ func loadJSON(path string, out any) loadResult {
 }
 
 func (l *configLoader) loadJSON(ctx context.Context, path string, out any) loadResult {
-	data, res := l.readConfig(ctx, path)
+	return l.loadJSONLimit(ctx, path, out, maxConfigBytes)
+}
+
+// loadJSONLimit is loadJSON under a size limit of the caller's own.
+func (l *configLoader) loadJSONLimit(ctx context.Context, path string, out any, limit int64) loadResult {
+	data, res := l.readConfigLimit(ctx, path, limit)
 	if res != loadOK {
 		return res
 	}
@@ -240,6 +268,37 @@ func (l *configLoader) loadJSON(ctx context.Context, path string, out any) loadR
 	}
 	return loadOK
 }
+
+// loadStrictJSON decodes the JSON file at path with no JSONC fallback, for an
+// agent that parses its files with JSON.parse: a file it rejects for a comment or
+// a trailing comma is unusable here too, rather than read past what the agent
+// never could.
+//
+// Only a syntax error is one JSON.parse shares. Go also refuses nesting deeper
+// than 10000 levels, which JSON.parse accepts (Claude Code loads a .mcp.json
+// nested 500000 deep), and a document that does not fit out; either file is
+// undecodable, since the agent may have loaded it.
+func (l *configLoader) loadStrictJSON(ctx context.Context, path string, out any, limit int64) loadResult {
+	data, res := l.readConfigLimit(ctx, path, limit)
+	if res != loadOK {
+		return res
+	}
+	err := json.Unmarshal(data, out)
+	if ctx.Err() != nil {
+		return loadUnusable
+	}
+	if err == nil {
+		return loadOK
+	}
+	if syntax, ok := errors.AsType[*json.SyntaxError](err); ok && !strings.HasSuffix(syntax.Error(), jsonMaxDepthError) {
+		return loadUnusable
+	}
+	return loadUndecodable
+}
+
+// jsonMaxDepthError ends the syntax error encoding/json reports for nesting
+// past its fixed limit.
+const jsonMaxDepthError = "exceeded max depth"
 
 func (l *configLoader) loadTOML(ctx context.Context, path string, out any) loadResult {
 	data, res := l.readConfig(ctx, path)

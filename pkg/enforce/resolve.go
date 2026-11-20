@@ -81,11 +81,19 @@ func (r Resolution) String() string {
 type ResolveRequest struct {
 	// Agent is the agent that issued the call.
 	Agent localagent.Agent
-	// ServerName is the server hint from the tool name, or for Cursor the display
-	// name from the payload.
+	// ServerName is the server hint from the tool name; for Cursor the display
+	// name from the payload, and for Claude Code the configuration key from its
+	// mcp_server field.
 	ServerName string
+	// ServerSource is Claude Code's mcp_server.source: the scope it loaded the
+	// server from.
+	ServerSource string
 	// CWD is the working directory the call was made from.
 	CWD string
+	// ProjectDir is the directory a Claude Code session was started or resumed
+	// in, from the CLAUDE_PROJECT_DIR Claude Code gives the hook. Claude Code's
+	// local, project and plugin servers resolve only with it.
+	ProjectDir string
 	// WorkspaceRoots are Cursor's open workspace roots. They are the only project
 	// context a Cursor payload carries: it sends no usable cwd.
 	WorkspaceRoots []string
@@ -121,6 +129,11 @@ func resolve(ctx context.Context, loader *configLoader, env Env, req ResolveRequ
 		return unresolved(strings.TrimSpace(req.ServerName), "MCP server resolution was cancelled")
 	}
 	serverName := strings.TrimSpace(req.ServerName)
+	if req.Agent == localagent.ClaudeCode {
+		// Claude Code's mcp_server.name is the configuration key exactly as
+		// written, whitespace included; see classifyClaudeCodePreTool.
+		serverName = req.ServerName
+	}
 	if serverName == "" {
 		return unresolved("", "the tool call did not name an MCP server")
 	}
@@ -230,10 +243,11 @@ func enforcementURL(raw string) (string, bool) {
 //
 // Claude Code is the only agent here, and it is the only one where name-based
 // matching is sound: it publishes a hardcoded list and will not let a configured
-// server take one of those names, so a built-in name can never also be a
-// configuration key. That is what makes the single call site correct — this is
-// consulted only from notFound(), and with no possible collision a built-in call
-// always misses every configuration source and reaches it.
+// server take one of those names (it refuses any whose tool namespace matches
+// one, verified against Claude Code 2.1.311), so a built-in name can never also
+// be a configuration key. resolveClaudeCode checks it before reading anything,
+// by exact name and the one source each built-in reports (see
+// claudeBuiltinSources).
 //
 // Codex's built-ins are not here, because Codex does let a configured server
 // take a built-in name, and Codex Desktop itself configures node_repl. They are

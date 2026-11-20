@@ -77,14 +77,14 @@ type errReader struct{}
 func (errReader) Read([]byte) (int, error) { return 0, errors.New("broken pipe") }
 
 // claudeMCPCall is a Claude Code MCP call on a server the fixture configures.
-const claudeMCPCall = `{"tool_name":"mcp__probe-npx-stdio__echo","cwd":"/Users/dev/probe-workspace"}`
+const claudeMCPCall = `{"tool_name":"mcp__probe-npx-stdio__echo","cwd":"/Users/dev/probe-workspace","mcp_server":{"name":"probe-npx-stdio","source":"user"}}`
 
 // claudeShellCall is a Claude Code built-in tool call, which resolves nothing.
 const claudeShellCall = `{"tool_name":"Bash","cwd":"/Users/dev/probe-workspace"}`
 
 // claudeUnknownServerCall names an MCP server that appears in no configuration
 // file, which is the most common unresolvable shape in the field.
-const claudeUnknownServerCall = `{"tool_name":"mcp__not-configured__do","cwd":"/Users/dev/probe-workspace"}`
+const claudeUnknownServerCall = `{"tool_name":"mcp__not-configured__do","cwd":"/Users/dev/probe-workspace","mcp_server":{"name":"not-configured","source":"user"}}`
 
 const allowResponse = `{"permission":"allow"}`
 
@@ -391,7 +391,7 @@ func TestRunReportsUnresolvedAndHonorsTheAnswer(t *testing.T) {
 	if !req.Unresolved {
 		t.Error("the request did not report the call as unresolved")
 	}
-	if !strings.Contains(req.UnresolvedReason, `"not-configured" was not found`) {
+	if !strings.Contains(req.UnresolvedReason, `"not-configured" from its user configuration, but the hook did not find it there`) {
 		t.Errorf("unresolvedReason = %q, want it to name the server and the miss", req.UnresolvedReason)
 	}
 	if req.ServerName != "not-configured" {
@@ -416,12 +416,13 @@ func TestRunReportsPartialIdentityForAMatchedButUnresolvableEntry(t *testing.T) 
 	}}`)
 
 	run := runHook(t, f.Env, hookCase{
-		agent:   "claude-code",
-		event:   "PreToolUse",
+		agent: "claude-code",
+		event: "PreToolUse",
 		// The cwd is encoded, not interpolated: a Windows fixture home is full of
 		// backslashes, and a backslash opens an escape inside a JSON string.
-		payload: string(mustJSON(map[string]string{"tool_name": "mcp__local-binary__do", "cwd": f.Home})),
-		resp:    types.EnforcementDecisionResponse{Decision: types.EnforcementDecisionDeny, Reason: "unidentified"},
+		payload: string(mustJSON(map[string]any{"tool_name": "mcp__local-binary__do", "cwd": f.Home,
+			"mcp_server": map[string]string{"name": "local-binary", "source": "user"}})),
+		resp: types.EnforcementDecisionResponse{Decision: types.EnforcementDecisionDeny, Reason: "unidentified"},
 	})
 
 	if len(run.requests) != 1 {

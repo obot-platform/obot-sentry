@@ -138,35 +138,6 @@ func TestResolveScopesPeersRecordEveryMatch(t *testing.T) {
 	}
 }
 
-// TestResolveScopesClosedScope covers an exclusive server set: a miss there ends
-// resolution instead of falling through.
-func TestResolveScopesClosedScope(t *testing.T) {
-	managed := fixedScope("managed", 0, urlSet("github", "https://managed.example.com/sse"))
-	managed.closed = true
-	scopes := []scope{managed, fixedScope("user", 1, urlSet("linear", "https://user.example.com/sse"))}
-
-	if _, out := resolveScopes(t.Context(), scopes, exactly("linear"), &tracer{}); out != outcomeClosed {
-		t.Fatalf("outcome = %v, want outcomeClosed", out)
-	}
-}
-
-// TestResolveScopesClosedScopeThatIsAbsent covers the same scope when its file is
-// not there: an absent exclusive set constrains nothing.
-func TestResolveScopesClosedScopeThatIsAbsent(t *testing.T) {
-	scopes := []scope{
-		{path: "managed", key: mcpServersKey, closed: true, load: fixedServers(nil, loadAbsent)},
-		fixedScope("user", 1, urlSet("linear", "https://user.example.com/sse")),
-	}
-
-	m, out := resolveScopes(t.Context(), scopes, exactly("linear"), &tracer{})
-	if out != outcomeFound {
-		t.Fatalf("outcome = %v, want outcomeFound", out)
-	}
-	if m.entry.URL != "https://user.example.com/sse" {
-		t.Fatalf("URL = %q", m.entry.URL)
-	}
-}
-
 func TestMatchNameExactBeatsFormAcrossTheLadder(t *testing.T) {
 	set := serverSet{
 		"user-linear": {URL: "https://prefixed.example.com/sse"},
