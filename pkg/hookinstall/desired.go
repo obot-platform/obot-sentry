@@ -49,8 +49,24 @@ type claudeHooks struct {
 }
 
 type claudeDocument struct {
-	Hooks claudeHooks `json:"hooks"`
+	// DisableSideloadFlags is set with enforcement; see claudeDisableSideloadKey.
+	DisableSideloadFlags bool        `json:"disableSideloadFlags,omitempty"`
+	Hooks                claudeHooks `json:"hooks"`
 }
+
+// An enforcing install turns on Claude Code's disableSideloadFlags managed
+// setting (enforce.ClaudeDisableSideloadKey), which refuses plugins loaded for
+// one session (--plugin-dir, --plugin-dir-no-mcp, --plugin-url,
+// CLAUDE_CODE_PLUGIN_DIRS, an Agent SDK host's initialize plugins) as well as
+// --agents and --mcp-config. Such a plugin reports the same MCP server name and
+// source as an installed plugin and replaces one of the same name, so the
+// enforcement hook resolves plugin servers only while the setting is on. Claude
+// Code honors it only from managed settings, which is the file the Claude Code
+// hooks go in.
+//
+// Neither an audit-only run nor an uninstall turns it off: nothing records
+// whether obot-sentry or an administrator set it.
+const claudeDisableSideloadKey = enforce.ClaudeDisableSideloadKey
 
 func desiredClaude(exe, goos string, enforcing bool) claudeDocument {
 	matcherGroup := func(command, status string) claudeMatcherGroup {
@@ -74,7 +90,7 @@ func desiredClaude(exe, goos string, enforcing bool) claudeDocument {
 			matcherGroup(hookCommand(exe, goos, localagent.ClaudeCode, commandArgs(localagent.ClaudeCode, p)), status),
 		}
 	}
-	doc := claudeDocument{Hooks: claudeHooks{
+	doc := claudeDocument{DisableSideloadFlags: enforcing, Hooks: claudeHooks{
 		PostToolUse:        audit(phasePostTool, statusMessagePostTool),
 		PostToolUseFailure: audit(phaseFailure, claudeStatusFailure),
 	}}

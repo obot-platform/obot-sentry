@@ -75,6 +75,16 @@ unless the answer is an explicit allow.
 
 > Visual Studio Code is not supported for enforcement.
 
+For Claude Code, `hook-install --enforce` also sets `"disableSideloadFlags": true`
+in the same managed settings file. Claude Code then refuses plugins loaded for a
+single session (`--plugin-dir`, `--plugin-dir-no-mcp`, `--plugin-url`,
+`CLAUDE_CODE_PLUGIN_DIRS`, and plugins an Agent SDK host passes at startup), as
+well as `--agents` and `--mcp-config`. Such a plugin reports the same server name
+as an installed plugin and replaces an installed plugin of the same name, so
+plugin MCP servers are resolved only while this setting is on. An audit-only run
+and an uninstall leave the setting in place, since the file does not record
+whether obot-sentry or an administrator set it.
+
 ### It fails closed
 
 Anything other than an explicit allow blocks the call: obot unreachable, slow
@@ -208,15 +218,9 @@ name. So is an MCP call whose payload has no `mcp_server`. Claude
 Code first sends `mcp_server` in 2.1.274, so MCP calls from earlier releases are
 denied.
 
-A plugin server is resolved only when the session cannot have loaded a plugin
-for itself alone, since such a plugin reports the same name and source as an
-installed one and replaces an installed plugin of the same name. The hook reads
-the arguments of the Claude Code process that ran it (named by `CLAUDE_PID` and
-confirmed as an ancestor), and leaves plugin servers unresolved when Claude Code
-was started with `--plugin-dir`, `--plugin-dir-no-mcp` or `--plugin-url`, by an
-Agent SDK host (`--input-format stream-json`), or with `CLAUDE_CODE_PLUGIN_DIRS`
-set, or when that process cannot be read. `enforce resolve` run by hand has no
-such process, so it reports plugin servers unresolved.
+Plugin servers are resolved only while the managed settings set
+`disableSideloadFlags` (see above); otherwise a plugin loaded for the session
+alone could pass for an installed one, and they are left unresolved.
 
 A session's launch directory is recovered from its transcript path, so pass
 `--transcript-path` from a hook payload to reproduce a call made after the
@@ -226,7 +230,10 @@ above the current one, each directory in between may be the one the session
 loaded, and a server they define differently is left unresolved. A transcript
 that names no directory above the current one, as after changing into a
 directory added with `--add-dir`, leaves `local`, `project` and `plugin` servers
-unresolved: the directory the session loaded them for is not known. Claude Code's files are parsed as strict JSON, as Claude Code parses
+unresolved: the directory the session loaded them for is not known. So does one
+whose name another existing directory shares: Claude Code turns every character
+other than a letter or digit into `-`, so `/work/my-app` and `/work/my/app` have
+the same transcript directory. Claude Code's files are parsed as strict JSON, as Claude Code parses
 them, so a file with comments or trailing commas is skipped. A plugin from a
 marketplace added from a local folder or catalog file is read from that folder,
 which is where Claude Code loads it.

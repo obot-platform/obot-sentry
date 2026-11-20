@@ -2,10 +2,8 @@ package enforce
 
 import (
 	"encoding/json"
-	"errors"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -24,8 +22,7 @@ type fixture struct {
 	// Env is the resolver environment for this fixture.
 	Env Env
 
-	env   map[string]string
-	procs *fakeProcesses
+	env map[string]string
 }
 
 // newFixture builds an empty fixture for the given platform layout.
@@ -33,25 +30,17 @@ func newFixture(t *testing.T, goos string) *fixture {
 	t.Helper()
 	root := t.TempDir()
 	f := &fixture{
-		t:     t,
-		Root:  root,
-		Home:  filepath.Join(root, "home"),
-		env:   map[string]string{},
-		procs: &fakeProcesses{parents: map[int]int{}, argv: map[int][]string{}},
+		t:    t,
+		Root: root,
+		Home: filepath.Join(root, "home"),
+		env:  map[string]string{},
 	}
 	f.Env = Env{
 		Home:        f.Home,
 		GOOS:        goos,
 		MachineRoot: filepath.Join(root, "machine"),
 		Getenv:      func(key string) string { return f.env[key] },
-		procs:       f.procs,
 	}
-	// An ordinary Claude Code session: the hook's parent is a shell that Claude
-	// Code started with no session-plugin flags.
-	f.procs.parents[fakeHookPID] = fakeShellPID
-	f.procs.parents[fakeShellPID] = fakeClaudePID
-	f.procs.argv[fakeClaudePID] = []string{"claude"}
-	f.env[claudePIDEnv] = strconv.Itoa(fakeClaudePID)
 	if err := os.MkdirAll(f.Home, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -195,35 +184,3 @@ func mustJSON(v any) []byte {
 // emptyIdentity is the zero server identity, for comparing against a resolution
 // that identified a server by name alone.
 var emptyIdentity = types.EnforcementDecisionServer{}
-
-// The process IDs of the fixture's fake hook, the shell that launched it, and
-// the Claude Code process that ran the shell.
-const (
-	fakeHookPID   = 300
-	fakeShellPID  = 200
-	fakeClaudePID = 100
-)
-
-// fakeProcesses is a process table for tests.
-type fakeProcesses struct {
-	parents map[int]int
-	argv    map[int][]string
-}
-
-func (p *fakeProcesses) self() int { return fakeHookPID }
-
-func (p *fakeProcesses) parent(pid int) (int, error) {
-	parent, ok := p.parents[pid]
-	if !ok {
-		return 0, errors.New("no such process")
-	}
-	return parent, nil
-}
-
-func (p *fakeProcesses) args(pid int) ([]string, error) {
-	args, ok := p.argv[pid]
-	if !ok {
-		return nil, errors.New("no such process")
-	}
-	return args, nil
-}

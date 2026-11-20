@@ -34,8 +34,6 @@ type Env struct {
 	// from an environment variable are not rewritten; a test points those at the
 	// fixture tree through Getenv instead.
 	MachineRoot string
-	// procs reads the process table. Nil is the live one; tests supply their own.
-	procs processTable
 }
 
 // NewEnv returns the Env for the current process.

@@ -180,9 +180,10 @@ func resolveClaudeCode(ctx context.Context, loader *configLoader, env Env, req R
 		return claudeResolveIn(ctx, env, req, serverName, source, names, tr, settings)
 
 	case claudeSourcePlugin:
-		if why := claudeSessionPlugins(env); why != "" {
+		if !claudeSideloadDisabled(ctx, loader, env) {
 			return unresolved(serverName, fmt.Sprintf(
-				"%s, so plugin MCP server %q may come from a plugin loaded for this session only rather than an installed one", why, serverName))
+				"Claude Code's managed settings do not set %s, so plugin MCP server %q may come from a plugin loaded for this session only rather than an installed one",
+				ClaudeDisableSideloadKey, serverName))
 		}
 	case claudeSourceUser, claudeSourceLocal, claudeSourceProject:
 	default:
@@ -362,6 +363,55 @@ func claudeManagedSettingsFiles(env Env) (files []string, complete bool) {
 	return files, true
 }
 
+// ClaudeDisableSideloadKey is the managed setting that makes Claude Code refuse
+// plugins loaded for one session: --plugin-dir, --plugin-dir-no-mcp,
+// --plugin-url, CLAUDE_CODE_PLUGIN_DIRS, and an Agent SDK host's initialize
+// plugins (each verified against Claude Code 2.1.311). Such a plugin reports the
+// same mcp_server as an installed one and replaces an installed plugin of the
+// same name, so plugin servers are resolved only while the setting is on;
+// hook-install turns it on with enforcement.
+const ClaudeDisableSideloadKey = "disableSideloadFlags"
+
+// claudeSideloadDisabled reports whether the managed settings files set
+// disableSideloadFlags to true. They are applied in Claude Code's order, a
+// later file overriding an earlier one; a set that cannot be read in full, or a
+// file that cannot be parsed, leaves the setting unknown, and so not on.
+//
+// Claude Code honors the setting only from managed settings, where users cannot
+// turn it off. MDM profiles, the Windows registry, and server-delivered settings
+// are not read.
+func claudeSideloadDisabled(ctx context.Context, loader *configLoader, env Env) bool {
+	files, complete := claudeManagedSettingsFiles(env)
+	if !complete {
+		return false
+	}
+	disabled := false
+	for _, path := range files {
+		var raw json.RawMessage
+		switch loader.loadStrictJSON(ctx, path, &raw, maxConfigBytes) {
+		case loadAbsent:
+			continue
+		case loadOK:
+		default:
+			return false
+		}
+		members, ok := exactObject(raw)
+		if !ok {
+			return false
+		}
+		value, present := members[ClaudeDisableSideloadKey]
+		if !present {
+			continue
+		}
+		var on bool
+		if json.Unmarshal(value, &on) != nil {
+			return false
+		}
+		disabled = on
+	}
+	return disabled
+}
+
 // managedSettingsServers reads managedMcpServers from a managed settings file,
 // keeping only the entries Claude Code accepts there. An entry it ignores
 // overrides nothing: Claude Code validates each file before layering it, so an
@@ -438,7 +488,8 @@ type claudeProject struct {
 // A transcript that names no directory above cwd is a session that cd'd outside
 // its launch directory, into a directory added with --add-dir for instance, or
 // one resumed somewhere unrelated; its slug cannot be turned back into a path,
-// so nothing is trusted. Neither is a transcript path that is unusable, being
+// so nothing is trusted. Nor is one whose slug another existing directory also
+// has (see claudeSlugIsUnique), since the session may have launched there. Neither is a transcript path that is unusable, being
 // outside Claude Code's configuration directory or too long. With no transcript
 // path at all, as for the enforce resolve diagnostic, cwd stands in.
 func claudeProjectsFor(ctx context.Context, loader *configLoader, env Env, configDir, cwd, transcriptPath string) (projects []claudeProject, ok bool) {
@@ -452,7 +503,7 @@ func claudeProjectsFor(ctx context.Context, loader *configLoader, env Env, confi
 			return nil, false
 		}
 		n, ok := claudeLaunchDir(env, dirs, configDir, transcriptPath)
-		if !ok {
+		if !ok || !claudeSlugIsUnique(ctx, env, dirs[n]) {
 			return nil, false
 		}
 		candidates = dirs[:n+1]
@@ -512,17 +563,9 @@ const claudeSlugMax = 200
 // result over 200 characters is cut there and suffixed with a hash of the path.
 func claudeProjectSlug(path string) string {
 	units := utf16.Encode([]rune(path))
-	slug := make([]byte, len(units))
-	for i, u := range units {
-		switch {
-		case u >= 'a' && u <= 'z', u >= 'A' && u <= 'Z', u >= '0' && u <= '9':
-			slug[i] = byte(u)
-		default:
-			slug[i] = '-'
-		}
-	}
+	slug := claudeSlugUnits(units)
 	if len(slug) <= claudeSlugMax {
-		return string(slug)
+		return slug
 	}
 	// JavaScript's 32-bit string hash, Math.abs'd and written in base 36. The abs
 	// is taken in 64 bits because Math.abs(-2^31) is 2^31, not an overflow.
@@ -534,7 +577,78 @@ func claudeProjectSlug(path string) string {
 	if abs < 0 {
 		abs = -abs
 	}
-	return string(slug[:claudeSlugMax]) + "-" + strconv.FormatInt(abs, 36)
+	return slug[:claudeSlugMax] + "-" + strconv.FormatInt(abs, 36)
+}
+
+// claudeSlugUnits maps each UTF-16 code unit outside [a-zA-Z0-9] to "-", the
+// part of claudeProjectSlug before any truncation.
+func claudeSlugUnits(units []uint16) string {
+	slug := make([]byte, len(units))
+	for i, u := range units {
+		switch {
+		case u >= 'a' && u <= 'z', u >= 'A' && u <= 'Z', u >= '0' && u <= '9':
+			slug[i] = byte(u)
+		default:
+			slug[i] = '-'
+		}
+	}
+	return string(slug)
+}
+
+// maxClaudeSlugSearchDirs bounds the directories listed while looking for
+// another directory with a launch directory's slug.
+const maxClaudeSlugSearchDirs = 256
+
+// claudeSlugIsUnique reports whether dir is the only existing directory whose
+// slug is its own. The slug is lossy: /work/my-app and /work/my/app both become
+// -work-my-app, so a transcript naming dir may belong to a session launched in
+// the other one, which then cd'd here. The search walks down from the volume
+// root, following every entry whose slug fits the rest of dir's; past
+// maxClaudeSlugSearchDirs listings, or for a slug long enough to be cut and
+// hashed, which this cannot follow, dir is not known to be unique.
+func claudeSlugIsUnique(ctx context.Context, env Env, dir string) bool {
+	root := filepath.VolumeName(dir) + string(filepath.Separator)
+	slug, rootSlug := claudeProjectSlug(dir), claudeProjectSlug(root)
+	if len(utf16.Encode([]rune(dir))) > claudeSlugMax || !strings.HasPrefix(slug, rootSlug) {
+		return false
+	}
+	same := func(a, b string) bool { return a == b || env.windows() && strings.EqualFold(a, b) }
+	listed, found := 0, 0
+	var search func(parent, rest string) bool
+	search = func(parent, rest string) bool {
+		if rest == "" {
+			found++
+			return found < 2
+		}
+		if listed == maxClaudeSlugSearchDirs || ctx.Err() != nil {
+			return false
+		}
+		listed++
+		// A directory the search cannot list may hold another match.
+		entries, err := os.ReadDir(parent)
+		if err != nil {
+			return false
+		}
+		for _, entry := range entries {
+			name := claudeSlugUnits(utf16.Encode([]rune(entry.Name())))
+			next, fits := "", same(name, rest)
+			if !fits && len(rest) > len(name) && same(rest[:len(name)], name) && rest[len(name)] == '-' {
+				next, fits = rest[len(name)+1:], true
+			}
+			if !fits {
+				continue
+			}
+			path := filepath.Join(parent, entry.Name())
+			if info, err := os.Stat(path); err != nil || !info.IsDir() {
+				continue
+			}
+			if !search(path, next) {
+				return false
+			}
+		}
+		return true
+	}
+	return search(root, slug[len(rootSlug):]) && found == 1
 }
 
 // claudeProjectRoot returns the directory that keys a session's projects{} entry.

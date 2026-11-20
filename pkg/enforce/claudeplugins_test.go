@@ -13,10 +13,13 @@ func pluginReq(plugin, server, cwd string) ResolveRequest {
 	return claudeCodeReq(claudeSourcePlugin, "plugin:"+plugin+":"+server, cwd)
 }
 
-// pluginRegistry writes installed_plugins.json under configDir/plugins.
+// pluginRegistry writes installed_plugins.json under configDir/plugins, and
+// turns on disableSideloadFlags in managed settings, without which no plugin
+// server resolves.
 func (f *fixture) pluginRegistry(configDir, body string) {
 	f.t.Helper()
 	f.write(filepath.Join(configDir, "plugins", claudePluginRegistry), body)
+	f.write(f.Env.claudeManagedPath(claudeManagedSettings), `{"`+ClaudeDisableSideloadKey+`":true}`)
 }
 
 // TestClaudeCodePluginServer covers a server a plugin ships, which Claude Code
@@ -276,5 +279,66 @@ func TestClaudeCodePluginBoundsFailClosed(t *testing.T) {
 		f.pluginRegistry(f.homePath(".claude"), `{"version":2,"plugins":{`+other+`,`+
 			`"p@mkt":[`+entry+`]}}`)
 		assertURL(t, Resolve(f.Env, pluginReq("p", "s", f.path("proj"))), "https://allowed.example.com/mcp")
+	})
+}
+
+// TestClaudeCodePluginsNeedSideloadDisabled covers plugins loaded for one session
+// (--plugin-dir, --plugin-dir-no-mcp, --plugin-url, CLAUDE_CODE_PLUGIN_DIRS, an
+// Agent SDK host's initialize plugins). Their servers report the same name and
+// source as an installed plugin's, and one named like an installed plugin
+// replaces it, so plugin servers resolve only while managed settings set
+// disableSideloadFlags, which makes Claude Code refuse all of them.
+func TestClaudeCodePluginsNeedSideloadDisabled(t *testing.T) {
+	setup := func(t *testing.T) *fixture {
+		f := newFixture(t, "darwin")
+		install := f.mkdir(f.path("cache", "p"))
+		f.write(filepath.Join(install, ".mcp.json"), `{"s":{"type":"http","url":"https://installed.example.com/mcp"}}`)
+		f.pluginRegistry(f.homePath(".claude"), `{"version":2,"plugins":{"p@mkt":[{"scope":"user","installPath":`+quote(install)+`}]}}`)
+		return f
+	}
+	const unset = "do not set " + ClaudeDisableSideloadKey
+
+	f := setup(t)
+	assertURL(t, Resolve(f.Env, pluginReq("p", "s", f.path("proj"))), "https://installed.example.com/mcp")
+
+	for name, tc := range map[string]struct{ settings, dropIn string }{
+		"absent":                  {settings: `{}`},
+		"false":                   {settings: `{"disableSideloadFlags":false}`},
+		"not a boolean":           {settings: `{"disableSideloadFlags":"true"}`},
+		"other case":              {settings: `{"DisableSideloadFlags":true}`},
+		"overridden by a drop-in": {settings: `{"disableSideloadFlags":true}`, dropIn: `{"disableSideloadFlags":false}`},
+		"unparseable":             {settings: `{"disableSideloadFlags":true,}`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := setup(t)
+			f.write(f.Env.claudeManagedPath(claudeManagedSettings), tc.settings)
+			if tc.dropIn != "" {
+				f.write(f.Env.claudeManagedPath(claudeManagedDropInDir, "10.json"), tc.dropIn)
+			}
+			assertUnresolved(t, Resolve(f.Env, pluginReq("p", "s", f.path("proj"))), unset)
+		})
+	}
+
+	t.Run("set by a drop-in", func(t *testing.T) {
+		f := setup(t)
+		f.write(f.Env.claudeManagedPath(claudeManagedSettings), `{"disableSideloadFlags":false}`)
+		f.write(f.Env.claudeManagedPath(claudeManagedDropInDir, "10.json"), `{"disableSideloadFlags":true}`)
+		assertURL(t, Resolve(f.Env, pluginReq("p", "s", f.path("proj"))), "https://installed.example.com/mcp")
+	})
+
+	// Claude Code honors the setting only from managed settings.
+	t.Run("user settings", func(t *testing.T) {
+		f := setup(t)
+		f.write(f.Env.claudeManagedPath(claudeManagedSettings), `{}`)
+		f.write(f.homePath(".claude", "settings.json"), `{"disableSideloadFlags":true}`)
+		assertUnresolved(t, Resolve(f.Env, pluginReq("p", "s", f.path("proj"))), unset)
+	})
+
+	t.Run("drop-ins not read in full", func(t *testing.T) {
+		f := setup(t)
+		for i := range maxClaudeManagedDropIns + 1 {
+			f.write(f.Env.claudeManagedPath(claudeManagedDropInDir, fmt.Sprintf("%04d.json", i)), `{"disableSideloadFlags":true}`)
+		}
+		assertUnresolved(t, Resolve(f.Env, pluginReq("p", "s", f.path("proj"))), unset)
 	})
 }

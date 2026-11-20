@@ -725,6 +725,50 @@ func TestClaudeCodeTranscriptMustBeUnderConfigDir(t *testing.T) {
 	assertUnresolved(t, Resolve(f.Env, req), "does not name")
 }
 
+// TestClaudeCodeTranscriptSlugCollision covers two directories with one slug:
+// /work/my-app and /work/my/app both become -work-my-app. A session launched in
+// the first that cd's into the second has a transcript naming cwd, so the slug
+// matches it, yet the session loaded the other directory's configuration. When
+// another existing directory shares the slug, nothing is trusted.
+func TestClaudeCodeTranscriptSlugCollision(t *testing.T) {
+	f := newFixture(t, "darwin")
+	nested := f.mkdir(f.path("work", "my", "app"))
+	f.write(filepath.Join(nested, ".mcp.json"), `{"mcpServers":{"probe":{"type":"http","url":"https://allowed.example.com/mcp"}}}`)
+	req := claudeCodeReq(claudeSourceProject, "probe", nested)
+	req.TranscriptPath = f.homePath(".claude", "projects", claudeProjectSlug(nested), "s.jsonl")
+	assertURL(t, Resolve(f.Env, req), "https://allowed.example.com/mcp")
+
+	launched := f.mkdir(f.path("work", "my-app"))
+	f.write(filepath.Join(launched, ".mcp.json"), `{"mcpServers":{"probe":{"command":"/tmp/real"}}}`)
+	if claudeProjectSlug(launched) != claudeProjectSlug(nested) {
+		t.Fatalf("slugs differ: %q, %q", claudeProjectSlug(launched), claudeProjectSlug(nested))
+	}
+	assertUnresolved(t, Resolve(f.Env, req), "does not name")
+
+	// A file, not a directory, with the slug is no launch directory.
+	if err := os.Remove(filepath.Join(launched, ".mcp.json")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(launched); err != nil {
+		t.Fatal(err)
+	}
+	f.write(launched, "not a directory")
+	assertURL(t, Resolve(f.Env, req), "https://allowed.example.com/mcp")
+}
+
+// TestClaudeCodeTranscriptSlugTooLongToSearch covers a launch directory whose
+// slug is long enough for Claude Code to cut and hash, which the search for
+// another directory with the same slug cannot follow, so it is not trusted.
+func TestClaudeCodeTranscriptSlugTooLongToSearch(t *testing.T) {
+	f := newFixture(t, "darwin")
+	deep := f.mkdir(f.path(strings.Repeat("d", 120), strings.Repeat("e", 120)))
+	f.write(filepath.Join(deep, ".mcp.json"), `{"mcpServers":{"probe":{"type":"http","url":"https://allowed.example.com/mcp"}}}`)
+	req := claudeCodeReq(claudeSourceProject, "probe", deep)
+	assertURL(t, Resolve(f.Env, req), "https://allowed.example.com/mcp") // no transcript
+	req.TranscriptPath = f.homePath(".claude", "projects", claudeProjectSlug(deep), "s.jsonl")
+	assertUnresolved(t, Resolve(f.Env, req), "does not name")
+}
+
 // TestClaudeProjectSlug pins the transcript directory name against values
 // computed by Claude Code's own JavaScript, including the truncation hash and a
 // character outside the BMP, which counts as two code units.
