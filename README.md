@@ -75,6 +75,23 @@ unless the answer is an explicit allow.
 
 > Visual Studio Code is not supported for enforcement.
 
+For Claude Code, `hook-install --enforce` also sets `"disableSideloadFlags": true`
+in the same managed settings file. Claude Code then refuses plugins loaded for a
+single session (`--plugin-dir`, `--plugin-dir-no-mcp`, `--plugin-url`,
+`CLAUDE_CODE_PLUGIN_DIRS`, and plugins an Agent SDK host passes at startup), as
+well as `--agents` and `--mcp-config`. Such a plugin reports the same server name
+as an installed plugin and replaces an installed plugin of the same name, so
+plugin MCP servers are resolved only while this setting is on. It replaces any
+value already there, including an explicit `false`.
+
+An audit-only run and an uninstall leave the setting in place, since the file
+does not record whether obot-sentry or an administrator set it. Claude Code
+therefore keeps refusing those flags after enforcement is turned off or
+obot-sentry is removed. To allow them again, delete `disableSideloadFlags` from
+Claude Code's managed settings file (`/Library/Application
+Support/ClaudeCode/managed-settings.json` on macOS,
+`C:\Program Files\ClaudeCode\managed-settings.json` on Windows).
+
 ### It fails closed
 
 Anything other than an explicit allow blocks the call: obot unreachable, slow
@@ -179,14 +196,65 @@ that says FOUND is evidence about production behavior. It exits non-zero when th
 server cannot be identified.
 
 ```
-$ obot-sentry enforce resolve --agent claude-code --server linear
-1  /Library/Application Support/ClaudeCode/managed-mcp.json  absent
-2  /Users/me/proj/.mcp.json  absent
-3  /Users/me/.claude.json  projects["/Users/me/proj"]  no match
-4  /Users/me/.claude.json  mcpServers["linear"]  FOUND
+$ obot-sentry enforce resolve --agent claude-code --server linear --server-source project
+1  /Users/me/proj/.mcp.json  mcpServers["linear"]  FOUND
 server name: linear
-resolved: npm / linear-mcp / any version
+resolved: https://mcp.linear.app/mcp
 ```
+
+For Claude Code the server comes from the hook payload's `mcp_server` field,
+which names the server's configuration key and the scope Claude Code loaded it
+from, so pass both from the payload: `--server` is `mcp_server.name` and
+`--server-source` is `mcp_server.source`. Only that scope is read, and the key is
+matched exactly:
+
+| `source` | Read from |
+|---|---|
+| `user` | `mcpServers` in `.claude.json` |
+| `local` | the project's entry in `.claude.json` (keyed by the git root, or a linked worktree's main checkout) |
+| `project` | every `.mcp.json` from the session's launch directory upward, a deeper file winning |
+| `plugin` | the installed plugins in `plugins/installed_plugins.json` |
+| `enterprise` | `managed-mcp.json` |
+| `managed` | `managedMcpServers` in the managed settings files |
+| `claudeai` | nothing: the claude.ai connector's display name is its identity |
+
+Servers from `--mcp-config`, the Agent SDK, or an agent definition (`dynamic`,
+`sdk` and `agent`) are left unresolved, since the hook cannot read their
+definitions, apart from Claude Code's built-in servers, which are reported by
+name. So is an MCP call whose payload has no `mcp_server`. Claude
+Code first sends `mcp_server` in 2.1.274, so MCP calls from earlier releases are
+denied.
+
+Plugin servers are resolved only while the managed settings set
+`disableSideloadFlags` (see above); otherwise a plugin loaded for the session
+alone could pass for an installed one, and they are left unresolved. Every
+installation of the plugin counts, whatever its scope: Claude Code loads a
+plugin installed for one project in any session whose settings enable it, so a
+project's committed settings can switch on another project's installation.
+Installations that define the server differently leave it unresolved.
+
+A plugin's servers come from its `.mcp.json` and from the `mcpServers` of its
+`.claude-plugin/plugin.json`. A plugin that ships no `plugin.json` takes its
+marketplace entry as its manifest instead, so the entry's `mcpServers` in the
+marketplace's `marketplace.json` are read too, from the copy Claude Code keeps
+under `plugins/marketplaces`, and they override the plugin's `.mcp.json`. A
+plugin whose `mcpServers` names something the hook does not read, such as an
+`.mcpb` bundle, is left unresolved, as is one whose marketplace entry declares a
+server Claude Code would reject.
+
+`local` and `project` servers are read for the directory the session
+was started or resumed in, which Claude Code gives every hook as
+`CLAUDE_PROJECT_DIR`; a session keeps that configuration after changing
+directories, and a resumed session loads it from wherever it was resumed. Pass
+`--project-dir` to reproduce a hook call; without it, the current directory
+stands in. A hook run without `CLAUDE_PROJECT_DIR` leaves those servers
+unresolved. Claude Code's files are parsed as strict JSON, as Claude Code parses
+them, so a file with comments or trailing commas is skipped. A file Claude Code
+may have loaded but the hook cannot decode, such as one nested more than 10000
+levels deep or a `.mcp.json` that isn't an object, leaves the server unresolved
+rather than letting another file answer for it. A plugin from a
+marketplace added from a local folder or catalog file is read from that folder,
+which is where Claude Code loads it.
 
 An unidentified server prints the reason on the last line and exits 1:
 
@@ -209,8 +277,9 @@ even on a machine whose Program Files folder has been moved, so `hook-install`
 writes there too. Starting Claude Code with a different
 `CLAUDE_CONFIG_DIR` therefore does not skip them, and they keep running when an
 administrator sets `allowManagedHooksOnly`. MCP servers are resolved against
-`$CLAUDE_CONFIG_DIR/.claude.json` when the session sets that variable, which is
-the file Claude Code itself reads in that case. The variable has to hold an
+`$CLAUDE_CONFIG_DIR/.claude.json` and `$CLAUDE_CONFIG_DIR/plugins` when the
+session sets that variable, which are the files Claude Code itself reads in that
+case. The variable has to hold an
 absolute path: Claude Code resolves a relative one against the directory it was
 started from, which the hook cannot determine, so MCP calls from such a session
 are blocked with a reason that says so.
@@ -223,10 +292,12 @@ it itself: a Claude Code settings file whose `env` sets `HOME` leaves Claude
 Code reading the real `~/.claude.json` while its hooks see the other directory.
 When the variable names a directory other than the account's, the hook cannot
 tell which one the agent read, so MCP calls are blocked with a reason that says
-so. Start the agent without changing the variable. Claude Code is exempt while
-`CLAUDE_CONFIG_DIR` is set, since it then reads nothing from the home directory,
-and its built-in MCP servers are still reported by name, which no configuration
-file decides.
+so. Start the agent without changing the variable. For Claude Code this covers
+the servers it loads from the home directory: user and local servers and
+installed plugins' servers. Project, managed and built-in servers and claude.ai
+connectors are read from elsewhere and resolve as usual, and so does everything
+while `CLAUDE_CONFIG_DIR` is set, since Claude Code then reads nothing from the
+home directory.
 
 Claude Code uses only one managed settings source by default. If the machine
 also receives server-managed settings or an MDM policy (the

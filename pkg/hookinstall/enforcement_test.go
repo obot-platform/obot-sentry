@@ -27,6 +27,7 @@ import (
 // install writes, so the pre-tool entry is pinned in place rather than probed
 // field by field.
 const claudeEnforceDarwinGolden = `{
+  "disableSideloadFlags": true,
   "hooks": {
     "PostToolUse": [
       {
@@ -330,6 +331,59 @@ func TestAuditOnlyRunRemovesManagedEnforcementHooks(t *testing.T) {
 				t.Errorf("the audit entry did not survive:\n%s", after.data)
 			}
 		})
+	}
+}
+
+// TestEnforceDisablesClaudeSideloading covers Claude Code's disableSideloadFlags,
+// which the enforcement hook needs to resolve plugin servers: an enforcing run
+// sets it, keeping the rest of an existing file, and an audit-only run leaves it
+// alone, since nothing records who set it.
+func TestEnforceDisablesClaudeSideloading(t *testing.T) {
+	d := destFor(t, localagent.ClaudeCode, FormatJSON)
+	sideload := func(t *testing.T, data []byte) any {
+		t.Helper()
+		var doc map[string]any
+		if err := json.Unmarshal(data, &doc); err != nil {
+			t.Fatalf("written document: %v\n%s", err, data)
+		}
+		return doc[claudeDisableSideloadKey]
+	}
+
+	existing := []byte(`{"model":"opus","disableSideloadFlags":false,"hooks":{}}`)
+	out, err := mergeConfig(d, existing, macExe, "darwin", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := sideload(t, out.data); got != true {
+		t.Fatalf("%s = %v, want true:\n%s", claudeDisableSideloadKey, got, out.data)
+	}
+	if !strings.Contains(string(out.data), `"model":"opus"`) {
+		t.Errorf("an unrelated setting was lost:\n%s", out.data)
+	}
+
+	// A repeated key is set wherever it appears: Claude Code keeps the last one.
+	repeated := []byte(`{"disableSideloadFlags":true,"model":"opus","disableSideloadFlags":false}`)
+	both, err := mergeConfig(d, repeated, macExe, "darwin", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(both.data), `"disableSideloadFlags":false`) || sideload(t, both.data) != true {
+		t.Errorf("a repeated %s was left false:\n%s", claudeDisableSideloadKey, both.data)
+	}
+
+	audit, err := mergeConfig(d, out.data, macExe, "darwin", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := sideload(t, audit.data); got != true {
+		t.Errorf("an audit-only run changed %s to %v", claudeDisableSideloadKey, got)
+	}
+	fresh, err := mergeConfig(d, nil, macExe, "darwin", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := sideload(t, fresh.data); got != nil {
+		t.Errorf("an audit-only install set %s to %v", claudeDisableSideloadKey, got)
 	}
 }
 

@@ -124,7 +124,7 @@ func TestEnvPathFallsBackToTheConventionalLocation(t *testing.T) {
 // it, with no fixture root prepended.
 func TestMachinePathIsAbsoluteInProduction(t *testing.T) {
 	env := Env{Home: "/Users/dev", GOOS: "darwin"}
-	for _, abs := range []string{claudeManagedMCPDarwin, "/etc/codex/managed_config.toml"} {
+	for _, abs := range []string{claudeManagedDirDarwin, "/etc/codex/managed_config.toml"} {
 		if got, want := env.machinePath(abs), filepath.FromSlash(abs); got != want {
 			t.Errorf("machinePath(%q) = %q, want %q with nothing prepended", abs, got, want)
 		}
@@ -132,10 +132,11 @@ func TestMachinePathIsAbsoluteInProduction(t *testing.T) {
 
 	// Since nothing is prepended, what comes back is absolute wherever the path
 	// given belongs. Those above are the macOS locations, which are absolute on
-	// macOS; on Windows the equivalent is Claude Code's fixed drive-letter path.
-	native, nativeEnv := claudeManagedMCPDarwin, env
+	// macOS; on Windows the equivalent is Claude Code's drive-letter managed
+	// directory.
+	native, nativeEnv := claudeManagedDirDarwin, env
 	if runtime.GOOS == "windows" {
-		native, nativeEnv.GOOS = claudeManagedMCPWindows, "windows"
+		native, nativeEnv.GOOS = claudeManagedDirWindows, "windows"
 	}
 	if got := nativeEnv.machinePath(native); !filepath.IsAbs(got) {
 		t.Errorf("machinePath(%q) = %q, want an absolute path", native, got)
@@ -195,32 +196,49 @@ func TestNewEnvHomeOverride(t *testing.T) {
 // TestHomeOverrideLeavesHomeConfigurationUnresolved covers a hook whose
 // environment names a home directory other than the account's. The agent may
 // have read either one, so nothing under the home directory is resolved, for
-// any agent. Claude Code with CLAUDE_CONFIG_DIR set reads nothing from the home
-// directory, and is unaffected.
+// any agent. A Claude Code server from a source that is not read from the home
+// directory resolves as it does without an override, and so does every source
+// once CLAUDE_CONFIG_DIR takes Claude Code's configuration out of it.
 func TestHomeOverrideLeavesHomeConfigurationUnresolved(t *testing.T) {
 	f := newFixture(t, "darwin")
 	project := f.mkdir(f.path("proj"))
-	f.write(f.homePath(".claude.json"), `{"mcpServers":{"linear":{"url":"https://home.example.com/sse"}}}`)
-	f.write(filepath.Join(project, ".mcp.json"), `{"mcpServers":{"proj":{"type":"http","url":"https://proj.example.com/mcp"}}}`)
-	f.write(f.homePath(".codex", "config.toml"), "[mcp_servers.linear]\nurl = \"https://home.example.com/sse\"\n")
-	f.write(f.homePath(".cursor", "mcp.json"), `{"mcpServers":{"linear":{"url":"https://home.example.com/sse"}}}`)
-	f.write(f.homePath(".kiro", "settings", "mcp.json"), `{"mcpServers":{"linear":{"url":"https://home.example.com/sse"}}}`)
-	requests := map[string]ResolveRequest{
-		"claude-code":         claudeCodeReq("linear", project),
-		"claude-code project": claudeCodeReq("proj", project),
-		"codex":               codexReq("linear"),
-		"cursor":              cursorReq("linear", project),
-		"kiro":                {Agent: localagent.Kiro, ServerName: "linear", CWD: project},
+	const home = "https://home.example.com/sse"
+	install := f.mkdir(f.homePath(".claude", "plugins", "cache", "mkt", "tool", "1.0.0"))
+	f.write(filepath.Join(install, ".mcp.json"), `{"mcpServers":{"linear":{"type":"http","url":"`+home+`"}}}`)
+	f.pluginRegistry(f.homePath(".claude"), `{"version":2,"plugins":{"tool@mkt":[{"scope":"user","installPath":`+quote(install)+`}]}}`)
+	f.write(f.homePath(".claude.json"), `{"mcpServers":{"linear":{"type":"http","url":"`+home+`"}},`+
+		`"projects":{`+quote(project)+`:{"mcpServers":{"mine":{"type":"http","url":"`+home+`"}}}}}`)
+	f.write(f.homePath(".codex", "config.toml"), "[mcp_servers.linear]\nurl = \""+home+"\"\n")
+	f.write(f.homePath(".cursor", "mcp.json"), `{"mcpServers":{"linear":{"url":"`+home+`"}}}`)
+	f.write(f.homePath(".kiro", "settings", "mcp.json"), `{"mcpServers":{"linear":{"url":"`+home+`"}}}`)
+	underHome := map[string]ResolveRequest{
+		"claude-code user":   claudeCodeReq(claudeSourceUser, "linear", project),
+		"claude-code local":  claudeCodeReq(claudeSourceLocal, "mine", project),
+		"claude-code plugin": pluginReq("tool", "linear", project),
+		"codex":              codexReq("linear"),
+		"cursor":             cursorReq("linear", project),
+		"kiro":               {Agent: localagent.Kiro, ServerName: "linear", CWD: project},
 	}
 
-	for name, req := range requests {
-		if res := Resolve(f.Env, req); res.Unresolved {
-			t.Fatalf("%s: unresolved without an override: %s\n%s", name, res.Reason, resolveTrace(res))
+	const elsewhere = "https://elsewhere.example.com/mcp"
+	f.write(filepath.Join(project, ".mcp.json"), `{"mcpServers":{"proj":{"type":"http","url":"`+elsewhere+`"}}}`)
+	f.write(f.Env.managedMCPPath(), `{"mcpServers":{"ent":{"type":"http","url":"`+elsewhere+`"}}}`)
+	f.write(f.Env.claudeManagedPath(claudeManagedSettings),
+		`{"`+ClaudeDisableSideloadKey+`":true,"managedMcpServers":{"mgd":`+managedServer(elsewhere)+`}}`)
+	notUnderHome := map[string]ResolveRequest{
+		"claude-code project":    claudeCodeReq(claudeSourceProject, "proj", project),
+		"claude-code enterprise": claudeCodeReq(claudeSourceEnterprise, "ent", project),
+		"claude-code managed":    claudeCodeReq(claudeSourceManaged, "mgd", project),
+	}
+
+	for name, req := range underHome {
+		if res := Resolve(f.Env, req); res.Unresolved || res.Identity.URL != home {
+			t.Fatalf("%s: without an override, unresolved=%v (%s) url=%q\n%s", name, res.Unresolved, res.Reason, res.Identity.URL, resolveTrace(res))
 		}
 	}
 
 	f.Env.HomeOverride = f.path("decoy")
-	for name, req := range requests {
+	for name, req := range underHome {
 		res := Resolve(f.Env, req)
 		if !res.Unresolved || !strings.Contains(res.Reason, "HOME set to "+strconv.Quote(f.Env.HomeOverride)) {
 			t.Errorf("%s: want unresolved for the HOME override, got unresolved=%v reason=%q", name, res.Unresolved, res.Reason)
@@ -229,12 +247,31 @@ func TestHomeOverrideLeavesHomeConfigurationUnresolved(t *testing.T) {
 			t.Errorf("%s: read configuration despite the override:\n%s", name, resolveTrace(res))
 		}
 	}
+	for name, req := range notUnderHome {
+		t.Run(name, func(t *testing.T) { assertURL(t, Resolve(f.Env, req), elsewhere) })
+	}
+	connector := Resolve(f.Env, claudeCodeReq(claudeSourceClaudeAI, "claude.ai Linear", project))
+	if connector.Unresolved || connector.Identity.Connector != "claude.ai Linear" {
+		t.Errorf("a claude.ai connector under the override: unresolved=%v (%s) connector=%q", connector.Unresolved, connector.Reason, connector.Identity.Connector)
+	}
 
+	// CLAUDE_CONFIG_DIR takes all of it out of the home directory.
+	const alt = "https://alt.example.com/sse"
 	configDir := f.path("alt-claude")
 	f.setenv(claudeConfigDirEnv, configDir)
-	f.write(filepath.Join(configDir, ".claude.json"), `{"mcpServers":{"linear":{"url":"https://alt.example.com/sse"}}}`)
-	assertURL(t, Resolve(f.Env, claudeCodeReq("linear", project)), "https://alt.example.com/sse")
-	assertUnresolved(t, Resolve(f.Env, codexReq("linear")), "HOME set to")
+	altInstall := f.mkdir(filepath.Join(configDir, "plugins", "cache", "mkt", "tool", "1.0.0"))
+	f.write(filepath.Join(altInstall, ".mcp.json"), `{"mcpServers":{"linear":{"type":"http","url":"`+alt+`"}}}`)
+	f.write(filepath.Join(configDir, "plugins", claudePluginRegistry),
+		`{"version":2,"plugins":{"tool@mkt":[{"scope":"user","installPath":`+quote(altInstall)+`}]}}`)
+	f.write(filepath.Join(configDir, ".claude.json"), `{"mcpServers":{"linear":{"type":"http","url":"`+alt+`"}},`+
+		`"projects":{`+quote(project)+`:{"mcpServers":{"mine":{"type":"http","url":"`+alt+`"}}}}}`)
+	for name, req := range underHome {
+		if req.Agent != localagent.ClaudeCode {
+			assertUnresolved(t, Resolve(f.Env, req), "HOME set to")
+			continue
+		}
+		t.Run(name+" with CLAUDE_CONFIG_DIR", func(t *testing.T) { assertURL(t, Resolve(f.Env, req), alt) })
+	}
 
 	f.Env.GOOS = "windows"
 	if reason, _ := f.Env.homeOverridden(); !strings.Contains(reason, "USERPROFILE set to") {
@@ -250,12 +287,18 @@ func TestHomeOverrideOnEveryHookPath(t *testing.T) {
 	f := newFixture(t, "darwin")
 	ws := f.mkdir(f.path("ws"))
 	const home = "https://home.example.com/sse"
-	f.write(f.homePath(".claude.json"), `{"mcpServers":{"linear":{"url":"`+home+`"}}}`)
+	f.write(f.homePath(".claude.json"), `{"mcpServers":{"linear":{"type":"sse","url":"`+home+`"}}}`)
 	f.write(f.homePath(".codex", "config.toml"), "[mcp_servers.linear]\nurl = \""+home+"\"\n")
 	f.write(f.homePath(".cursor", "mcp.json"), `{"mcpServers":{"linear":{"url":"`+home+`"}}}`)
 	f.write(f.homePath(".kiro", "settings", "mcp.json"), `{"mcpServers":{"linear":{"url":"`+home+`"}}}`)
 	preTool := func(toolName string) []byte {
 		return mustJSON(map[string]any{"session_id": "s1", "hook_event_name": "PreToolUse", "cwd": ws, "tool_name": toolName})
+	}
+	claudePreTool := func(toolName, server, source string) []byte {
+		return mustJSON(map[string]any{
+			"session_id": "s1", "hook_event_name": "PreToolUse", "cwd": ws, "tool_name": toolName,
+			"mcp_server": map[string]string{"name": server, "source": source},
+		})
 	}
 	hooks := []struct {
 		name    string
@@ -263,7 +306,7 @@ func TestHomeOverrideOnEveryHookPath(t *testing.T) {
 		event   Event
 		payload []byte
 	}{
-		{"claude-code", localagent.ClaudeCode, EventPreToolUse, preTool("mcp__linear__search")},
+		{"claude-code", localagent.ClaudeCode, EventPreToolUse, claudePreTool("mcp__linear__search", "linear", claudeSourceUser)},
 		{"codex", localagent.Codex, EventPreToolUse, preTool("mcp__linear__search")},
 		{"cursor", localagent.Cursor, EventCursorBeforeMCPExecution, mustJSON(map[string]any{
 			"hook_event_name": "beforeMCPExecution", "tool_name": "search", "mcp_server_name": "linear", "workspace_roots": []string{ws},
@@ -298,11 +341,11 @@ func TestHomeOverrideOnEveryHookPath(t *testing.T) {
 	}
 
 	// A built-in tool reads no configuration, and a built-in MCP server is known
-	// by name whichever home directory was read.
+	// by its name and source whichever home directory was read.
 	if call := run(t, localagent.Kiro, EventPreToolUse, kiroPayload("execute_bash", ws, map[string]any{"command": "ls"})); call.Request.Unresolved {
 		t.Errorf("a Kiro built-in tool was unresolved under the override: %s", call.Request.UnresolvedReason)
 	}
-	builtin := run(t, localagent.ClaudeCode, EventPreToolUse, preTool("mcp__claude-in-chrome__navigate"))
+	builtin := run(t, localagent.ClaudeCode, EventPreToolUse, claudePreTool("mcp__claude-in-chrome__navigate", "claude-in-chrome", "dynamic"))
 	if builtin.Request.Unresolved || builtin.Request.ServerName != "claude-in-chrome" || builtin.Request.Server.URL != "" {
 		t.Errorf("a Claude Code built-in MCP server under the override: unresolved=%v (%s) name=%q", builtin.Request.Unresolved, builtin.Request.UnresolvedReason, builtin.Request.ServerName)
 	}
