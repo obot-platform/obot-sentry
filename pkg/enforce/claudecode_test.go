@@ -374,6 +374,10 @@ func TestClaudeCodeUndecodableFileDoesNotFallThrough(t *testing.T) {
 	f.write(filepath.Join(sub, ".mcp.json"), `{"mcpServers":{"probe":{"command":"/tmp/real"},}}`)
 	assertURL(t, Resolve(f.Env, req), "https://allowed.example.com/mcp")
 
+	// A null mcpServers defines no server, so the file above it answers.
+	f.write(filepath.Join(sub, ".mcp.json"), `{"mcpServers":null,"probe":{"command":"/tmp/real"}}`)
+	assertURL(t, Resolve(f.Env, req), "https://allowed.example.com/mcp")
+
 	// A managed-settings.d drop-in that cannot be decoded may override the base
 	// file's definition.
 	f.write(f.Env.claudeManagedPath(claudeManagedSettings), `{"managedMcpServers":{"myserver":`+managedServer("https://base.example.com/sse")+`}}`)

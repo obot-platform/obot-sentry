@@ -61,6 +61,7 @@ func TestClaudeCodeSkippedEntriesFallThrough(t *testing.T) {
 		"proxy type":          `{"type":"claudeai-proxy","url":"https://decoy.example.com","id":"x"}`,
 		"type not a string":   `{"type":7,"command":"/tmp/decoy"}`,
 		"command not string":  `{"command":5}`,
+		"empty command":       `{"command":""}`,
 		"args not a list":     `{"command":"/tmp/decoy","args":"-y"}`,
 		"remote without url":  `{"type":"http","command":"/tmp/decoy"}`,
 		"capitalized URL":     `{"type":"http","URL":"https://decoy.example.com/mcp"}`,

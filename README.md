@@ -233,6 +233,15 @@ plugin installed for one project in any session whose settings enable it, so a
 project's committed settings can switch on another project's installation.
 Installations that define the server differently leave it unresolved.
 
+A plugin's servers come from its `.mcp.json` and from the `mcpServers` of its
+`.claude-plugin/plugin.json`. A plugin that ships no `plugin.json` takes its
+marketplace entry as its manifest instead, so the entry's `mcpServers` in the
+marketplace's `marketplace.json` are read too, from the copy Claude Code keeps
+under `plugins/marketplaces`, and they override the plugin's `.mcp.json`. A
+plugin whose `mcpServers` names something the hook does not read, such as an
+`.mcpb` bundle, is left unresolved, as is one whose marketplace entry declares a
+server Claude Code would reject.
+
 `local` and `project` servers are read for the directory the session
 was started or resumed in, which Claude Code gives every hook as
 `CLAUDE_PROJECT_DIR`; a session keeps that configuration after changing

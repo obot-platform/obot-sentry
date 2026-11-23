@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"maps"
+	"os"
 	"path"
 	"path/filepath"
 	"slices"
@@ -88,12 +89,13 @@ func claudePluginScopes(ctx context.Context, loader *configLoader, configDir, se
 				continue
 			}
 			s := scope{key: "plugin " + id, rank: rank}
+			catalog := claudeCatalogManifest(loader, markets, market, name)
 			if dir, res, local := claudeLocalPluginDir(ctx, loader, markets, market, name); !local {
 				s.path = filepath.Clean(install.InstallPath)
-				s.load = pluginServers(loader, name, s.path, incomplete)
+				s.load = pluginServers(loader, name, s.path, catalog, incomplete)
 			} else if res == loadOK {
 				s.path = dir
-				s.load = pluginServers(loader, name, dir, incomplete)
+				s.load = pluginServers(loader, name, dir, catalog, incomplete)
 			} else {
 				s.path = cmp.Or(markets.catalogs[market], markets.path)
 				s.load = fixedServers(nil, res)
@@ -105,19 +107,22 @@ func claudePluginScopes(ctx context.Context, loader *configLoader, configDir, se
 }
 
 // claudeMarketplaceSet is what known_marketplaces.json says about the
-// marketplaces Claude Code reads from a local folder or file.
+// marketplaces Claude Code knows.
 type claudeMarketplaceSet struct {
 	// res is how the registry loaded.
 	res  loadResult
 	path string
-	// dirs holds each local marketplace's folder, and catalogs its catalog file.
+	// dirs holds the folder of each local marketplace, one Claude Code reads from
+	// a local folder or file. catalogs holds every marketplace's catalog file.
 	dirs, catalogs map[string]string
 }
 
-// claudeMarketplaces reads known_marketplaces.json for the local marketplaces:
-// those added from a folder ("directory") or a catalog file ("file"). Claude
-// Code records a local marketplace's folder as its installLocation, and for a
-// "file" source the catalog is the file it was added from.
+// claudeMarketplaces reads known_marketplaces.json for each marketplace's
+// catalog, and for the local marketplaces: those added from a folder
+// ("directory") or a catalog file ("file"). Claude Code records a local
+// marketplace's folder as its installLocation, and for a "file" source the
+// catalog is the file it was added from. Any other marketplace is fetched, and
+// its catalog is the copy Claude Code keeps (see claudeFetchedCatalog).
 func claudeMarketplaces(ctx context.Context, loader *configLoader, configDir string) claudeMarketplaceSet {
 	set := claudeMarketplaceSet{
 		path:     filepath.Join(configDir, "plugins", claudeMarketplaceRegistry),
@@ -147,11 +152,96 @@ func claudeMarketplaces(ctx context.Context, loader *configLoader, configDir str
 		case "file":
 			set.catalogs[market], _, _ = exactString(source, "path")
 		default:
+			set.catalogs[market] = ""
+			if filepath.IsAbs(dir) {
+				set.catalogs[market] = claudeFetchedCatalog(dir)
+			}
 			continue
 		}
 		set.dirs[market] = dir
 	}
 	return set
+}
+
+// claudeFetchedCatalog returns the catalog Claude Code keeps for a marketplace it
+// fetched, whose installLocation is location: the catalog inside the clone for
+// one added from a repository, and location itself for one added from a catalog
+// URL, which Claude Code saves as that one file.
+func claudeFetchedCatalog(location string) string {
+	if info, err := os.Stat(location); err == nil && !info.IsDir() {
+		return location
+	}
+	return filepath.Join(location, filepath.FromSlash(claudeMarketplaceCatalog))
+}
+
+// claudeCatalogEntry reads a marketplace catalog for its first entry naming the
+// plugin, which is the one Claude Code takes, and the catalog's
+// metadata.pluginRoot. loadAbsent means the catalog is missing or does not list
+// the plugin, and loadUnusable that Claude Code rejects the catalog; either way
+// Claude Code cannot load the plugin.
+func claudeCatalogEntry(ctx context.Context, loader *configLoader, catalog, name string) (entry map[string]json.RawMessage, root string, res loadResult) {
+	var raw json.RawMessage
+	if res := loader.loadStrictJSON(ctx, catalog, &raw, maxConfigBytes); res != loadOK {
+		return nil, "", res
+	}
+	doc, ok := exactObject(raw)
+	var entries []json.RawMessage
+	if !ok || json.Unmarshal(doc["plugins"], &entries) != nil {
+		return nil, "", loadUnusable
+	}
+	root, ok = catalogPluginRoot(doc)
+	if !ok {
+		return nil, "", loadUnusable
+	}
+	for _, raw := range entries {
+		entry, ok := exactObject(raw)
+		if !ok {
+			continue
+		}
+		if entryName, _, _ := exactString(entry, "name"); entryName == name {
+			return entry, root, loadOK
+		}
+	}
+	// The catalog no longer lists the plugin, so Claude Code cannot load it.
+	return nil, root, loadAbsent
+}
+
+// claudeCatalogManifest returns how to read the plugin's marketplace entry as
+// its manifest, which is what Claude Code does for a plugin that ships no
+// plugin.json: the entry's mcpServers are then the plugin's, merged over its
+// .mcp.json. Claude Code reads the catalog afresh for each session, from the
+// local marketplace's own file or from the copy it keeps of a fetched one, so an
+// edit to either changes what the plugin runs without a reinstall.
+//
+// A nil entry with loadOK means there is no catalog to consult: the registry is
+// absent or does not know the marketplace, and the plugin's own files are all
+// that can define its servers. loadAbsent or loadUnusable means Claude Code
+// cannot load the plugin, and loadUndecodable that the hook cannot tell what the
+// entry holds.
+func claudeCatalogManifest(loader *configLoader, markets claudeMarketplaceSet, market, name string) func(context.Context) (map[string]json.RawMessage, loadResult) {
+	return func(ctx context.Context) (map[string]json.RawMessage, loadResult) {
+		switch markets.res {
+		case loadOK:
+		case loadAbsent:
+			return nil, loadOK
+		default:
+			return nil, loadUndecodable
+		}
+		catalog, known := markets.catalogs[market]
+		if !known {
+			return nil, loadOK
+		}
+		if !filepath.IsAbs(catalog) {
+			// Claude Code resolves a relative path against a directory the hook cannot
+			// determine.
+			return nil, loadUndecodable
+		}
+		entry, _, res := claudeCatalogEntry(ctx, loader, catalog, name)
+		if res != loadOK {
+			return nil, res
+		}
+		return entry, loadOK
+	}
 }
 
 // claudeLocalPluginDir returns the folder Claude Code loads a plugin from when
@@ -185,49 +275,29 @@ func claudeLocalPluginDir(ctx context.Context, loader *configLoader, markets cla
 		// determine.
 		return "", loadUndecodable, true
 	}
-	var raw json.RawMessage
-	if res := loader.loadStrictJSON(ctx, catalog, &raw, maxConfigBytes); res != loadOK {
+	entry, root, res := claudeCatalogEntry(ctx, loader, catalog, name)
+	if res != loadOK {
 		return "", res, true
 	}
-	doc, ok := exactObject(raw)
-	var entries []json.RawMessage
-	if !ok || json.Unmarshal(doc["plugins"], &entries) != nil {
-		return "", loadUnusable, true
-	}
-	root, ok := catalogPluginRoot(doc)
+	rel, ok := jsonString(entry["source"])
 	if !ok {
-		return "", loadUnusable, true
+		return "", loadOK, false
 	}
-	for _, raw := range entries {
-		entry, ok := exactObject(raw)
-		if !ok {
-			continue
-		}
-		if entryName, _, _ := exactString(entry, "name"); entryName != name {
-			continue
-		}
-		rel, ok := jsonString(entry["source"])
-		if !ok {
-			return "", loadOK, false
-		}
-		if root != "" && bareSourceName(rel) {
-			rel = "./" + path.Join(root, rel)
-		}
-		if strings.HasPrefix(rel, `.\`) {
-			// Not a form Claude Code was observed to take either way, and on Windows
-			// a relative path it may load in place.
-			return "", loadUndecodable, true
-		}
-		if rel != "." && !strings.HasPrefix(rel, "./") {
-			return "", loadOK, false
-		}
-		if dir, ok := marketplaceRelPath(marketDir, rel); ok {
-			return dir, loadOK, true
-		}
-		return "", loadUnusable, true
+	if root != "" && bareSourceName(rel) {
+		rel = "./" + path.Join(root, rel)
 	}
-	// The catalog no longer lists the plugin, so Claude Code cannot load it.
-	return "", loadAbsent, true
+	if strings.HasPrefix(rel, `.\`) {
+		// Not a form Claude Code was observed to take either way, and on Windows
+		// a relative path it may load in place.
+		return "", loadUndecodable, true
+	}
+	if rel != "." && !strings.HasPrefix(rel, "./") {
+		return "", loadOK, false
+	}
+	if dir, ok := marketplaceRelPath(marketDir, rel); ok {
+		return dir, loadOK, true
+	}
+	return "", loadUnusable, true
 }
 
 // catalogPluginRoot returns the catalog's metadata.pluginRoot, normalized the way
@@ -317,13 +387,22 @@ func decodePluginInstalls(raw json.RawMessage) []claudePluginInstall {
 // names — a file, an inline table, or a list of either — each overriding what
 // came before. Keys come back in Claude Code's "plugin:<plugin>:<server>" form.
 //
+// The manifest is the plugin's plugin.json. A plugin that ships none takes its
+// marketplace entry as its manifest (see claudeCatalogManifest), whatever the
+// entry's "strict" says; one that ships a plugin.json never does.
+//
 // The installation is usable if any of its files is: a plugin that declares
 // servers in only one of the places is the common case.
 //
 // Each source is validated before it is merged, as Claude Code validates each
 // file, so an entry a later source declares in a form Claude Code skips does not
 // displace an earlier source's valid one.
-func pluginServers(loader *configLoader, name, dir string, incomplete *bool) func(context.Context) (serverSet, loadResult) {
+//
+// A manifest can also name what the hook does not read: an .mcpb bundle, whose
+// server overrides a same-named one in .mcp.json, or a bundle's URL. Any string
+// that is not a server file inside the plugin leaves the installation
+// undecodable rather than letting the files the hook does read answer for it.
+func pluginServers(loader *configLoader, name, dir string, catalog func(context.Context) (map[string]json.RawMessage, loadResult), incomplete *bool) func(context.Context) (serverSet, loadResult) {
 	return func(ctx context.Context) (serverSet, loadResult) {
 		merged := serverSet{}
 		res := loadAbsent
@@ -338,9 +417,31 @@ func pluginServers(loader *configLoader, name, dir string, incomplete *bool) fun
 		var rawManifest json.RawMessage
 		manifestRes := loader.loadStrictJSON(ctx, filepath.Join(dir, filepath.FromSlash(claudePluginManifest)), &rawManifest, maxConfigBytes)
 		res = max(res, manifestRes)
-		var declared json.RawMessage
-		if manifest, ok := exactObject(rawManifest); manifestRes == loadOK && ok {
-			declared = manifest[mcpServersKey]
+		var (
+			declared    json.RawMessage
+			fromCatalog bool
+		)
+		switch manifestRes {
+		case loadOK:
+			if manifest, ok := exactObject(rawManifest); ok {
+				declared = manifest[mcpServersKey]
+			}
+		case loadAbsent:
+			entry, catalogRes := catalog(ctx)
+			switch catalogRes {
+			case loadOK:
+			case loadUndecodable:
+				return nil, loadUndecodable
+			default:
+				// Claude Code cannot find the plugin's manifest, and loads none of
+				// its servers.
+				return nil, loadAbsent
+			}
+			if entry != nil {
+				res = max(res, loadOK)
+				declared = entry[mcpServersKey]
+				fromCatalog = true
+			}
 		}
 		if len(declared) > 0 {
 			var specs []json.RawMessage
@@ -349,21 +450,38 @@ func pluginServers(loader *configLoader, name, dir string, incomplete *bool) fun
 			}
 			files := 0
 			for _, spec := range specs {
-				var rel string
-				if json.Unmarshal(spec, &rel) == nil {
-					if path, ok := pluginRelPath(dir, rel); ok {
+				if rel, ok := jsonString(spec); ok {
+					path, ref := pluginServerRef(dir, rel)
+					switch {
+					case ref == pluginRefFile:
 						if files == maxClaudePluginServerFiles {
 							*incomplete = true
 							return nil, loadUnusable
 						}
 						files++
 						merge(path)
+					case ref == pluginRefSkipped && !fromCatalog:
+					default:
+						return nil, loadUndecodable
 					}
 					continue
 				}
-				if inline, ok := exactObject(spec); ok {
-					maps.Copy(merged, claudeServers(inline))
+				inline, ok := exactObject(spec)
+				if !ok {
+					if fromCatalog {
+						return nil, loadUndecodable
+					}
+					continue
 				}
+				if fromCatalog && !claudeServerTableValid(inline) {
+					// Claude Code takes a marketplace entry's mcpServers whole or not
+					// at all: one entry it rejects drops every file and table the
+					// entry names, leaving .mcp.json to answer. Which side of that
+					// line an entry falls on decides which definition runs, so a
+					// table the hook would only partly accept is not guessed at.
+					return nil, loadUndecodable
+				}
+				maps.Copy(merged, claudeServers(inline))
 			}
 		}
 		if res != loadOK {
@@ -376,6 +494,17 @@ func pluginServers(loader *configLoader, name, dir string, incomplete *bool) fun
 		}
 		return set, loadOK
 	}
+}
+
+// claudeServerTableValid reports whether Claude Code accepts every entry of an
+// inline server table.
+func claudeServerTableValid(table map[string]json.RawMessage) bool {
+	for _, raw := range table {
+		if _, ok := claudeServerEntry(raw); !ok {
+			return false
+		}
+	}
+	return true
 }
 
 // pluginServerFile reads a plugin server file, which may hold its table under
@@ -425,13 +554,30 @@ func jsonFalsy(raw json.RawMessage) bool {
 	return false
 }
 
-// pluginRelPath resolves a manifest's server file reference. Claude Code takes
-// only a "./" path to a .json file that does not climb out of the plugin.
-func pluginRelPath(dir, rel string) (string, bool) {
-	if !strings.HasPrefix(rel, "./") || !strings.HasSuffix(rel, ".json") || strings.Contains(rel, "..") {
-		return "", false
+// pluginRef is what a string in a manifest's mcpServers refers to.
+type pluginRef int
+
+const (
+	// pluginRefOpaque is anything the hook does not read: an .mcpb bundle, a URL,
+	// or a path in a form Claude Code does not take as a server file.
+	pluginRefOpaque pluginRef = iota
+	// pluginRefFile is a "./" path to a .json server file inside the plugin.
+	pluginRefFile
+	// pluginRefSkipped is a "./" path to a .json file that climbs with "..".
+	// Claude Code ignores it in a plugin.json and loads the rest of the plugin.
+	pluginRefSkipped
+)
+
+// pluginServerRef classifies a manifest's server reference, and resolves one
+// that names a server file.
+func pluginServerRef(dir, rel string) (string, pluginRef) {
+	if !strings.HasPrefix(rel, "./") || !strings.HasSuffix(rel, ".json") {
+		return "", pluginRefOpaque
 	}
-	return filepath.Join(dir, filepath.FromSlash(rel)), true
+	if strings.Contains(rel, "..") {
+		return "", pluginRefSkipped
+	}
+	return filepath.Join(dir, filepath.FromSlash(rel)), pluginRefFile
 }
 
 // expandPluginRoot substitutes ${CLAUDE_PLUGIN_ROOT}, which Claude Code expands to

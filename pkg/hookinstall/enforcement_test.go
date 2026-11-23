@@ -361,6 +361,16 @@ func TestEnforceDisablesClaudeSideloading(t *testing.T) {
 		t.Errorf("an unrelated setting was lost:\n%s", out.data)
 	}
 
+	// A repeated key is set wherever it appears: Claude Code keeps the last one.
+	repeated := []byte(`{"disableSideloadFlags":true,"model":"opus","disableSideloadFlags":false}`)
+	both, err := mergeConfig(d, repeated, macExe, "darwin", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(both.data), `"disableSideloadFlags":false`) || sideload(t, both.data) != true {
+		t.Errorf("a repeated %s was left false:\n%s", claudeDisableSideloadKey, both.data)
+	}
+
 	audit, err := mergeConfig(d, out.data, macExe, "darwin", false)
 	if err != nil {
 		t.Fatal(err)

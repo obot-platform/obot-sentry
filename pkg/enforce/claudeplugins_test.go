@@ -2,6 +2,7 @@ package enforce
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -52,7 +53,7 @@ func TestClaudeCodePluginManifestServers(t *testing.T) {
 	f.write(filepath.Join(install, "servers.json"), `{"mcpServers":{"fromfile":{"type":"http","url":"https://file.example.com/mcp"}}}`)
 	f.write(filepath.Join(install, ".claude-plugin", "plugin.json"), `{"name":"kit","mcpServers":[
 		"./servers.json",
-		"../escape.json",
+		"./sub/../escape.json",
 		{"over":{"type":"http","url":"https://manifest.example.com/mcp"}},
 		{"bundled":{"command":"${CLAUDE_PLUGIN_ROOT}/bin/server","args":["--root","${CLAUDE_PLUGIN_ROOT}"]}},
 		{"pkg":{"command":"npx","args":["-y","@acme/srv@1.2.3"]}}
@@ -428,4 +429,138 @@ func TestClaudeCodePluginsNeedSideloadDisabled(t *testing.T) {
 		}
 		assertUnresolved(t, Resolve(f.Env, pluginReq("p", "s", f.path("proj"))), unset)
 	})
+}
+
+// TestClaudeCodePluginCatalogManifest covers a plugin that ships no plugin.json.
+// Claude Code takes the plugin's marketplace entry as its manifest, whatever the
+// entry's "strict" says, so the entry's mcpServers are merged over the plugin's
+// .mcp.json. It reads the catalog for each session: the local marketplace's own
+// file, the clone of one added from a repository, or the saved catalog of one
+// added from a URL. A plugin that ships a plugin.json never takes the entry.
+func TestClaudeCodePluginCatalogManifest(t *testing.T) {
+	const (
+		file        = "https://file.example.com/mcp"
+		catalog     = "https://catalog.example.com/mcp"
+		none        = "did not find it there"
+		undecodable = "cannot decode"
+	)
+	inline := `"mcpServers":{"s":{"type":"http","url":"` + catalog + `"}}`
+	cases := []struct {
+		name string
+		// entries is the catalog's plugins list, and manifest the plugin's
+		// plugin.json, if it ships one.
+		entries, manifest string
+		// want is the URL the server resolves to, or the reason it does not.
+		want string
+	}{
+		{"inline table", `{"name":"p","source":"./plugins/p",` + inline + `}`, "", catalog},
+		{"inline table, strict", `{"name":"p","source":"./plugins/p","strict":true,` + inline + `}`, "", catalog},
+		{"inline table, not strict", `{"name":"p","source":"./plugins/p","strict":false,` + inline + `}`, "", catalog},
+		{"server file", `{"name":"p","source":"./plugins/p","mcpServers":"./side.json"}`, "", catalog},
+		{"list", `{"name":"p","source":"./plugins/p","mcpServers":["./missing.json",{"s":{"type":"http","url":"` + catalog + `"}}]}`, "", catalog},
+		{"no mcpServers", `{"name":"p","source":"./plugins/p"}`, "", file},
+		{"null mcpServers", `{"name":"p","source":"./plugins/p","mcpServers":null}`, "", file},
+		{"first entry wins", `{"name":"p","source":"./plugins/p"},{"name":"p","source":"./plugins/p",` + inline + `}`, "", file},
+		{"plugin.json wins", `{"name":"p","source":"./plugins/p",` + inline + `}`, `{"name":"p"}`, file},
+		{"plugin.json wins, not strict", `{"name":"p","source":"./plugins/p","strict":false,` + inline + `}`, `{"name":"p"}`, file},
+		{"not listed", `{"name":"q","source":"./plugins/p",` + inline + `}`, "", none},
+		{"an entry Claude Code rejects", `{"name":"p","source":"./plugins/p","mcpServers":{"s":{"type":"http","url":"` + catalog + `"},"x":{"command":5}}}`, "", undecodable},
+		{"bundle", `{"name":"p","source":"./plugins/p","mcpServers":"./s.mcpb"}`, "", undecodable},
+		{"climbing path", `{"name":"p","source":"./plugins/p","mcpServers":"./a/../side.json"}`, "", undecodable},
+		{"neither path nor table", `{"name":"p","source":"./plugins/p","mcpServers":[7]}`, "", undecodable},
+	}
+	for _, kind := range []string{"directory", "git", "url"} {
+		for _, tc := range cases {
+			t.Run(kind+"/"+tc.name, func(t *testing.T) {
+				f := newFixture(t, "darwin")
+				location := f.homePath(".claude", "plugins", "marketplaces", "mkt")
+				catalogPath := filepath.Join(location, ".claude-plugin", "marketplace.json")
+				plugin := f.mkdir(f.homePath(".claude", "plugins", "cache", "mkt", "p", "1.0.0"))
+				source := `{"source":"git","url":"https://git.example.com/mkt.git"}`
+				switch kind {
+				case "directory":
+					// Loaded in place from the marketplace folder.
+					source = `{"source":"directory","path":` + quote(location) + `}`
+					plugin = f.mkdir(filepath.Join(location, "plugins", "p"))
+				case "url":
+					// Claude Code saves the catalog as the install location itself.
+					source = `{"source":"url","url":"https://mkt.example.com/marketplace.json"}`
+					catalogPath = location
+				}
+				f.write(catalogPath, `{"name":"mkt","plugins":[`+tc.entries+`]}`)
+				f.write(f.homePath(".claude", "plugins", claudeMarketplaceRegistry),
+					`{"mkt":{"source":`+source+`,"installLocation":`+quote(location)+`}}`)
+				f.write(filepath.Join(plugin, ".mcp.json"), `{"mcpServers":{"s":{"type":"http","url":"`+file+`"}}}`)
+				f.write(filepath.Join(plugin, "side.json"), `{"mcpServers":{"s":{"type":"http","url":"`+catalog+`"}}}`)
+				if tc.manifest != "" {
+					f.write(filepath.Join(plugin, ".claude-plugin", "plugin.json"), tc.manifest)
+				}
+				f.pluginRegistry(f.homePath(".claude"), `{"version":2,"plugins":{"p@mkt":[{"scope":"user","installPath":`+quote(plugin)+`}]}}`)
+
+				res := Resolve(f.Env, pluginReq("p", "s", f.path("proj")))
+				if tc.want == none || tc.want == undecodable {
+					assertUnresolved(t, res, tc.want)
+					return
+				}
+				assertURL(t, res, tc.want)
+			})
+		}
+	}
+}
+
+// TestClaudeCodePluginCatalogOnlyServer covers a server only the marketplace
+// entry declares, and a fetched marketplace whose catalog is gone or unparsable:
+// Claude Code then cannot find the manifest of a plugin without a plugin.json,
+// and loads none of its servers.
+func TestClaudeCodePluginCatalogOnlyServer(t *testing.T) {
+	f := newFixture(t, "darwin")
+	location := f.homePath(".claude", "plugins", "marketplaces", "mkt")
+	catalogPath := filepath.Join(location, ".claude-plugin", "marketplace.json")
+	plugin := f.mkdir(f.homePath(".claude", "plugins", "cache", "mkt", "p", "1.0.0"))
+	f.write(f.homePath(".claude", "plugins", claudeMarketplaceRegistry),
+		`{"mkt":{"source":{"source":"github","repo":"acme/mkt"},"installLocation":`+quote(location)+`}}`)
+	f.pluginRegistry(f.homePath(".claude"), `{"version":2,"plugins":{"p@mkt":[{"scope":"user","installPath":`+quote(plugin)+`}]}}`)
+	req := pluginReq("p", "only", f.path("proj"))
+
+	f.write(catalogPath, `{"name":"mkt","plugins":[{"name":"p","source":"./p","strict":false,`+
+		`"mcpServers":{"only":{"command":"${CLAUDE_PLUGIN_ROOT}/bin/server"}}}]}`)
+	if res, want := Resolve(f.Env, req), plugin+"/bin/server"; res.Identity.Command != want {
+		t.Fatalf("Command = %q, want %q\n%s", res.Identity.Command, want, resolveTrace(res))
+	}
+
+	f.write(filepath.Join(plugin, ".mcp.json"), `{"mcpServers":{"only":{"type":"http","url":"https://file.example.com/mcp"}}}`)
+	f.write(catalogPath, `{"name":"mkt","plugins":[],}`)
+	assertUnresolved(t, Resolve(f.Env, req), "did not find it there")
+	if err := os.Remove(catalogPath); err != nil {
+		t.Fatal(err)
+	}
+	assertUnresolved(t, Resolve(f.Env, req), "did not find it there")
+
+	// A marketplace the registry does not know has no catalog to consult, so the
+	// plugin's own files are all that can define its servers.
+	f.write(f.homePath(".claude", "plugins", claudeMarketplaceRegistry), `{}`)
+	assertURL(t, Resolve(f.Env, req), "https://file.example.com/mcp")
+}
+
+// TestClaudeCodePluginBundleFailsClosed covers a plugin.json that names what the
+// hook does not read: an .mcpb bundle, whose server replaces a same-named one in
+// .mcp.json, or a bundle's URL. The files the hook does read must not answer for
+// the plugin.
+func TestClaudeCodePluginBundleFailsClosed(t *testing.T) {
+	for name, declared := range map[string]string{
+		"bundle":         `"./server.mcpb"`,
+		"bundle in list": `["./servers.json","./server.mcpb"]`,
+		"bundle URL":     `["https://bundles.example.com/server.mcpb"]`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t, "darwin")
+			install := f.mkdir(f.path("plugins", "kit"))
+			f.write(filepath.Join(install, ".mcp.json"), `{"mcpServers":{"srv":{"type":"http","url":"https://file.example.com/mcp"}}}`)
+			f.write(filepath.Join(install, "servers.json"), `{"mcpServers":{"other":{"type":"http","url":"https://other.example.com/mcp"}}}`)
+			f.write(filepath.Join(install, ".claude-plugin", "plugin.json"), `{"name":"kit","mcpServers":`+declared+`}`)
+			f.pluginRegistry(f.homePath(".claude"), `{"version":2,"plugins":{"kit@mkt":[{"scope":"user","installPath":`+quote(install)+`}]}}`)
+
+			assertUnresolved(t, Resolve(f.Env, pluginReq("kit", "srv", f.path("proj"))), "cannot decode")
+		})
+	}
 }

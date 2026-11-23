@@ -53,8 +53,8 @@ func jsonString(raw json.RawMessage) (string, bool) {
 // claudeServerEntry decodes one server entry the way Claude Code validates it,
 // reporting false for an entry it skips.
 //
-// A stdio entry has no type, or type "stdio", and a string command; a url it also
-// carries is ignored, because Claude Code runs the command. An "http", "sse", or
+// A stdio entry has no type, or type "stdio", and a non-empty string command; a
+// url it also carries is ignored, because Claude Code runs the command. An "http", "sse", or
 // "ws" entry has a string url, and a command it carries is ignored. Every other
 // shape is skipped: a url with no type, an unknown type or one in the wrong case,
 // the internal types only Claude Code itself registers, and fields of the wrong
@@ -72,7 +72,7 @@ func claudeServerEntry(raw json.RawMessage) (mcpEntry, bool) {
 	switch typ {
 	case "", "stdio":
 		command, present, ok := exactString(members, "command")
-		if !present || !ok {
+		if !present || !ok || command == "" {
 			return mcpEntry{}, false
 		}
 		entry := mcpEntry{Command: command}
@@ -167,8 +167,10 @@ func objectMember(members map[string]json.RawMessage, key string) (table map[str
 //
 // Claude Code skips such a file over claudeMCPConfigMaxBytes, or one JSON.parse
 // rejects, so it is unusable here too, and a shallower .mcp.json answers in its
-// place. One that parses but is not an object, or whose mcpServers is not one, is
-// undecodable instead: whatever Claude Code makes of it, the hook cannot match.
+// place. One that parses but is not an object, or whose mcpServers is neither an
+// object nor null, is undecodable instead: whatever Claude Code makes of it, the
+// hook cannot match. A null mcpServers defines no server however it is read, so
+// such a file is one with no servers.
 func claudeJSONServers(loader *configLoader, path string) func(context.Context) (serverSet, loadResult) {
 	return func(ctx context.Context) (serverSet, loadResult) {
 		var raw json.RawMessage
@@ -178,6 +180,9 @@ func claudeJSONServers(loader *configLoader, path string) func(context.Context) 
 		members, ok := exactObject(raw)
 		if !ok {
 			return nil, loadUndecodable
+		}
+		if string(bytes.TrimSpace(members[mcpServersKey])) == "null" {
+			return serverSet{}, loadOK
 		}
 		table, ok := objectMember(members, mcpServersKey)
 		if !ok {

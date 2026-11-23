@@ -92,7 +92,7 @@ type ResolveRequest struct {
 	CWD string
 	// ProjectDir is the directory a Claude Code session was started or resumed
 	// in, from the CLAUDE_PROJECT_DIR Claude Code gives the hook. Claude Code's
-	// local, project and plugin servers resolve only with it.
+	// local and project servers resolve only with it.
 	ProjectDir string
 	// WorkspaceRoots are Cursor's open workspace roots. They are the only project
 	// context a Cursor payload carries: it sends no usable cwd.
