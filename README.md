@@ -276,13 +276,16 @@ Code reads from a fixed path. On Windows that path is always on drive `C:`,
 even on a machine whose Program Files folder has been moved, so `hook-install`
 writes there too. Starting Claude Code with a different
 `CLAUDE_CONFIG_DIR` therefore does not skip them, and they keep running when an
-administrator sets `allowManagedHooksOnly`. MCP servers are resolved against
-`$CLAUDE_CONFIG_DIR/.claude.json` and `$CLAUDE_CONFIG_DIR/plugins` when the
-session sets that variable, which are the files Claude Code itself reads in that
-case. The variable has to hold an
-absolute path: Claude Code resolves a relative one against the directory it was
-started from, which the hook cannot determine, so MCP calls from such a session
-are blocked with a reason that says so.
+administrator sets `allowManagedHooksOnly`. When the session sets that variable,
+plugin MCP servers are resolved against `$CLAUDE_CONFIG_DIR/plugins`, which is
+where Claude Code loads them from. User and local MCP servers are blocked in
+such a session, with a reason that says so: Claude Code reads them from the
+`.claude.json` of the directory it was started with, its settings can change the
+variable for its hooks afterwards, and the hook cannot tell the two apart.
+Project and managed servers and claude.ai connectors are unaffected. The
+variable has to hold an absolute path: Claude Code resolves a relative one
+against the directory it was started from, which the hook cannot determine, so
+MCP calls from such a session are blocked with a reason that says so.
 
 Claude Code uses only one managed settings source by default. If the machine
 also receives server-managed settings or an MDM policy (the
