@@ -31,10 +31,7 @@ type scope struct {
 	key  string
 	// rank orders precedence: lower wins, and scopes sharing a rank are peers.
 	rank int
-	// closed marks a scope whose server set the agent treats as exclusive, so a
-	// miss here ends resolution instead of falling through to lower ranks.
-	closed bool
-	load   func(context.Context) (serverSet, loadResult)
+	load func(context.Context) (serverSet, loadResult)
 }
 
 func (s scope) traceKey(matched string) string {
@@ -89,10 +86,11 @@ const (
 	outcomeMiss outcome = iota
 	// outcomeFound means one identity was established.
 	outcomeFound
-	// outcomeClosed means a closed scope ended resolution without a match.
-	outcomeClosed
 	// outcomeAmbiguous means peer scopes defined the name differently.
 	outcomeAmbiguous
+	// outcomeUndecodable means a scope the agent may have loaded the name from
+	// could not be decoded; the match's key is that scope's path.
+	outcomeUndecodable
 )
 
 // match is a server declaration found in some scope.
@@ -109,14 +107,15 @@ type match struct {
 // by search order.
 func resolveScopes(ctx context.Context, scopes []scope, names lookup, tr *tracer) (match, outcome) {
 	for i := 0; i < len(scopes); {
-		var (
-			peers  []match
-			closed bool
-		)
+		var peers []match
 		j := i
 		for ; j < len(scopes) && scopes[j].rank == scopes[i].rank; j++ {
 			s := scopes[j]
 			set, res := s.load(ctx)
+			if res == loadUndecodable {
+				tr.miss(s.path, s.traceKey(""), res)
+				return match{key: s.path}, outcomeUndecodable
+			}
 			if res != loadOK {
 				tr.miss(s.path, s.traceKey(""), res)
 				continue
@@ -124,7 +123,6 @@ func resolveScopes(ctx context.Context, scopes []scope, names lookup, tr *tracer
 			entry, key, ok := matchName(names, set)
 			if !ok {
 				tr.miss(s.path, s.traceKey(""), res)
-				closed = closed || s.closed
 				continue
 			}
 			tr.hit(s.path, s.traceKey(key), names.note(key))
@@ -140,8 +138,6 @@ func resolveScopes(ctx context.Context, scopes []scope, names lookup, tr *tracer
 				return agreed, outcomeFound
 			}
 			return match{}, outcomeAmbiguous
-		case closed:
-			return match{}, outcomeClosed
 		}
 	}
 	return match{}, outcomeMiss

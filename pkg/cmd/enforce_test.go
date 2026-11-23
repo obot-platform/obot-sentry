@@ -59,6 +59,21 @@ func hookPayload(t *testing.T, tool, cwd string) string {
 	return string(data)
 }
 
+// claudeMCPPayload renders a Claude Code MCP hook payload: the tool, the server
+// and source Claude Code reports for it in mcp_server, and the cwd.
+func claudeMCPPayload(t *testing.T, tool, server, source, cwd string) string {
+	t.Helper()
+	data, err := json.Marshal(map[string]any{
+		"tool_name":  tool,
+		"cwd":        cwd,
+		"mcp_server": map[string]string{"name": server, "source": source},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
+}
+
 // jsonString encodes s as a JSON string literal, quotes included, for payloads
 // hookPayload does not cover. Like hookPayload, it keeps a Windows path's
 // backslashes from being read as escapes.
@@ -105,7 +120,7 @@ func TestEnforcePrintNormalizedDryRun(t *testing.T) {
 	writeFixtureFile(t, filepath.Join(home, ".claude.json"), `{"mcpServers":{
 		"linear": {"command": "npx", "args": ["-y", "linear-mcp@1.2.3"]}
 	}}`)
-	input := writeTempFile(t, hookPayload(t, "mcp__linear__search_issues", home))
+	input := writeTempFile(t, claudeMCPPayload(t, "mcp__linear__search_issues", "linear", "user", home))
 
 	stdout, stderr, err := runCommand(t, enforceRoot(t, mdmconfig.Config{}),
 		"enforce", "--agent", "claude-code", "--event", "PreToolUse",

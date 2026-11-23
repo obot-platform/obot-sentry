@@ -208,6 +208,26 @@ func objectSet(obj *hujson.Object, key string, value hujson.Value) {
 	obj.Members = append(obj.Members, hujson.ObjectMember{Name: name, Value: value})
 }
 
+// objectSetAll sets every member of obj named key to value, or appends one when
+// there is none. A JSON object may repeat a key, and a reader that keeps the
+// last one, as JSON.parse does, would otherwise go on seeing a value objectSet
+// left behind.
+func objectSetAll(obj *hujson.Object, key string, value hujson.Value) {
+	found := false
+	for i := range obj.Members {
+		if memberName(obj.Members[i]) == key {
+			set := value
+			set.BeforeExtra = cloneExtra(obj.Members[i].Value.BeforeExtra)
+			set.AfterExtra = nil
+			obj.Members[i].Value = set
+			found = true
+		}
+	}
+	if !found {
+		objectSet(obj, key, value)
+	}
+}
+
 // getOrCreateObjectMember returns the object at obj[key], creating an empty
 // object member when key is absent. It errors when key exists but is not an
 // object, an incompatible type the caller must not silently overwrite.

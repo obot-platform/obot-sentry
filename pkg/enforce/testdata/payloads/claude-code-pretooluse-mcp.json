@@ -12,5 +12,9 @@
   "tool_input": {
     "message": "hello-stdio-npx"
   },
-  "tool_use_id": "toolu_017UE58dV3jsqUc41AJq65MR"
+  "tool_use_id": "toolu_017UE58dV3jsqUc41AJq65MR",
+  "mcp_server": {
+    "name": "probe-npx-stdio",
+    "source": "user"
+  }
 }

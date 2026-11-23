@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/obot-platform/obot-sentry/pkg/localagent"
 	"github.com/obot-platform/obot-sentry/pkg/toolkind"
@@ -19,6 +20,16 @@ type preToolPayload struct {
 	ToolUseID string `json:"tool_use_id,omitempty"`
 	SessionID string `json:"session_id,omitempty"`
 	CWD       string `json:"cwd,omitempty"`
+	// MCPServer is Claude Code's identification of the server behind an mcp__
+	// tool. Codex does not send it.
+	MCPServer *claudeMCPServer `json:"mcp_server,omitempty"`
+}
+
+// claudeMCPServer is Claude Code's mcp_server field: the server's configuration
+// key exactly as written, and the scope Claude Code loaded it from.
+type claudeMCPServer struct {
+	Name   string `json:"name"`
+	Source string `json:"source"`
 }
 
 type cursorPreToolPayload struct {
@@ -251,13 +262,77 @@ func normalizePreTool(ctx context.Context, env Env, agent localagent.Agent, raw 
 	if err := boundedField("cwd", hook.CWD, maxWorkingDirBytes); err != nil {
 		return Call{}, err
 	}
-
+	req := ResolveRequest{Agent: agent, CWD: hook.CWD}
+	if agent == localagent.ClaudeCode {
+		// The project directory is not bounded here: one too long to trust does
+		// not fail the payload, and the resolver treats it as unusable (see
+		// claudeProjectFor).
+		req.ProjectDir = env.getenv(ClaudeProjectDirEnv)
+		class, err := classifyClaudeCodePreTool(toolName, hook.MCPServer)
+		if err != nil {
+			return Call{}, err
+		}
+		req.ServerName = class.ServerName
+		if hook.MCPServer != nil {
+			req.ServerSource = hook.MCPServer.Source
+		}
+		return buildCall(ctx, env, agent, class, req), nil
+	}
 	class := classifyPreTool(toolName)
-	return buildCall(ctx, env, agent, class, ResolveRequest{
-		Agent:      agent,
-		ServerName: class.ServerName,
-		CWD:        hook.CWD,
-	}), nil
+	req.ServerName = class.ServerName
+	return buildCall(ctx, env, agent, class, req), nil
+}
+
+// classifyClaudeCodePreTool classifies a Claude Code pre-tool call.
+//
+// The server comes only from mcp_server, never from the tool name, whose
+// namespacing loses characters ("my.server" and "my_server" both become
+// my_server) and whose "__" delimiter is ambiguous. Claude Code sends mcp_server
+// for every MCP tool, so an MCP tool without it is unresolved. The tool name is
+// read only for the tool half, below the prefix Claude Code builds from the
+// server's name; a name that does not carry that prefix is unresolved too.
+func classifyClaudeCodePreTool(toolName string, server *claudeMCPServer) (classification, error) {
+	if server == nil {
+		class := classifyPreTool(toolName)
+		if class.Kind != toolkind.KindMCP {
+			return class, nil
+		}
+		return classification{
+			Kind:          toolkind.KindMCP,
+			Tool:          toolName,
+			InvalidReason: "Claude Code did not identify the MCP server (the hook payload has no mcp_server); update Claude Code",
+		}, nil
+	}
+	// Both are used exactly as sent. A configuration key may carry whitespace,
+	// and trimming it would match a different key: "probe " namespaces to
+	// probe_, so its tools still begin mcp__probe__, and the trimmed name would
+	// then resolve the server "probe".
+	name, source := server.Name, server.Source
+	if err := boundedField("mcp_server.name", name, maxServerNameBytes); err != nil {
+		return classification{}, err
+	}
+	if err := boundedField("mcp_server.source", source, maxServerNameBytes); err != nil {
+		return classification{}, err
+	}
+	class := classification{Kind: toolkind.KindMCP, Tool: toolName, ServerName: name}
+	switch {
+	case name == "" || source == "":
+		class.InvalidReason = "Claude Code's mcp_server field did not name the MCP server and its source"
+	case strings.ContainsRune(name, utf8.RuneError):
+		// encoding/json decodes an unpaired UTF-16 surrogate escape as U+FFFD,
+		// here and in every configuration key, where JSON.parse keeps it. Keys
+		// Claude Code tells apart, such as "a\ud800" and "a\udc00", can then match
+		// one another, so a name holding U+FFFD names no key reliably.
+		class.InvalidReason = fmt.Sprintf("the MCP server name %q holds a character the hook cannot match reliably", name)
+	default:
+		tool, ok := strings.CutPrefix(toolName, mcpToolPrefix+formClaudeCode(name)+"__")
+		if !ok || tool == "" {
+			class.InvalidReason = fmt.Sprintf("the tool name does not belong to MCP server %q, which Claude Code reported for it", name)
+		} else {
+			class.Tool = tool
+		}
+	}
+	return class, nil
 }
 
 func normalizeCursorPreTool(ctx context.Context, env Env, raw []byte) (Call, error) {

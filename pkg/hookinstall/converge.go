@@ -213,6 +213,9 @@ func mergeClaude(existing []byte, exe, goos string, enforcing bool) (mergeOutcom
 	desired := desiredClaude(exe, goos, enforcing)
 	removedHooks := 0
 	out, err := mergeJSONHook(existing, desired, func(obj *hujson.Object) (int, bool, error) {
+		if enforcing {
+			objectSetAll(obj, claudeDisableSideloadKey, hujson.Value{Value: hujson.Bool(true)})
+		}
 		hooks, err := getOrCreateObjectMember(obj, "hooks")
 		if err != nil {
 			return 0, false, err
