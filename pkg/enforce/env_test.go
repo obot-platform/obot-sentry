@@ -159,6 +159,9 @@ func TestNewEnvHomeOverride(t *testing.T) {
 		return func() (string, error) { return dir, nil }
 	}
 	unset := func() (string, error) { return "", errors.New("$HOME is not defined") }
+	// Cleaned as text, <account>/link/.. is the account's directory. Opened, it
+	// is the parent of wherever link points.
+	parent := string(filepath.Separator) + ".."
 
 	for name, tc := range map[string]struct {
 		environment func() (string, error)
@@ -167,6 +170,7 @@ func TestNewEnvHomeOverride(t *testing.T) {
 		"same directory":          {fixed(account), ""},
 		"same directory, unclean": {fixed(account + string(filepath.Separator) + "."), ""},
 		"trailing separator":      {fixed(account + string(filepath.Separator)), ""},
+		"a parent element":        {fixed(filepath.Join(account, "link") + parent), filepath.Join(account, "link") + parent},
 		"link to the directory":   {fixed(link), link},
 		"unset":                   {unset, ""},
 		"another directory":       {fixed(other), other},
@@ -205,6 +209,31 @@ func TestSamePathFoldsCaseOnlyOnWindows(t *testing.T) {
 	}
 	if (Env{GOOS: "darwin"}).samePath(upper, lower) {
 		t.Error("macOS paths differing in case were the same path")
+	}
+}
+
+// TestSamePathRefusesParentElements covers "..", which cleaning removes as text
+// and the kernel resolves only after following the element before it.
+func TestSamePathRefusesParentElements(t *testing.T) {
+	env := Env{GOOS: runtime.GOOS}
+	home := filepath.Join(hostRoot(t), "Users", "me")
+	sep := string(filepath.Separator)
+	for _, path := range []string{
+		home + sep + "link" + sep + "..",
+		home + sep + "link" + sep + ".." + sep,
+		home + sep + ".." + sep + "me",
+		home + "/link/..",
+	} {
+		if env.samePath(path, home) || env.samePath(home, path) {
+			t.Errorf("%q was the same path as %q", path, home)
+		}
+	}
+	// Dots inside a name are not a parent element, and "." changes nothing.
+	dotted := filepath.Join(hostRoot(t), "Users", "..me..")
+	for _, path := range []string{dotted + sep, dotted + sep + ".", dotted + sep + sep} {
+		if !env.samePath(path, dotted) {
+			t.Errorf("%q was not the same path as %q", path, dotted)
+		}
 	}
 }
 

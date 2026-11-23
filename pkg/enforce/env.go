@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -87,9 +88,25 @@ func newEnv(accountHome, environmentHome func() (string, error)) (Env, error) {
 // the home directory another way, such as through a symbolic link, counts as
 // an override. A login sets the variable from the same account record the
 // hook reads, so the two normally agree exactly.
+//
+// A path with a ".." element is the same as nothing. Cleaning removes ".." as
+// text, but the kernel follows the element before it first: with ~/link
+// pointing into another directory, ~/link/.. cleans to the home directory and
+// opens as that other directory's parent. An agent that hands the variable to
+// the filesystem as it is would read its configuration there.
 func (e Env) samePath(a, b string) bool {
+	if hasParentElement(a) || hasParentElement(b) {
+		return false
+	}
 	a, b = filepath.Clean(a), filepath.Clean(b)
 	return a == b || e.windows() && strings.EqualFold(a, b)
+}
+
+// hasParentElement reports whether path has a ".." element.
+func hasParentElement(path string) bool {
+	return slices.Contains(strings.FieldsFunc(path, func(r rune) bool {
+		return r == '/' || r == filepath.Separator
+	}), "..")
 }
 
 // homeOverridden reports whether configuration under the home directory must be
