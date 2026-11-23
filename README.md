@@ -218,6 +218,9 @@ matched exactly:
 | `managed` | `managedMcpServers` in the managed settings files |
 | `claudeai` | nothing: the claude.ai connector's display name is its identity |
 
+If `~/.claude/.config.json` exists, Claude Code reads `user` and `local` servers
+from it instead of `.claude.json`, and so does the hook.
+
 Servers from `--mcp-config`, the Agent SDK, or an agent definition (`dynamic`,
 `sdk` and `agent`) are left unresolved, since the hook cannot read their
 definitions, apart from Claude Code's built-in servers, which are reported by
