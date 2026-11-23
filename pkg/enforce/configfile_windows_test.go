@@ -3,6 +3,7 @@
 package enforce
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -39,6 +40,14 @@ func TestWindowsSpecialNamespaceAllowsOrdinaryUNCShare(t *testing.T) {
 // USERPROFILE says. A USERPROFILE naming another directory is recorded as an
 // override rather than followed.
 func TestNewEnvDoesNotTrustUserProfile(t *testing.T) {
+	// Untouched, USERPROFILE and the account's profile directory are the same
+	// text, which is all that is compared. If they were spelled differently every
+	// MCP call on the machine would be reported as an override.
+	if env, err := NewEnv(); err != nil || env.HomeOverride != "" {
+		t.Fatalf("NewEnv in an unmodified environment: Home = %q, HomeOverride = %q (USERPROFILE = %q), err = %v; want no override",
+			env.Home, env.HomeOverride, os.Getenv("USERPROFILE"), err)
+	}
+
 	decoy := t.TempDir()
 	for _, home := range []string{decoy, "relative-home"} {
 		t.Setenv("USERPROFILE", home)

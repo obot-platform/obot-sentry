@@ -144,14 +144,16 @@ func TestMachinePathIsAbsoluteInProduction(t *testing.T) {
 }
 
 // TestNewEnvHomeOverride covers how the environment's home directory is
-// compared with the account's: only a variable naming a different directory is
-// an override.
+// compared with the account's: as text, so any other spelling is an override,
+// including one that reaches the same directory through a symbolic link. The
+// environment's path is never opened; see samePath.
 func TestNewEnvHomeOverride(t *testing.T) {
 	account := t.TempDir()
 	other := t.TempDir()
 	link := filepath.Join(t.TempDir(), "link")
 	if err := os.Symlink(account, link); err != nil {
-		t.Skipf("symlinks are not available: %v", err)
+		// Without the link the path does not exist, and is an override all the same.
+		t.Logf("symlinks are not available: %v", err)
 	}
 	fixed := func(dir string) func() (string, error) {
 		return func() (string, error) { return dir, nil }
@@ -164,7 +166,8 @@ func TestNewEnvHomeOverride(t *testing.T) {
 	}{
 		"same directory":          {fixed(account), ""},
 		"same directory, unclean": {fixed(account + string(filepath.Separator) + "."), ""},
-		"link to the directory":   {fixed(link), ""},
+		"trailing separator":      {fixed(account + string(filepath.Separator)), ""},
+		"link to the directory":   {fixed(link), link},
 		"unset":                   {unset, ""},
 		"another directory":       {fixed(other), other},
 		"a directory inside it":   {fixed(filepath.Join(account, "sub")), filepath.Join(account, "sub")},
@@ -190,6 +193,18 @@ func TestNewEnvHomeOverride(t *testing.T) {
 	}
 	if _, err := newEnv(unset, fixed(account)); err == nil {
 		t.Error("newEnv with no account home succeeded")
+	}
+}
+
+// TestSamePathFoldsCaseOnlyOnWindows covers the one difference in spelling that
+// is not a different path: case, on Windows.
+func TestSamePathFoldsCaseOnlyOnWindows(t *testing.T) {
+	upper, lower := filepath.Join(hostRoot(t), "Users", "Me"), filepath.Join(hostRoot(t), "users", "me")
+	if !(Env{GOOS: "windows"}).samePath(upper, lower) {
+		t.Error("Windows paths differing only in case were not the same path")
+	}
+	if (Env{GOOS: "darwin"}).samePath(upper, lower) {
+		t.Error("macOS paths differing in case were the same path")
 	}
 }
 

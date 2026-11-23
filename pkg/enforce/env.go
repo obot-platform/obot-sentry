@@ -70,28 +70,26 @@ func newEnv(accountHome, environmentHome func() (string, error)) (Env, error) {
 	env := Env{Home: home, GOOS: runtime.GOOS, Getenv: os.Getenv, Environ: os.Environ}
 	// An unset variable is no override: an agent then falls back to the account's
 	// home directory too.
-	if named, err := environmentHome(); err == nil && !env.sameDir(named, home) {
+	if named, err := environmentHome(); err == nil && !env.samePath(named, home) {
 		env.HomeOverride = named
 	}
 	return env, nil
 }
 
-// sameDir reports whether two paths name one directory: the same path, or two
-// paths to the same directory, such as one through a symbolic link.
-func (e Env) sameDir(a, b string) bool {
+// samePath reports whether two paths are spelled the same, ignoring redundant
+// separators and, on Windows, case.
+//
+// The paths are compared as text and never opened. The environment's value is
+// chosen by whoever configured the agent, and this runs for every hook call,
+// built-in tools included: a look at a path on an unreachable share could
+// outlast the agent's hook timeout, and an agent that lets a timed-out hook
+// pass would then run the call unchecked. The cost is that a variable reaching
+// the home directory another way, such as through a symbolic link, counts as
+// an override. A login sets the variable from the same account record the
+// hook reads, so the two normally agree exactly.
+func (e Env) samePath(a, b string) bool {
 	a, b = filepath.Clean(a), filepath.Clean(b)
-	if a == b || e.windows() && strings.EqualFold(a, b) {
-		return true
-	}
-	infoA, err := os.Stat(a)
-	if err != nil {
-		return false
-	}
-	infoB, err := os.Stat(b)
-	if err != nil {
-		return false
-	}
-	return os.SameFile(infoA, infoB)
+	return a == b || e.windows() && strings.EqualFold(a, b)
 }
 
 // homeOverridden reports whether configuration under the home directory must be
