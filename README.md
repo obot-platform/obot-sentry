@@ -224,7 +224,9 @@ Code reading the real `~/.claude.json` while its hooks see the other directory.
 When the variable names a directory other than the account's, the hook cannot
 tell which one the agent read, so MCP calls are blocked with a reason that says
 so. Start the agent without changing the variable. Claude Code is exempt while
-`CLAUDE_CONFIG_DIR` is set, since it then reads nothing from the home directory.
+`CLAUDE_CONFIG_DIR` is set, since it then reads nothing from the home directory,
+and its built-in MCP servers are still reported by name, which no configuration
+file decides.
 
 Claude Code uses only one managed settings source by default. If the machine
 also receives server-managed settings or an MDM policy (the

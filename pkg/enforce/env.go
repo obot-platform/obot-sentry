@@ -29,7 +29,8 @@ type Env struct {
 	// configuration through that variable, and can also hand its hooks a value
 	// it did not use itself, so with an override the hook cannot tell which
 	// directory the agent read. Configuration under the home directory is then
-	// not resolved at all (see homeOverrideReason).
+	// not resolved at all: every path that would read it asks homeOverridden
+	// first.
 	HomeOverride string
 	GOOS         string
 	// Getenv resolves an environment variable. Nil falls back to os.Getenv.
@@ -93,18 +94,26 @@ func (e Env) sameDir(a, b string) bool {
 	return os.SameFile(infoA, infoB)
 }
 
-// homeOverrideReason explains why configuration under the home directory was
-// not resolved. Neither directory is the safe one to read: the account's is
-// wrong for an agent that was itself started with the variable changed, and the
-// environment's is wrong for an agent that changed it only for its hooks.
-func (e Env) homeOverrideReason() string {
+// homeOverridden reports whether configuration under the home directory must be
+// left unread, and the reason to give for a call that depends on it. Neither
+// directory is the safe one to read: the account's is wrong for an agent that
+// was itself started with the variable changed, and the environment's is wrong
+// for an agent that changed it only for its hooks.
+//
+// Every resolution path that reads the home directory has to ask: resolve for
+// Codex, Cursor and the diagnostic, resolveClaudeCode, and Kiro's hook path,
+// which builds its configuration without going through resolve.
+func (e Env) homeOverridden() (reason string, overridden bool) {
+	if e.HomeOverride == "" {
+		return "", false
+	}
 	name := "HOME"
 	if e.windows() {
 		name = "USERPROFILE"
 	}
 	return fmt.Sprintf(
 		"the hook was started with %s set to %q, which is not this account's home directory (%q), so which configuration the agent read cannot be determined; start the agent without changing %s",
-		name, e.HomeOverride, e.Home, name)
+		name, e.HomeOverride, e.Home, name), true
 }
 
 func (e Env) windows() bool { return e.GOOS == "windows" }

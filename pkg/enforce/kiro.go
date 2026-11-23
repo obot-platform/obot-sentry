@@ -109,9 +109,17 @@ func normalizeKiroPreTool(ctx context.Context, env Env, raw []byte) (Call, error
 	}
 	call.Request.Kind = toolkind.KindMCP
 
-	loader := newConfigLoader()
-	roots, rootsIncomplete := kiroWorkspaceRoots(ctx, loader, env, hook.SessionID, hook.CWD)
-	cfg := newKiroConfig(ctx, loader, env, roots, rootsIncomplete)
+	var cfg kiroConfig
+	if reason, overridden := env.homeOverridden(); overridden {
+		// Kiro's sessions, user settings, powers and agent profiles are all under
+		// the home directory, and any of them can define or redefine a server, so
+		// nothing is read and the call is unresolved for the override.
+		cfg.incomplete = reason
+	} else {
+		loader := newConfigLoader()
+		roots, rootsIncomplete := kiroWorkspaceRoots(ctx, loader, env, hook.SessionID, hook.CWD)
+		cfg = newKiroConfig(ctx, loader, env, roots, rootsIncomplete)
+	}
 	tr := &tracer{}
 	res, tool := resolveKiro(ctx, cfg, env, target, tr)
 	res.Trace = tr.steps

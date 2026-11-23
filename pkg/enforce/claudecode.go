@@ -88,10 +88,13 @@ func resolveClaudeCode(ctx context.Context, loader *configLoader, env Env, req R
 			"%s is set to a relative path (%q); set it to an absolute path",
 			claudeConfigDirEnv, env.getenv(claudeConfigDirEnv)))
 	}
-	if env.HomeOverride != "" && env.getenv(claudeConfigDirEnv) == "" {
+	if reason, overridden := env.homeOverridden(); overridden && env.getenv(claudeConfigDirEnv) == "" {
 		// .claude.json is read from the home directory only when
-		// CLAUDE_CONFIG_DIR does not relocate it.
-		return unresolved(serverName, env.homeOverrideReason())
+		// CLAUDE_CONFIG_DIR does not relocate it. A built-in server is still
+		// reported by name, as notFound reports it: Claude Code lets no configured
+		// server take a built-in's name, so no file in either directory decides
+		// what such a call reaches.
+		return notFound(req.Agent, serverName, reason)
 	}
 	claude, claudeRes := loader.loadClaudeJSON(ctx, claudePath)
 

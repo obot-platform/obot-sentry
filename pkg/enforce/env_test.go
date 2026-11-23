@@ -237,7 +237,73 @@ func TestHomeOverrideLeavesHomeConfigurationUnresolved(t *testing.T) {
 	assertUnresolved(t, Resolve(f.Env, codexReq("linear")), "HOME set to")
 
 	f.Env.GOOS = "windows"
-	if reason := f.Env.homeOverrideReason(); !strings.Contains(reason, "USERPROFILE set to") {
+	if reason, _ := f.Env.homeOverridden(); !strings.Contains(reason, "USERPROFILE set to") {
 		t.Errorf("Windows reason = %q, want it to name USERPROFILE", reason)
+	}
+}
+
+// TestHomeOverrideOnEveryHookPath covers the override on the path each agent's
+// hook really takes, payload to decision request. Kiro's does not go through
+// resolve, so a check there alone would leave its hook reading the account's
+// ~/.kiro for a Kiro that read another.
+func TestHomeOverrideOnEveryHookPath(t *testing.T) {
+	f := newFixture(t, "darwin")
+	ws := f.mkdir(f.path("ws"))
+	const home = "https://home.example.com/sse"
+	f.write(f.homePath(".claude.json"), `{"mcpServers":{"linear":{"url":"`+home+`"}}}`)
+	f.write(f.homePath(".codex", "config.toml"), "[mcp_servers.linear]\nurl = \""+home+"\"\n")
+	f.write(f.homePath(".cursor", "mcp.json"), `{"mcpServers":{"linear":{"url":"`+home+`"}}}`)
+	f.write(f.homePath(".kiro", "settings", "mcp.json"), `{"mcpServers":{"linear":{"url":"`+home+`"}}}`)
+	preTool := func(toolName string) []byte {
+		return mustJSON(map[string]any{"session_id": "s1", "hook_event_name": "PreToolUse", "cwd": ws, "tool_name": toolName})
+	}
+	hooks := []struct {
+		name    string
+		agent   localagent.Agent
+		event   Event
+		payload []byte
+	}{
+		{"claude-code", localagent.ClaudeCode, EventPreToolUse, preTool("mcp__linear__search")},
+		{"codex", localagent.Codex, EventPreToolUse, preTool("mcp__linear__search")},
+		{"cursor", localagent.Cursor, EventCursorBeforeMCPExecution, mustJSON(map[string]any{
+			"hook_event_name": "beforeMCPExecution", "tool_name": "search", "mcp_server_name": "linear", "workspace_roots": []string{ws},
+		})},
+		{"kiro", localagent.Kiro, EventPreToolUse, kiroPayload("mcp_linear_search", ws, nil)},
+		{"kiro tool_call", localagent.Kiro, EventPreToolUse, kiroPayload(kiroToolCall, ws, map[string]any{"tool_id": "linear::search"})},
+	}
+	run := func(t *testing.T, agent localagent.Agent, event Event, payload []byte) Call {
+		t.Helper()
+		call, err := normalizeCall(f.Env, agent, event, payload)
+		if err != nil {
+			t.Fatalf("normalizeCall: %v", err)
+		}
+		return call
+	}
+
+	for _, h := range hooks {
+		if call := run(t, h.agent, h.event, h.payload); call.Request.Unresolved || call.Request.Server.URL != home {
+			t.Fatalf("%s: without an override, unresolved=%v (%s) url=%q", h.name, call.Request.Unresolved, call.Request.UnresolvedReason, call.Request.Server.URL)
+		}
+	}
+
+	f.Env.HomeOverride = f.path("decoy")
+	for _, h := range hooks {
+		call := run(t, h.agent, h.event, h.payload)
+		if !call.Request.Unresolved || !strings.Contains(call.Request.UnresolvedReason, "HOME set to") {
+			t.Errorf("%s: want unresolved for the HOME override, got unresolved=%v reason=%q", h.name, call.Request.Unresolved, call.Request.UnresolvedReason)
+		}
+		if call.Request.Server.URL != "" || len(call.Trace) != 0 {
+			t.Errorf("%s: read the home directory despite the override: url=%q trace=%v", h.name, call.Request.Server.URL, call.Trace)
+		}
+	}
+
+	// A built-in tool reads no configuration, and a built-in MCP server is known
+	// by name whichever home directory was read.
+	if call := run(t, localagent.Kiro, EventPreToolUse, kiroPayload("execute_bash", ws, map[string]any{"command": "ls"})); call.Request.Unresolved {
+		t.Errorf("a Kiro built-in tool was unresolved under the override: %s", call.Request.UnresolvedReason)
+	}
+	builtin := run(t, localagent.ClaudeCode, EventPreToolUse, preTool("mcp__claude-in-chrome__navigate"))
+	if builtin.Request.Unresolved || builtin.Request.ServerName != "claude-in-chrome" || builtin.Request.Server.URL != "" {
+		t.Errorf("a Claude Code built-in MCP server under the override: unresolved=%v (%s) name=%q", builtin.Request.Unresolved, builtin.Request.UnresolvedReason, builtin.Request.ServerName)
 	}
 }
