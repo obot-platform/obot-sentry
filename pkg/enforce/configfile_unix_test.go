@@ -11,10 +11,23 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func TestNewEnvRejectsRelativeHome(t *testing.T) {
-	t.Setenv("HOME", "relative-home")
-	if _, err := NewEnv(); err == nil || !strings.Contains(err.Error(), "not absolute") {
-		t.Fatalf("NewEnv error = %v, want relative-home rejection", err)
+// TestNewEnvDoesNotTrustHome covers the home directory the hook reads user
+// configuration from: the account's, whatever HOME says. A HOME naming another
+// directory is recorded as an override rather than followed.
+func TestNewEnvDoesNotTrustHome(t *testing.T) {
+	decoy := t.TempDir()
+	for _, home := range []string{decoy, "relative-home"} {
+		t.Setenv("HOME", home)
+		env, err := NewEnv()
+		if err != nil {
+			t.Fatalf("NewEnv with HOME=%q: %v", home, err)
+		}
+		if !filepath.IsAbs(env.Home) || env.Home == home || strings.HasPrefix(env.Home, decoy) {
+			t.Errorf("Home = %q with HOME=%q, want the account's home directory", env.Home, home)
+		}
+		if env.HomeOverride != home {
+			t.Errorf("HomeOverride = %q, want %q", env.HomeOverride, home)
+		}
 	}
 }
 

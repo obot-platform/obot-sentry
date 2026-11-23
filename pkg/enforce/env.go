@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 
 	"github.com/BurntSushi/toml"
 	"github.com/tailscale/hujson"
@@ -21,8 +22,16 @@ const maxConfigBytes = 8 << 20
 // Env is the machine context the resolvers read. Production builds one with
 // NewEnv; tests build one pointing at a fixture tree.
 type Env struct {
+	// Home is the home directory of the account the process runs as.
 	Home string
-	GOOS string
+	// HomeOverride is the home directory the process environment names, when
+	// that is not Home; it is empty when the two agree. An agent finds its own
+	// configuration through that variable, and can also hand its hooks a value
+	// it did not use itself, so with an override the hook cannot tell which
+	// directory the agent read. Configuration under the home directory is then
+	// not resolved at all (see homeOverrideReason).
+	HomeOverride string
+	GOOS         string
 	// Getenv resolves an environment variable. Nil falls back to os.Getenv.
 	Getenv func(string) string
 	// Environ returns the complete process environment for security checks that
@@ -37,15 +46,65 @@ type Env struct {
 }
 
 // NewEnv returns the Env for the current process.
+//
+// The home directory comes from the operating system's account record, not from
+// the environment. HOME (USERPROFILE on Windows) is inherited from the agent,
+// whose settings can set it for the hooks it starts without having used it
+// itself: Claude Code keeps reading the real ~/.claude.json while a settings
+// file's env block points its hooks at another directory. Trusting the variable
+// would let a decoy configuration there vouch for a server that is not the one
+// running.
 func NewEnv() (Env, error) {
-	home, err := os.UserHomeDir()
+	return newEnv(accountHomeDir, os.UserHomeDir)
+}
+
+func newEnv(accountHome, environmentHome func() (string, error)) (Env, error) {
+	home, err := accountHome()
 	if err != nil {
 		return Env{}, fmt.Errorf("resolve home dir: %w", err)
 	}
 	if !filepath.IsAbs(home) {
 		return Env{}, fmt.Errorf("resolved home dir %q is not absolute", home)
 	}
-	return Env{Home: home, GOOS: runtime.GOOS, Getenv: os.Getenv, Environ: os.Environ}, nil
+	env := Env{Home: home, GOOS: runtime.GOOS, Getenv: os.Getenv, Environ: os.Environ}
+	// An unset variable is no override: an agent then falls back to the account's
+	// home directory too.
+	if named, err := environmentHome(); err == nil && !env.sameDir(named, home) {
+		env.HomeOverride = named
+	}
+	return env, nil
+}
+
+// sameDir reports whether two paths name one directory: the same path, or two
+// paths to the same directory, such as one through a symbolic link.
+func (e Env) sameDir(a, b string) bool {
+	a, b = filepath.Clean(a), filepath.Clean(b)
+	if a == b || e.windows() && strings.EqualFold(a, b) {
+		return true
+	}
+	infoA, err := os.Stat(a)
+	if err != nil {
+		return false
+	}
+	infoB, err := os.Stat(b)
+	if err != nil {
+		return false
+	}
+	return os.SameFile(infoA, infoB)
+}
+
+// homeOverrideReason explains why configuration under the home directory was
+// not resolved. Neither directory is the safe one to read: the account's is
+// wrong for an agent that was itself started with the variable changed, and the
+// environment's is wrong for an agent that changed it only for its hooks.
+func (e Env) homeOverrideReason() string {
+	name := "HOME"
+	if e.windows() {
+		name = "USERPROFILE"
+	}
+	return fmt.Sprintf(
+		"the hook was started with %s set to %q, which is not this account's home directory (%q), so which configuration the agent read cannot be determined; start the agent without changing %s",
+		name, e.HomeOverride, e.Home, name)
 }
 
 func (e Env) windows() bool { return e.GOOS == "windows" }

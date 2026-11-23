@@ -88,6 +88,11 @@ func resolveClaudeCode(ctx context.Context, loader *configLoader, env Env, req R
 			"%s is set to a relative path (%q); set it to an absolute path",
 			claudeConfigDirEnv, env.getenv(claudeConfigDirEnv)))
 	}
+	if env.HomeOverride != "" && env.getenv(claudeConfigDirEnv) == "" {
+		// .claude.json is read from the home directory only when
+		// CLAUDE_CONFIG_DIR does not relocate it.
+		return unresolved(serverName, env.homeOverrideReason())
+	}
 	claude, claudeRes := loader.loadClaudeJSON(ctx, claudePath)
 
 	// Most Claude Code keys survive namespacing untouched — hyphens and underscores

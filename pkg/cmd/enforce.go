@@ -22,6 +22,11 @@ import (
 
 const enforceHookBudget = 5 * time.Second
 
+// newEnforceEnv builds the machine context the resolvers read. It is a variable
+// only so tests can point the resolvers at a fixture home directory: production
+// takes the home directory from the account, never from the environment.
+var newEnforceEnv = enforce.NewEnv
+
 type Enforce struct {
 	// These are deliberately hand-built flags rather than tagged command fields.
 	// The command builder gives every exported field an implicit environment
@@ -93,7 +98,7 @@ func (e *Enforce) Run(cmd *cobra.Command, _ []string) error {
 	}
 	defer closeInput()
 
-	env, envErr := enforce.NewEnv()
+	env, envErr := newEnforceEnv()
 
 	ctx, cancel := context.WithTimeout(cmd.Context(), enforceHookBudget)
 	defer cancel()
@@ -209,7 +214,7 @@ func (r *EnforceResolve) Run(cmd *cobra.Command, _ []string) error {
 		return errors.New("--server is required")
 	}
 
-	env, err := enforce.NewEnv()
+	env, err := newEnforceEnv()
 	if err != nil {
 		return err
 	}

@@ -215,6 +215,17 @@ absolute path: Claude Code resolves a relative one against the directory it was
 started from, which the hook cannot determine, so MCP calls from such a session
 are blocked with a reason that says so.
 
+Per-user configuration (`~/.claude.json`, `~/.codex`, `~/.cursor`, `~/.kiro`) is
+read from the account's home directory as the operating system records it, not
+from `HOME` (`USERPROFILE` on Windows). An agent passes that variable to its
+hooks, and its settings can change it for them without the agent having used
+it itself: a Claude Code settings file whose `env` sets `HOME` leaves Claude
+Code reading the real `~/.claude.json` while its hooks see the other directory.
+When the variable names a directory other than the account's, the hook cannot
+tell which one the agent read, so MCP calls are blocked with a reason that says
+so. Start the agent without changing the variable. Claude Code is exempt while
+`CLAUDE_CONFIG_DIR` is set, since it then reads nothing from the home directory.
+
 Claude Code uses only one managed settings source by default. If the machine
 also receives server-managed settings or an MDM policy (the
 `com.anthropic.claudecode` preference domain on macOS,

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/obot-platform/obot-sentry/pkg/enforce"
 	"github.com/obot-platform/obot-sentry/pkg/mdmconfig"
 	"github.com/obot-platform/obot/apiclient/types"
 	"github.com/spf13/cobra"
@@ -80,14 +81,53 @@ func writeTempFile(t *testing.T, content string) string {
 	return path
 }
 
-// homeFixture points the process's home directory at a temp tree, so the
-// resolvers read fixture configuration instead of the developer's own.
+// homeFixture points the resolvers' home directory at a temp tree, so they read
+// fixture configuration instead of the developer's own. The environment alone
+// cannot do that: the resolvers take the home directory from the account.
 func homeFixture(t *testing.T) string {
 	t.Helper()
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
+	production := newEnforceEnv
+	newEnforceEnv = func() (enforce.Env, error) {
+		env, err := production()
+		env.Home, env.HomeOverride = home, ""
+		return env, err
+	}
+	t.Cleanup(func() { newEnforceEnv = production })
 	return home
+}
+
+// TestEnforceDoesNotFollowHome covers a hook whose environment names a home
+// directory other than the account's, as a Claude Code settings file's env
+// block can arrange. A configuration planted there must not identify the
+// server: the call is reported unresolved, with the reason.
+func TestEnforceDoesNotFollowHome(t *testing.T) {
+	decoy := t.TempDir()
+	t.Setenv("HOME", decoy)
+	t.Setenv("USERPROFILE", decoy)
+	writeFixtureFile(t, filepath.Join(decoy, ".claude.json"), `{"mcpServers":{
+		"linear": {"command": "npx", "args": ["-y", "linear-mcp@1.2.3"]}
+	}}`)
+	input := writeTempFile(t, hookPayload(t, "mcp__linear__search_issues", decoy))
+
+	stdout, _, err := runCommand(t, enforceRoot(t, mdmconfig.Config{}),
+		"enforce", "--agent", "claude-code", "--event", "PreToolUse",
+		"--input", input, "--print-normalized", "--dry-run")
+	if err != nil {
+		t.Fatalf("enforce --dry-run: %v", err)
+	}
+	var req types.EnforcementDecisionRequest
+	if err := json.Unmarshal([]byte(stdout), &req); err != nil {
+		t.Fatalf("stdout is not a decision request: %v (%q)", err, stdout)
+	}
+	if !req.Unresolved || !strings.Contains(req.UnresolvedReason, "is not this account's home directory") {
+		t.Fatalf("unresolved = %v, reason = %q; want the home directory override reported", req.Unresolved, req.UnresolvedReason)
+	}
+	if req.Server.Package != nil {
+		t.Fatalf("the decoy configuration identified the server: %+v", req.Server)
+	}
 }
 
 func writeFixtureFile(t *testing.T, path, content string) {
