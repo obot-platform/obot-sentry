@@ -435,6 +435,53 @@ func TestClaudeCodeClaudeJSONMustBeRead(t *testing.T) {
 	assertUnresolved(t, Resolve(f.Env, req), "could not be read")
 }
 
+// TestClaudeCodeLegacyConfigFileReplacesClaudeJSON covers ~/.claude/.config.json,
+// the older name of .claude.json. When it exists Claude Code reads user and
+// local servers from it and ignores .claude.json, so a definition there is not
+// one the session runs.
+func TestClaudeCodeLegacyConfigFileReplacesClaudeJSON(t *testing.T) {
+	f := newFixture(t, "darwin")
+	project := f.mkdir(f.path("proj"))
+	claudeJSON := func(url string) string {
+		return `{"mcpServers":{"myserver":{"type":"http","url":"` + url + `"}},` +
+			`"projects":{` + quote(project) + `:{"mcpServers":{"localserver":{"type":"http","url":"` + url + `"}}}}}`
+	}
+	user := claudeCodeReq(claudeSourceUser, "myserver", project)
+	local := claudeCodeReq(claudeSourceLocal, "localserver", project)
+	modern, legacy := f.homePath(".claude.json"), f.homePath(".claude", ".config.json")
+	f.write(modern, claudeJSON("https://modern.example.com/mcp"))
+	assertURL(t, Resolve(f.Env, user), "https://modern.example.com/mcp")
+
+	f.write(legacy, claudeJSON("https://legacy.example.com/mcp"))
+	for _, req := range []ResolveRequest{user, local} {
+		res := Resolve(f.Env, req)
+		assertURL(t, res, "https://legacy.example.com/mcp")
+		if slices.Contains(consultedPaths(res), modern) {
+			t.Errorf("%s: consulted .claude.json beside a legacy file:\n%s", req.ServerSource, resolveTrace(res))
+		}
+	}
+
+	// A server only .claude.json defines is not one this session can run.
+	f.write(legacy, `{"mcpServers":{"other":{"type":"http","url":"https://legacy.example.com/mcp"}}}`)
+	assertUnresolved(t, Resolve(f.Env, user), "did not find it there")
+	assertUnresolved(t, Resolve(f.Env, local), "did not find it there")
+
+	// A legacy file the hook cannot use is not passed over for .claude.json.
+	f.write(legacy, `{"mcpServers":`)
+	assertUnresolved(t, Resolve(f.Env, user), "could not be read")
+	if err := os.Remove(legacy); err != nil {
+		t.Fatal(err)
+	}
+	f.mkdir(legacy)
+	res := Resolve(f.Env, user)
+	assertUnresolved(t, res, legacy)
+	assertUnresolved(t, res, "could not be read")
+
+	// The other sources do not read either file.
+	f.write(filepath.Join(project, ".mcp.json"), `{"mcpServers":{"proj":{"type":"http","url":"https://project.example.com/mcp"}}}`)
+	assertURL(t, Resolve(f.Env, claudeCodeReq(claudeSourceProject, "proj", project)), "https://project.example.com/mcp")
+}
+
 // TestClaudeCodeConfigDirLeavesUserAndLocalUnresolved covers a hook whose
 // environment sets CLAUDE_CONFIG_DIR. Claude Code reads .claude.json from the
 // directory it was started with, and its settings can change the variable for

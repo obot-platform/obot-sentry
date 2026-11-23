@@ -43,6 +43,10 @@ const (
 	// Claude Code itself reads every drop-in, so past this many the managed set is
 	// treated as unreadable rather than truncated.
 	maxClaudeManagedDropIns = 512
+	// claudeLegacyConfigFile is the older name of .claude.json, kept inside the
+	// configuration directory. When it exists Claude Code reads it and ignores
+	// .claude.json altogether (verified against Claude Code 2.1.323).
+	claudeLegacyConfigFile = ".config.json"
 	// claudeConfigDirEnv relocates Claude Code's user configuration, .claude.json
 	// included, away from the home directory.
 	claudeConfigDirEnv = "CLAUDE_CONFIG_DIR"
@@ -229,7 +233,16 @@ func resolveClaudeCode(ctx context.Context, loader *configLoader, env Env, req R
 		if _, set := env.lookupEnv(claudeConfigDirEnv); set {
 			return unresolved(serverName, claudeConfigDirUnsettled(env, serverName, source))
 		}
-		if claude, claudeRes = loader.loadClaudeJSON(ctx, claudePath); claudeRes != loadOK {
+		// A legacy file that exists is the one the session read, whatever
+		// .claude.json holds. One that exists and cannot be read is not passed
+		// over for .claude.json either, which the session did not use.
+		legacyPath := filepath.Join(configDir, claudeLegacyConfigFile)
+		if claude, claudeRes = loader.loadClaudeJSON(ctx, legacyPath); claudeRes == loadAbsent {
+			claude, claudeRes = loader.loadClaudeJSON(ctx, claudePath)
+		} else {
+			claudePath = legacyPath
+		}
+		if claudeRes != loadOK {
 			return unresolved(serverName, fmt.Sprintf(
 				"Claude Code's %s, which holds %s MCP servers, could not be read", claudePath, source))
 		}
