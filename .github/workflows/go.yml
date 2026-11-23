@@ -63,5 +63,6 @@ jobs:
         with:
           go-version-file: go.mod
 
+      # Verbose, so the log shows which tests ran and which were skipped.
       - name: Test
-        run: go test ./...
+        run: go test -v ./...
