@@ -44,3 +44,24 @@ jobs:
 
       - name: Test
         run: make test
+
+  # obot-sentry ships for macOS and Windows, so the tests run on both: the
+  # platform-specific files are not compiled, let alone run, on Linux.
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Test
+        run: go test ./...
