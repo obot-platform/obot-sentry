@@ -13,10 +13,11 @@ import (
 
 // TestNewEnvDoesNotTrustHome covers the home directory the hook reads user
 // configuration from: the account's, whatever HOME says. A HOME naming another
-// directory is recorded as an override rather than followed.
+// directory is recorded as an override rather than followed, and so is a HOME
+// that is set to nothing.
 func TestNewEnvDoesNotTrustHome(t *testing.T) {
 	decoy := t.TempDir()
-	for _, home := range []string{decoy, "relative-home"} {
+	for _, home := range []string{decoy, "relative-home", ""} {
 		t.Setenv("HOME", home)
 		env, err := NewEnv()
 		if err != nil {
@@ -25,8 +26,8 @@ func TestNewEnvDoesNotTrustHome(t *testing.T) {
 		if !filepath.IsAbs(env.Home) || env.Home == home || strings.HasPrefix(env.Home, decoy) {
 			t.Errorf("Home = %q with HOME=%q, want the account's home directory", env.Home, home)
 		}
-		if env.HomeOverride != home {
-			t.Errorf("HomeOverride = %q, want %q", env.HomeOverride, home)
+		if env.HomeOverride == nil || *env.HomeOverride != home {
+			t.Errorf("HomeOverride = %v, want %q", env.HomeOverride, home)
 		}
 	}
 }

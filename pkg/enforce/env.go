@@ -26,13 +26,14 @@ type Env struct {
 	// Home is the home directory of the account the process runs as.
 	Home string
 	// HomeOverride is the home directory the process environment names, when
-	// that is not Home; it is empty when the two agree. An agent finds its own
-	// configuration through that variable, and can also hand its hooks a value
-	// it did not use itself, so with an override the hook cannot tell which
-	// directory the agent read. Configuration under the home directory is then
-	// not resolved at all: every path that would read it asks homeOverridden
-	// first.
-	HomeOverride string
+	// that is not Home; it is nil when the two agree or the variable is unset.
+	// It can point at an empty string: a variable that is set but empty is an
+	// override too. An agent finds its own configuration through that variable,
+	// and can also hand its hooks a value it did not use itself, so with an
+	// override the hook cannot tell which directory the agent read.
+	// Configuration under the home directory is then not resolved at all: every
+	// path that would read it asks homeOverridden first.
+	HomeOverride *string
 	GOOS         string
 	// Getenv resolves an environment variable. Nil falls back to os.Getenv.
 	Getenv func(string) string
@@ -57,10 +58,20 @@ type Env struct {
 // would let a decoy configuration there vouch for a server that is not the one
 // running.
 func NewEnv() (Env, error) {
-	return newEnv(accountHomeDir, os.UserHomeDir)
+	return newEnv(accountHomeDir, environmentHomeDir)
 }
 
-func newEnv(accountHome, environmentHome func() (string, error)) (Env, error) {
+// environmentHomeDir returns the home directory the process environment names,
+// and whether the variable is set at all. os.UserHomeDir reads the same
+// variable, but reports one that is set to nothing as unset.
+func environmentHomeDir() (string, bool) {
+	if runtime.GOOS == "windows" {
+		return os.LookupEnv("USERPROFILE")
+	}
+	return os.LookupEnv("HOME")
+}
+
+func newEnv(accountHome func() (string, error), environmentHome func() (string, bool)) (Env, error) {
 	home, err := accountHome()
 	if err != nil {
 		return Env{}, fmt.Errorf("resolve home dir: %w", err)
@@ -70,15 +81,17 @@ func newEnv(accountHome, environmentHome func() (string, error)) (Env, error) {
 	}
 	env := Env{Home: home, GOOS: runtime.GOOS, Getenv: os.Getenv, Environ: os.Environ}
 	// An unset variable is no override: an agent then falls back to the account's
-	// home directory too.
-	if named, err := environmentHome(); err == nil && !env.samePath(named, home) {
-		env.HomeOverride = named
+	// home directory too. One that is set but empty is an override. Node's home
+	// directory lookup returns the empty value as it is, and an agent built on it
+	// then looks for its configuration relative to its working directory.
+	if named, set := environmentHome(); set && !env.samePath(named, home) {
+		env.HomeOverride = &named
 	}
 	return env, nil
 }
 
 // samePath reports whether two paths are spelled the same, ignoring redundant
-// separators and, on Windows, case.
+// separators and, on Windows, the case of ASCII letters.
 //
 // The paths are compared as text and never opened. The environment's value is
 // chosen by whoever configured the agent, and this runs for every hook call,
@@ -99,7 +112,31 @@ func (e Env) samePath(a, b string) bool {
 		return false
 	}
 	a, b = filepath.Clean(a), filepath.Clean(b)
-	return a == b || e.windows() && strings.EqualFold(a, b)
+	return a == b || e.windows() && equalFoldASCII(a, b)
+}
+
+// equalFoldASCII reports whether a and b differ at most in the case of ASCII
+// letters.
+//
+// strings.EqualFold applies Unicode case folding, under which the Kelvin sign
+// (U+212A) is a "k". Windows file systems compare names through their own
+// table, which keeps such characters apart, so a directory spelled with one is
+// a different directory that Unicode folding would take for the account's.
+// Anything outside ASCII therefore has to match exactly.
+func equalFoldASCII(a, b string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range len(a) {
+		x, y := a[i], b[i]
+		if x == y {
+			continue
+		}
+		if x|0x20 != y|0x20 || x|0x20 < 'a' || x|0x20 > 'z' {
+			return false
+		}
+	}
+	return true
 }
 
 // hasParentElement reports whether path has a ".." element.
@@ -119,7 +156,7 @@ func hasParentElement(path string) bool {
 // Codex, Cursor and the diagnostic, resolveClaudeCode, and Kiro's hook path,
 // which builds its configuration without going through resolve.
 func (e Env) homeOverridden() (reason string, overridden bool) {
-	if e.HomeOverride == "" {
+	if e.HomeOverride == nil {
 		return "", false
 	}
 	name := "HOME"
@@ -128,7 +165,7 @@ func (e Env) homeOverridden() (reason string, overridden bool) {
 	}
 	return fmt.Sprintf(
 		"the hook was started with %s set to %q, which is not this account's home directory (%q), so which configuration the agent read cannot be determined; start the agent without changing %s",
-		name, e.HomeOverride, e.Home, name), true
+		name, *e.HomeOverride, e.Home, name), true
 }
 
 func (e Env) windows() bool { return e.GOOS == "windows" }

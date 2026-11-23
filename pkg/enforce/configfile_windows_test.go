@@ -43,9 +43,9 @@ func TestNewEnvDoesNotTrustUserProfile(t *testing.T) {
 	// Untouched, USERPROFILE and the account's profile directory are the same
 	// text, which is all that is compared. If they were spelled differently every
 	// MCP call on the machine would be reported as an override.
-	if env, err := NewEnv(); err != nil || env.HomeOverride != "" {
-		t.Fatalf("NewEnv in an unmodified environment: Home = %q, HomeOverride = %q (USERPROFILE = %q), err = %v; want no override",
-			env.Home, env.HomeOverride, os.Getenv("USERPROFILE"), err)
+	if env, err := NewEnv(); err != nil || env.HomeOverride != nil {
+		t.Fatalf("NewEnv in an unmodified environment: Home = %q, USERPROFILE = %q, err = %v; want no override",
+			env.Home, os.Getenv("USERPROFILE"), err)
 	}
 
 	decoy := t.TempDir()
@@ -58,8 +58,8 @@ func TestNewEnvDoesNotTrustUserProfile(t *testing.T) {
 		if !filepath.IsAbs(env.Home) || strings.EqualFold(env.Home, home) {
 			t.Errorf("Home = %q with USERPROFILE=%q, want the account's profile directory", env.Home, home)
 		}
-		if env.HomeOverride != home {
-			t.Errorf("HomeOverride = %q, want %q", env.HomeOverride, home)
+		if env.HomeOverride == nil || *env.HomeOverride != home {
+			t.Errorf("HomeOverride = %v, want %q", env.HomeOverride, home)
 		}
 	}
 }

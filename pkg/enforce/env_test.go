@@ -155,47 +155,59 @@ func TestNewEnvHomeOverride(t *testing.T) {
 		// Without the link the path does not exist, and is an override all the same.
 		t.Logf("symlinks are not available: %v", err)
 	}
-	fixed := func(dir string) func() (string, error) {
+	accountAt := func(dir string) func() (string, error) {
 		return func() (string, error) { return dir, nil }
 	}
-	unset := func() (string, error) { return "", errors.New("$HOME is not defined") }
+	fixed := func(dir string) func() (string, bool) {
+		return func() (string, bool) { return dir, true }
+	}
+	unset := func() (string, bool) { return "", false }
+	none := "no override"
 	// Cleaned as text, <account>/link/.. is the account's directory. Opened, it
 	// is the parent of wherever link points.
 	parent := string(filepath.Separator) + ".."
 
 	for name, tc := range map[string]struct {
-		environment func() (string, error)
+		environment func() (string, bool)
 		override    string
 	}{
-		"same directory":          {fixed(account), ""},
-		"same directory, unclean": {fixed(account + string(filepath.Separator) + "."), ""},
-		"trailing separator":      {fixed(account + string(filepath.Separator)), ""},
+		"same directory":          {fixed(account), none},
+		"same directory, unclean": {fixed(account + string(filepath.Separator) + "."), none},
+		"trailing separator":      {fixed(account + string(filepath.Separator)), none},
 		"a parent element":        {fixed(filepath.Join(account, "link") + parent), filepath.Join(account, "link") + parent},
 		"link to the directory":   {fixed(link), link},
-		"unset":                   {unset, ""},
+		"unset":                   {unset, none},
+		"set but empty":           {fixed(""), ""},
 		"another directory":       {fixed(other), other},
 		"a directory inside it":   {fixed(filepath.Join(account, "sub")), filepath.Join(account, "sub")},
 		"a directory not there":   {fixed(filepath.Join(other, "missing")), filepath.Join(other, "missing")},
 		"a relative directory":    {fixed("relative-home"), "relative-home"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			env, err := newEnv(fixed(account), tc.environment)
+			env, err := newEnv(accountAt(account), tc.environment)
 			if err != nil {
 				t.Fatal(err)
 			}
 			if env.Home != account {
 				t.Errorf("Home = %q, want the account's %q", env.Home, account)
 			}
-			if env.HomeOverride != tc.override {
-				t.Errorf("HomeOverride = %q, want %q", env.HomeOverride, tc.override)
+			got := none
+			if env.HomeOverride != nil {
+				got = *env.HomeOverride
+			}
+			if got != tc.override {
+				t.Errorf("HomeOverride = %q, want %q", got, tc.override)
+			}
+			if _, overridden := env.homeOverridden(); overridden != (tc.override != none) {
+				t.Errorf("homeOverridden = %v with HomeOverride %q", overridden, got)
 			}
 		})
 	}
 
-	if _, err := newEnv(fixed("relative-home"), fixed(account)); err == nil || !strings.Contains(err.Error(), "not absolute") {
+	if _, err := newEnv(accountAt("relative-home"), fixed(account)); err == nil || !strings.Contains(err.Error(), "not absolute") {
 		t.Errorf("newEnv with a relative account home: error = %v, want a rejection", err)
 	}
-	if _, err := newEnv(unset, fixed(account)); err == nil {
+	if _, err := newEnv(func() (string, error) { return "", errors.New("no account") }, fixed(account)); err == nil {
 		t.Error("newEnv with no account home succeeded")
 	}
 }
@@ -206,6 +218,22 @@ func TestSamePathFoldsCaseOnlyOnWindows(t *testing.T) {
 	upper, lower := filepath.Join(hostRoot(t), "Users", "Me"), filepath.Join(hostRoot(t), "users", "me")
 	if !(Env{GOOS: "windows"}).samePath(upper, lower) {
 		t.Error("Windows paths differing only in case were not the same path")
+	}
+	// Unicode folding takes each of these for the ASCII or accented letter it
+	// resembles. A Windows file system does not, so they are other directories.
+	for _, pair := range [][2]string{
+		{"kate", "\u212aate"},    // KELVIN SIGN
+		{"users", "u\u017fers"},  // LATIN SMALL LETTER LONG S
+		{"\u00e5sa", "\u212bsa"}, // ANGSTROM SIGN
+		{"\u00e9mile", "\u00c9mile"},
+	} {
+		a, b := filepath.Join(hostRoot(t), pair[0]), filepath.Join(hostRoot(t), pair[1])
+		if !strings.EqualFold(pair[0], pair[1]) {
+			t.Errorf("%q and %q do not fold together, so this case tests nothing", pair[0], pair[1])
+		}
+		if (Env{GOOS: "windows"}).samePath(a, b) {
+			t.Errorf("%q and %q were the same path", a, b)
+		}
 	}
 	if (Env{GOOS: "darwin"}).samePath(upper, lower) {
 		t.Error("macOS paths differing in case were the same path")
@@ -281,10 +309,11 @@ func TestHomeOverrideLeavesHomeConfigurationUnresolved(t *testing.T) {
 		}
 	}
 
-	f.Env.HomeOverride = f.path("decoy")
+	decoy := f.path("decoy")
+	f.Env.HomeOverride = &decoy
 	for name, req := range underHome {
 		res := Resolve(f.Env, req)
-		if !res.Unresolved || !strings.Contains(res.Reason, "HOME set to "+strconv.Quote(f.Env.HomeOverride)) {
+		if !res.Unresolved || !strings.Contains(res.Reason, "HOME set to "+strconv.Quote(decoy)) {
 			t.Errorf("%s: want unresolved for the HOME override, got unresolved=%v reason=%q", name, res.Unresolved, res.Reason)
 		}
 		if len(res.Trace) != 0 {
@@ -373,7 +402,8 @@ func TestHomeOverrideOnEveryHookPath(t *testing.T) {
 		}
 	}
 
-	f.Env.HomeOverride = f.path("decoy")
+	decoy := f.path("decoy")
+	f.Env.HomeOverride = &decoy
 	for _, h := range hooks {
 		call := run(t, h.agent, h.event, h.payload)
 		if !call.Request.Unresolved || !strings.Contains(call.Request.UnresolvedReason, "HOME set to") {

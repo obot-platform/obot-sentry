@@ -107,7 +107,7 @@ func homeFixture(t *testing.T) string {
 	production := newEnforceEnv
 	newEnforceEnv = func() (enforce.Env, error) {
 		env, err := production()
-		env.Home, env.HomeOverride = home, ""
+		env.Home, env.HomeOverride = home, nil
 		return env, err
 	}
 	t.Cleanup(func() { newEnforceEnv = production })
