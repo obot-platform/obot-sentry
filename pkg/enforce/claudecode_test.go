@@ -513,6 +513,25 @@ func TestClaudeCodeConfigDirIsUsedVerbatim(t *testing.T) {
 	// must not fall back to the home directory.
 	f.setenv(claudeConfigDirEnv, " ")
 	assertUnresolved(t, Resolve(f.Env, req), "relative path")
+
+	// Set to nothing is a relative directory to Claude Code as well: it keeps
+	// its plugins in the directory it was started from. Its settings can also
+	// empty the variable after .claude.json was read from another directory,
+	// so no source falls back to the home directory.
+	f.write(f.homePath(".claude.json"), `{"mcpServers":{"myserver":{"type":"http","url":"https://home.example.com/mcp"}}}`)
+	f.setenv(claudeConfigDirEnv, "")
+	for _, req := range []ResolveRequest{req, claudeCodeReq(claudeSourceUser, "myserver", project)} {
+		res := Resolve(f.Env, req)
+		assertUnresolved(t, res, `CLAUDE_CONFIG_DIR is set to a relative path ("")`)
+		if len(res.Trace) != 0 {
+			t.Errorf("%s: read configuration despite an empty %s:\n%s", req.ServerSource, claudeConfigDirEnv, resolveTrace(res))
+		}
+	}
+
+	// Unset, the home directory answers again.
+	delete(f.env, claudeConfigDirEnv)
+	assertURL(t, Resolve(f.Env, req), "https://home.example.com/mcp")
+	assertURL(t, Resolve(f.Env, claudeCodeReq(claudeSourceUser, "myserver", project)), "https://home.example.com/mcp")
 }
 
 // TestClaudeCodeRelativeConfigDirIsDenied covers a relative CLAUDE_CONFIG_DIR.

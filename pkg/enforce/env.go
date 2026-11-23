@@ -58,6 +58,24 @@ func (e Env) getenv(key string) string {
 	return e.Getenv(key)
 }
 
+// lookupEnv resolves an environment variable and reports whether it is set at
+// all. A variable can be set to nothing, which getenv cannot tell from unset.
+func (e Env) lookupEnv(key string) (string, bool) {
+	if e.Getenv == nil && e.Environ == nil {
+		return os.LookupEnv(key)
+	}
+	if value := e.getenv(key); value != "" {
+		return value, true
+	}
+	for _, entry := range e.environ() {
+		name, _, ok := strings.Cut(entry, "=")
+		if ok && (name == key || e.windows() && strings.EqualFold(name, key)) {
+			return "", true
+		}
+	}
+	return "", false
+}
+
 func (e Env) environ() []string {
 	if e.Environ == nil {
 		return nil

@@ -102,10 +102,16 @@ func (e Env) managedMCPPath() string {
 // is false for a relative value, which Claude Code resolves against the
 // directory it was started from.
 //
+// A variable that is set to nothing is relative too, not unset: Claude Code
+// then keeps its plugins, transcripts and credentials in the directory it was
+// started from. Its settings can also set the variable to nothing after it has
+// read .claude.json from the directory it was started with. (Both verified
+// against Claude Code 2.1.323.)
+//
 // .claude.json is not looked for there; see claudeConfigDirUnsettled.
 func (e Env) claudeConfigDir() (dir string, ok bool) {
-	dir = e.getenv(claudeConfigDirEnv)
-	if dir == "" {
+	dir, set := e.lookupEnv(claudeConfigDirEnv)
+	if !set {
 		return e.homePath(".claude"), true
 	}
 	return dir, filepath.IsAbs(dir)
@@ -220,7 +226,7 @@ func resolveClaudeCode(ctx context.Context, loader *configLoader, env Env, req R
 		claudeRes  loadResult
 	)
 	if source == claudeSourceUser || source == claudeSourceLocal {
-		if env.getenv(claudeConfigDirEnv) != "" {
+		if _, set := env.lookupEnv(claudeConfigDirEnv); set {
 			return unresolved(serverName, claudeConfigDirUnsettled(env, serverName, source))
 		}
 		if claude, claudeRes = loader.loadClaudeJSON(ctx, claudePath); claudeRes != loadOK {

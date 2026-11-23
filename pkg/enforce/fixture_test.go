@@ -40,6 +40,13 @@ func newFixture(t *testing.T, goos string) *fixture {
 		GOOS:        goos,
 		MachineRoot: filepath.Join(root, "machine"),
 		Getenv:      func(key string) string { return f.env[key] },
+		Environ: func() []string {
+			environ := make([]string, 0, len(f.env))
+			for key, value := range f.env {
+				environ = append(environ, key+"="+value)
+			}
+			return environ
+		},
 	}
 	if err := os.MkdirAll(f.Home, 0o755); err != nil {
 		t.Fatal(err)
