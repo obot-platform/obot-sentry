@@ -193,6 +193,16 @@ func resolveClaudeCode(ctx context.Context, loader *configLoader, env Env, req R
 			"Claude Code loaded MCP server %q from %s, whose configuration the hook cannot read", serverName, where))
 	}
 
+	// The user and local scopes and installed plugins are read from the home
+	// directory unless CLAUDE_CONFIG_DIR relocates them. The project scope is
+	// read from the project directory, like every source returned above reads
+	// from somewhere other than the home directory.
+	if source != claudeSourceProject && env.getenv(claudeConfigDirEnv) == "" {
+		if reason, overridden := env.homeOverridden(); overridden {
+			return unresolved(serverName, reason)
+		}
+	}
+
 	// Only the user and local scopes live in .claude.json, which can run to tens
 	// of megabytes, so it is not parsed for the others.
 	var (

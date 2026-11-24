@@ -137,6 +137,14 @@ func resolve(ctx context.Context, loader *configLoader, env Env, req ResolveRequ
 	if serverName == "" {
 		return unresolved("", "the tool call did not name an MCP server")
 	}
+	if reason, overridden := env.homeOverridden(); overridden && req.Agent != localagent.ClaudeCode {
+		// Codex, Cursor and Kiro each read user configuration from the home
+		// directory, where a server can be defined or redefined. Claude Code
+		// decides for itself: it reports which scope a server came from, only
+		// some of those are under the home directory, and CLAUDE_CONFIG_DIR can
+		// take them out of it.
+		return unresolved(serverName, reason)
+	}
 	var res Resolution
 	switch req.Agent {
 	case localagent.ClaudeCode:
