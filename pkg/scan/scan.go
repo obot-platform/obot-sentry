@@ -113,7 +113,7 @@ func scanRoot(ctx context.Context, s *state) (observations, error) {
 	var (
 		obs       observations
 		skipPaths = map[string]bool{}
-		srcs = sources(s.platform)
+		srcs      = sources(s.platform)
 	)
 	for _, src := range srcs {
 		if err := ctx.Err(); err != nil {
