@@ -3,9 +3,7 @@
 package hookinstall
 
 import (
-	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -88,38 +86,33 @@ func resolveTargetUsers() (UserSet, error) {
 	if err != nil {
 		return UserSet{}, fmt.Errorf("opening %s: %w", profileListKey, err)
 	}
-	defer func() { _ = k.Close() }()
 	names, err := k.ReadSubKeyNames(-1)
+	_ = k.Close()
 	if err != nil {
 		return UserSet{}, fmt.Errorf("listing %s: %w", profileListKey, err)
 	}
 	sort.Strings(names)
 
-	var set UserSet
+	var cands []userCandidate
 	for _, name := range names {
 		if !isUserProfileSID(name) {
 			continue
 		}
-		u, err := profileUser(k, name)
-		if errors.Is(err, fs.ErrNotExist) {
-			// A deleted account's profile; not worth a warning every run.
-			continue
-		}
-		if err != nil {
-			set.Skipped = append(set.Skipped, SkippedUser{Name: name, Err: err})
-			continue
-		}
-		set.Users = append(set.Users, u)
+		cands = append(cands, userCandidate{Name: name, resolve: func() (*TargetUser, error) {
+			return profileUser(name)
+		}})
 	}
-	return set, nil
+	return resolveCandidates(cands, userResolveTimeout), nil
 }
 
-func profileUser(profileList registry.Key, sidString string) (*TargetUser, error) {
+// profileUser opens its own registry key, so a lookup abandoned past the
+// deadline never uses a handle the caller has closed.
+func profileUser(sidString string) (*TargetUser, error) {
 	sid, err := windows.StringToSid(sidString)
 	if err != nil {
 		return nil, fmt.Errorf("parsing profile SID: %w", err)
 	}
-	sub, err := registry.OpenKey(profileList, sidString, registry.QUERY_VALUE)
+	sub, err := registry.OpenKey(registry.LOCAL_MACHINE, profileListKey+`\`+sidString, registry.QUERY_VALUE|registry.WOW64_64KEY)
 	if err != nil {
 		return nil, fmt.Errorf("opening profile key: %w", err)
 	}

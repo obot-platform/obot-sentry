@@ -4,9 +4,7 @@ package hookinstall
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"os/exec"
 	"os/user"
@@ -30,8 +28,12 @@ func checkPrivilege() error {
 // normally answers from the local node instantly.
 const dsclTimeout = 30 * time.Second
 
-// resolveTargetUsers takes each home from the account database, never the
-// environment.
+// resolveTargetUsers lists the local node's accounts (`dscl .`), plus the
+// signed-in console user and SUDO_UID when they are not among them: on a Mac
+// bound to Active Directory without mobile accounts, or to LDAP/Open
+// Directory, a network account has no local record but does have a local
+// home. user.LookupId searches every directory node, so it resolves those
+// too. Each home comes from the account database, never the environment.
 func resolveTargetUsers() (UserSet, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), dsclTimeout)
 	defer cancel()
@@ -39,7 +41,61 @@ func resolveTargetUsers() (UserSet, error) {
 	if err != nil {
 		return UserSet{}, fmt.Errorf("listing local accounts with dscl: %w", err)
 	}
-	return darwinUsers(parseDsclUserList(out), user.LookupId, homeOwnedBy), nil
+	cands := darwinCandidates(parseDsclUserList(out), signedInUIDs(), user.LookupId, homeOwnedBy)
+	set := resolveCandidates(cands, userResolveTimeout)
+	sort.Slice(set.Users, func(i, j int) bool { return set.Users[i].UID < set.Users[j].UID })
+	return set, nil
+}
+
+// signedInUIDs is the owner of /dev/console (root when no one is signed in)
+// and SUDO_UID for an interactive `sudo obot-sentry hook-install`.
+func signedInUIDs() []string {
+	var uids []string
+	if info, err := os.Stat("/dev/console"); err == nil {
+		if st, ok := info.Sys().(*syscall.Stat_t); ok && st.Uid != 0 {
+			uids = append(uids, strconv.FormatUint(uint64(st.Uid), 10))
+		}
+	}
+	if uid := os.Getenv("SUDO_UID"); uid != "" {
+		uids = append(uids, uid)
+	}
+	return uids
+}
+
+func darwinCandidates(accounts []dsclAccount, extraUIDs []string, lookup func(uid string) (*user.User, error), ownedBy func(home string, uid int) error) []userCandidate {
+	seen := map[string]bool{}
+	var cands []userCandidate
+	add := func(name, uid string) {
+		if seen[uid] {
+			return
+		}
+		seen[uid] = true
+		cands = append(cands, userCandidate{Name: name, resolve: func() (*TargetUser, error) {
+			return darwinUser(uid, lookup, ownedBy)
+		}})
+	}
+	for _, a := range accounts {
+		add(a.Name, a.UID)
+	}
+	for _, uid := range extraUIDs {
+		add("uid "+uid, uid)
+	}
+	return cands
+}
+
+func darwinUser(uid string, lookup func(uid string) (*user.User, error), ownedBy func(home string, uid int) error) (*TargetUser, error) {
+	u, err := lookup(uid)
+	if err != nil {
+		return nil, fmt.Errorf("looking up uid %s: %v", uid, err)
+	}
+	tu, err := targetUserFromAccount(u)
+	if err != nil {
+		return nil, err
+	}
+	if err := ownedBy(tu.HomeDir, tu.UID); err != nil {
+		return nil, err
+	}
+	return tu, nil
 }
 
 // homeOwnedBy rejects homes the account does not own, such as /Users/Shared or
@@ -57,34 +113,6 @@ func homeOwnedBy(home string, uid int) error {
 		return fmt.Errorf("home %q is owned by uid %d, not the account's uid %d", home, st.Uid, uid)
 	}
 	return nil
-}
-
-func darwinUsers(accounts []dsclAccount, lookup func(uid string) (*user.User, error), ownedBy func(home string, uid int) error) UserSet {
-	var set UserSet
-	for _, a := range accounts {
-		u, err := lookup(a.UID)
-		if err != nil {
-			set.Skipped = append(set.Skipped, SkippedUser{Name: a.Name, Err: fmt.Errorf("looking up uid %s: %w", a.UID, err)})
-			continue
-		}
-		tu, err := targetUserFromAccount(u)
-		if errors.Is(err, fs.ErrNotExist) {
-			// macOS creates a home directory at first login, so an account
-			// that has never logged in has nothing to converge yet. Its first
-			// login adds the home and makes the next scheduled poll due.
-			continue
-		}
-		if err == nil {
-			err = ownedBy(tu.HomeDir, tu.UID)
-		}
-		if err != nil {
-			set.Skipped = append(set.Skipped, SkippedUser{Name: a.Name, Err: err})
-			continue
-		}
-		set.Users = append(set.Users, tu)
-	}
-	sort.Slice(set.Users, func(i, j int) bool { return set.Users[i].UID < set.Users[j].UID })
-	return set
 }
 
 // targetUserFromAccount validates an account-database entry and builds a

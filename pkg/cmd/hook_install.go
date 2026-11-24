@@ -48,7 +48,7 @@ func (h *HookInstall) Customize(cmd *cobra.Command) {
 Requires root on macOS or an elevated Administrator/SYSTEM token on Windows.
 Installs machine policy for Claude Code, Codex, and Cursor and user hooks for
 the Visual Studio Code and Kiro installations of every local user, whether or
-not they are signed in.
+not they are signed in, and on macOS of a signed-in network account too.
 
 With enforcement enabled, also installs the pre-tool hooks that check each tool
 call against Obot's allowlist, for Claude Code, Codex, Cursor, and Kiro. A run

@@ -7,8 +7,10 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestValidateExecutableOwnerRequiresRoot(t *testing.T) {
@@ -119,18 +121,21 @@ func TestDarwinUsersSkipsInvalidAccountsAndSortsByUID(t *testing.T) {
 		}
 		return nil, user.UnknownUserIdError(0)
 	}
-	set := darwinUsers([]dsclAccount{
+	ownedBy := func(home string, uid int) error {
+		if home == sharedHome {
+			return errors.New("home owned by another account")
+		}
+		return nil
+	}
+	cands := darwinCandidates([]dsclAccount{
 		{Name: "bob", UID: "502"},
 		{Name: "alice", UID: "501"},
 		{Name: "gone", UID: "503"},
 		{Name: "ghost", UID: "504"},
 		{Name: "shared", UID: "505"},
-	}, lookup, func(home string, uid int) error {
-		if home == sharedHome {
-			return errors.New("home owned by another account")
-		}
-		return nil
-	})
+	}, nil, lookup, ownedBy)
+	set := resolveCandidates(cands, time.Minute)
+	sort.Slice(set.Users, func(i, j int) bool { return set.Users[i].UID < set.Users[j].UID })
 
 	if len(set.Users) != 2 || set.Users[0].Username != "alice" || set.Users[1].Username != "bob" {
 		t.Fatalf("users = %+v, want alice then bob", set.Users)
@@ -148,5 +153,32 @@ func TestHomeOwnedBy(t *testing.T) {
 	}
 	if err := homeOwnedBy(home, os.Getuid()+1); err == nil {
 		t.Fatal("a home owned by another uid was accepted")
+	}
+}
+
+// TestDarwinCandidatesAddSignedInNetworkAccount covers a directory-bound Mac: a
+// network account at the console has no record in the local node, so it is
+// added from the console owner, while a console user already in the local list
+// is not added twice.
+func TestDarwinCandidatesAddSignedInNetworkAccount(t *testing.T) {
+	localHome, networkHome := t.TempDir(), t.TempDir()
+	accounts := map[string]*user.User{
+		"501":  {Uid: "501", Gid: "20", Username: "local", HomeDir: localHome},
+		"1234": {Uid: "1234", Gid: "20", Username: "net", HomeDir: networkHome},
+	}
+	lookup := func(uid string) (*user.User, error) {
+		if u, ok := accounts[uid]; ok {
+			return u, nil
+		}
+		return nil, user.UnknownUserIdError(0)
+	}
+	cands := darwinCandidates([]dsclAccount{{Name: "local", UID: "501"}}, []string{"1234", "501", "1234"}, lookup,
+		func(string, int) error { return nil })
+	if len(cands) != 2 {
+		t.Fatalf("got %d candidates, want the local account plus the network console user once", len(cands))
+	}
+	set := resolveCandidates(cands, time.Minute)
+	if len(set.Users) != 2 || set.Users[1].Username != "net" || set.Users[1].HomeDir != networkHome {
+		t.Fatalf("users = %+v, want local and the network account", set.Users)
 	}
 }
