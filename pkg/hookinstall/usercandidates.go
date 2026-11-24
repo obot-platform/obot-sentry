@@ -24,8 +24,10 @@ var userResolveTimeout = 30 * time.Second
 
 // resolveCandidates resolves each candidate concurrently. One that has not
 // finished by the deadline is skipped with a timeout error and abandoned; one
-// whose home does not exist (macOS creates it at first login; a deleted
-// account's profile can outlive it on Windows) is dropped silently.
+// whose home does not exist under an existing parent (macOS creates it at
+// first login; a deleted account's profile can outlive it on Windows) is
+// dropped silently. validateHomeDir reports a home whose parent is missing,
+// such as one on an unmounted volume, so that one is skipped with a reason.
 func resolveCandidates(cands []userCandidate, timeout time.Duration) UserSet {
 	type resolved struct {
 		user *TargetUser

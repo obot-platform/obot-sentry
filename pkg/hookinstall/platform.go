@@ -3,8 +3,11 @@ package hookinstall
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -36,6 +39,16 @@ func validateHomeDir(home string) error {
 		return err
 	}
 	info, err := os.Lstat(home)
+	if errors.Is(err, fs.ErrNotExist) {
+		// A missing home under an existing parent belongs to an account that
+		// has not signed in yet, and callers drop it. A missing parent means
+		// the volume or folder holding the home is gone, so report it. perr is
+		// formatted with %v: wrapping fs.ErrNotExist would get it dropped too.
+		parent := filepath.Dir(home)
+		if _, perr := os.Lstat(parent); perr != nil {
+			return fmt.Errorf("resolved home %q is not available: its parent %q is missing or unreadable: %v", home, parent, perr)
+		}
+	}
 	if err != nil {
 		return fmt.Errorf("resolved home %q is not accessible: %w", home, err)
 	}
