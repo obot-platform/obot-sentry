@@ -84,8 +84,7 @@ type Result struct {
 	// "VS Code settings". It disambiguates the two vscode-related files.
 	Label string
 	Scope Scope
-	// User names the account a user-scoped destination belongs to; empty for a
-	// machine-scoped one.
+	// User is empty for a machine-scoped destination.
 	User string
 	// Path is the resolved absolute destination path, populated once path
 	// resolution lands. It may be empty for a preflight-only plan.

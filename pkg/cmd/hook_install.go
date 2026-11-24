@@ -25,14 +25,8 @@ type HookInstall struct {
 	// MDM-configured true.
 	Enforce *bool `usage:"also install the pre-tool enforcement hooks (defaults to OBOT_SENTRY_ENFORCEMENT_ENABLED, then the MDM-configured EnforcementEnabled)"`
 
-	// IfDue is what the OS scheduler passes: it polls every few minutes, and
-	// each poll converges only when the hook interval has elapsed (or the
-	// machine restarted, a user profile appeared or went away, or the
-	// enforcement setting changed) since the last scheduled run.
 	IfDue bool `usage:"converge only if the hook interval has elapsed since the last scheduled run"`
 
-	// HookIntervalMinutes overrides the MDM-configured HookIntervalMinutes used
-	// by --if-due.
 	HookIntervalMinutes int `usage:"Minutes between scheduled hook convergences with --if-due (overrides the MDM-configured value; default 15)" env:"OBOT_SENTRY_HOOK_INTERVAL_MINUTES"`
 
 	// loadMDMConfig reads the platform MDM store. It is wired by New so tests can
@@ -119,9 +113,6 @@ func (h *HookInstall) enforcing() (bool, error) {
 	return cfg.Enforcement(), nil
 }
 
-// interval resolves the scheduled convergence interval: the flag or
-// OBOT_SENTRY_HOOK_INTERVAL_MINUTES first, then the MDM store's
-// HookIntervalMinutes, clamped and defaulted by mdmconfig.
 func (h *HookInstall) interval() (time.Duration, error) {
 	cfg, err := h.loadMDM()
 	if err != nil {

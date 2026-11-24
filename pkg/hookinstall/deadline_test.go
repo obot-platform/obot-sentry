@@ -10,15 +10,12 @@ import (
 	"time"
 )
 
-// testUnitTimeout is the unit deadline in these tests. It applies to every unit,
-// not only the stalled one, so it must leave the others ample time: a unit
-// fsyncs each file it writes, which can take hundreds of milliseconds on a
-// loaded CI runner.
+// testUnitTimeout applies to every unit, not only the stalled one, so it must
+// leave the others ample time: each file write is fsynced, which can take
+// hundreds of milliseconds on a loaded CI runner.
 const testUnitTimeout = 2 * time.Second
 
-// stallReadsUnder replaces readConfig so any read of a path under prefix blocks
-// until the test ends, simulating a stalled open (a dead network home, or on
-// Windows a user holding an oplock on their hook file).
+// stallReadsUnder makes any read under prefix block until the test ends.
 func stallReadsUnder(t *testing.T, prefix string) {
 	t.Helper()
 	release := make(chan struct{})
@@ -49,9 +46,6 @@ func deadlineInstaller(machineRoot string, users ...*TargetUser) (*Installer, *b
 	}, &out
 }
 
-// TestRunAbandonsAStalledUserAndConvergesTheRest proves one user whose files
-// stall is reported failed after the deadline while machine policy and every
-// other user still converge.
 func TestRunAbandonsAStalledUserAndConvergesTheRest(t *testing.T) {
 	aliceHome, bobHome := t.TempDir(), t.TempDir()
 	machineRoot := realTempDir(t)
@@ -80,10 +74,6 @@ func TestRunAbandonsAStalledUserAndConvergesTheRest(t *testing.T) {
 	}
 }
 
-// TestRunAbandonsStalledMachineScopeAndStillConvergesUsers proves a stall on a
-// machine file is reported failed after the deadline, users still converge, and
-// retired user hooks are held back because their machine replacement did not
-// land.
 func TestRunAbandonsStalledMachineScopeAndStillConvergesUsers(t *testing.T) {
 	home := t.TempDir()
 	machineRoot := realTempDir(t)
@@ -119,9 +109,6 @@ func TestRunAbandonsStalledMachineScopeAndStillConvergesUsers(t *testing.T) {
 	}
 }
 
-// TestAbandonedUnitDoesNotWriteAfterDeadline proves a unit whose pre-commit
-// re-read stalls past the deadline does not write once it resumes: it was
-// already reported failed and the run moved on.
 func TestAbandonedUnitDoesNotWriteAfterDeadline(t *testing.T) {
 	home := t.TempDir()
 	machineRoot := realTempDir(t)

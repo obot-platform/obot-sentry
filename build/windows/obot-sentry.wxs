@@ -83,14 +83,11 @@
               <RegistryValue Name="EnforcementEnabled" Type="integer" Value="[ENFORCEMENT]" />
             </RegistryKey>
           </Component>
-          <!-- HookIntervalMinutes is optional (absent means the 15-minute
-               default) and written only when the install command sets
-               HOOK_INTERVAL_MINUTES, so an upgrade without the property keeps
-               whatever interval is in the registry, whether an earlier install
-               command, an administrator, or an MDM policy put it there.
-               Permanent stops a major upgrade's removal of the old product
-               from deleting the value; a true uninstall deletes it instead
-               (hook-task.ps1 -Mode uninstall). -->
+          <!-- Written only when HOOK_INTERVAL_MINUTES is set, so an upgrade
+               without it keeps whatever value is in the registry. Without
+               Permanent, a major upgrade's removal of the old product would
+               delete the value; hook-task.ps1 -Mode uninstall deletes it on a
+               true uninstall. -->
           <Component Id="HookIntervalRegistry" Guid="D69C23B3-46E8-4884-9D6E-F502755451E6" Condition="HOOK_INTERVAL_MINUTES" Permanent="yes">
             <RegistryKey Root="HKLM" Key="SOFTWARE\Obot\obot-sentry">
               <RegistryValue Name="HookIntervalMinutes" Type="string" Value="[HOOK_INTERVAL_MINUTES]" KeyPath="yes" />

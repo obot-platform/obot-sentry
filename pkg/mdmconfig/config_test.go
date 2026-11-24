@@ -161,9 +161,6 @@ func TestMerge_EnforcementEnabled(t *testing.T) {
 	}
 }
 
-// TestHookInterval pins the default (15 minutes), the clamp to the 5–1440
-// schema bounds, and that the MDM value parses and merges like the scan
-// interval.
 func TestHookInterval(t *testing.T) {
 	for _, tt := range []struct {
 		minutes int

@@ -237,9 +237,6 @@ func TestHookUninstallReachesInstaller(t *testing.T) {
 	}
 }
 
-// TestHookInstallIfDueReachesTheInstaller pins that --if-due and the resolved
-// interval (flag over MDM, default 15 minutes) reach the installer, and that a
-// plain run is never throttled.
 func TestHookInstallIfDueReachesTheInstaller(t *testing.T) {
 	for _, tt := range []struct {
 		name      string

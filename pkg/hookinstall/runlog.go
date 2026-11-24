@@ -10,33 +10,18 @@ import (
 	"path/filepath"
 )
 
-// The run directory holds what hook-install keeps between runs: its log and
-// the schedule state. A user who could write the schedule state could
-// suppress drift repair, and one who could hold the log open could blind it,
-// so the directory must sit under a parent no unprivileged user can create
-// entries in, and is itself readable and writable only by root (macOS) or
-// SYSTEM and Administrators (Windows):
-//
-//   - macOS: /Library/Application Support/obot/obot-sentry-hook-install. Its
-//     parent is root-only; the machine data directory beside it is mode 1777
-//     (any user creates the shared identity there), so it is not usable.
-//   - Windows: hook-install in the package's install directory under Program
-//     Files. The machine data directory under ProgramData is not usable for
-//     the same reason: any user can create entries there, and so could
-//     pre-create the run directory and keep a handle to it that survives any
-//     later ACL change.
+// The run directory holds the log and schedule state. A user who could write
+// the state could suppress drift repair, and one who could hold the log open
+// could blind it, so it lives under a parent no unprivileged user can create
+// entries in — not the machine data directory, which is user-writable on both
+// platforms so any user can create the shared identity there.
 const (
-	// RunLogName is the hook-install log inside the run directory.
 	RunLogName = "hook-install.log"
-	// maxRunLogBytes caps the log before it rotates to RunLogName + ".1". Only
-	// changes and failures are logged, so 10 MiB holds years of normal runs
-	// and weeks of a failure that repeats on every five-minute poll; two
-	// generations bound the total.
+	// maxRunLogBytes is the size at which the log rotates to RunLogName + ".1".
 	maxRunLogBytes = 10 << 20
 )
 
-// DefaultRunDir resolves the run directory, creating it and restricting it to
-// root (macOS) or SYSTEM and Administrators (Windows). Its parent must already
+// DefaultRunDir creates and secures the run directory. Its parent must already
 // exist: the package creates it.
 func DefaultRunDir() (string, error) {
 	base, dir, err := runDirLocation()
@@ -52,9 +37,8 @@ func DefaultRunDir() (string, error) {
 	return dir, nil
 }
 
-// openRunLog opens the run log in dir for appending, rotating it first when it
-// has grown past maxRunLogBytes. An existing log that is not a regular file or
-// was created by an untrusted account is discarded rather than appended to.
+// openRunLog discards, rather than appends to, an existing log that is not a
+// regular file or was created by an untrusted account.
 func openRunLog(dir string) (*slog.Logger, io.Closer, error) {
 	root, err := os.OpenRoot(dir)
 	if err != nil {
@@ -84,7 +68,6 @@ func openRunLog(dir string) (*slog.Logger, io.Closer, error) {
 	return logger, f, nil
 }
 
-// discardLogger is used when no run log is available.
 func discardLogger() *slog.Logger {
 	return slog.New(slog.DiscardHandler)
 }

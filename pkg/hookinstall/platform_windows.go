@@ -14,8 +14,7 @@ import (
 	"golang.org/x/sys/windows/registry"
 )
 
-// profileListKey is where Windows records every user profile on the machine,
-// one subkey per account SID, whether or not that account is signed in.
+// profileListKey has one subkey per user profile SID, signed in or not.
 const profileListKey = `SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList`
 
 // checkPrivilege accepts either an elevated Administrator token or the SYSTEM
@@ -33,7 +32,6 @@ func checkPrivilege() error {
 	return fmt.Errorf("obot-sentry hook commands must run from an elevated Administrator or SYSTEM token on Windows")
 }
 
-// isSystemToken reports whether token's user is the local SYSTEM account.
 func isSystemToken(token windows.Token) bool {
 	user, err := token.GetTokenUser()
 	if err != nil {
@@ -63,7 +61,6 @@ func validateExecutableOwner(path string, _ os.FileInfo) error {
 	return nil
 }
 
-// fileOwner returns the owner SID of path.
 func fileOwner(path string) (*windows.SID, error) {
 	sd, err := windows.GetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION)
 	if err != nil {
@@ -83,12 +80,9 @@ func trustedExecutableOwner(owner *windows.SID) bool {
 	return owner != nil && (owner.IsWellKnown(windows.WinLocalSystemSid) || owner.IsWellKnown(windows.WinBuiltinAdministratorsSid))
 }
 
-// resolveTargetUsers lists every real user profile on the machine from the
-// registry ProfileList, signed in or not, so drift in a signed-out user's files
-// is repaired too. Every decision is made on the profile's SID; the account
-// name is only rendered for output, because Windows localizes built-in names.
-// The profile directory comes from ProfileImagePath rather than an assumed
-// C:\Users\<name>.
+// resolveTargetUsers decides on SIDs only, since Windows localizes built-in
+// account names, and takes each home from ProfileImagePath rather than
+// assuming C:\Users\<name>.
 func resolveTargetUsers() (UserSet, error) {
 	k, err := registry.OpenKey(registry.LOCAL_MACHINE, profileListKey, registry.ENUMERATE_SUB_KEYS|registry.WOW64_64KEY)
 	if err != nil {
@@ -108,8 +102,7 @@ func resolveTargetUsers() (UserSet, error) {
 		}
 		u, err := profileUser(k, name)
 		if errors.Is(err, fs.ErrNotExist) {
-			// A profile whose directory is gone (a deleted account) has nothing
-			// to converge; it is not worth a warning on every run.
+			// A deleted account's profile; not worth a warning every run.
 			continue
 		}
 		if err != nil {
@@ -121,7 +114,6 @@ func resolveTargetUsers() (UserSet, error) {
 	return set, nil
 }
 
-// profileUser resolves one ProfileList entry to a validated TargetUser.
 func profileUser(profileList registry.Key, sidString string) (*TargetUser, error) {
 	sid, err := windows.StringToSid(sidString)
 	if err != nil {

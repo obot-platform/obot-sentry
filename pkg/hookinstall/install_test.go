@@ -272,9 +272,6 @@ func TestRunConvergesAndIsIdempotent(t *testing.T) {
 	}
 }
 
-// TestRunAbortsOnMalformedMachineConfigBeforeWriting proves a malformed
-// machine-scoped document fails preflight without writing any file, for the
-// machine or any user.
 func TestRunAbortsOnMalformedMachineConfigBeforeWriting(t *testing.T) {
 	home := t.TempDir()
 	machineRoot := realTempDir(t)
@@ -312,9 +309,6 @@ func TestRunAbortsOnMalformedMachineConfigBeforeWriting(t *testing.T) {
 	}
 }
 
-// TestRunHoldsBackOnlyTheUserWithMalformedConfig proves a malformed per-user
-// document leaves that user's files untouched while the machine destinations
-// and every other user still converge, and the run still reports failure.
 func TestRunHoldsBackOnlyTheUserWithMalformedConfig(t *testing.T) {
 	aliceHome, bobHome := t.TempDir(), t.TempDir()
 	machineRoot := realTempDir(t)
@@ -654,8 +648,7 @@ func TestRunKeepsClaudeUserHooksWhenManagedInstallFails(t *testing.T) {
 			t.Fatalf("%s: result = %+v, want a failure that removed nothing", r.Label, r)
 		}
 	}
-	// Results list machine destinations before per-user ones, whatever the
-	// declared order.
+	// Results list machine destinations first, whatever the declared order.
 	retired := results[slices.IndexFunc(results, func(r Result) bool { return r.Label == "Claude Code (user settings)" })]
 	if !strings.Contains(retired.Err.Error(), "left in place") {
 		t.Fatalf("retired destination error = %v", retired.Err)

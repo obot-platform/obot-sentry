@@ -13,39 +13,26 @@ import (
 	"github.com/obot-platform/obot-sentry/pkg/version"
 )
 
-// This file is the throttle behind `hook-install --if-due`. The OS scheduler
-// (the hook-install LaunchDaemon and scheduled task) polls every few minutes,
-// and each poll converges only when the run is due, so an administrator
-// retunes the cadence by changing HookIntervalMinutes in the MDM alone.
-//
-// The throttle fails toward converging: a missing, unreadable, tampered-with,
-// or future-dated state file makes the run due. The only thing the state can
-// ever do is let a run be skipped when an equivalent run happened recently.
+// The --if-due throttle fails toward converging: a missing, unreadable,
+// untrusted, or future-dated state file makes the run due. State can only ever
+// let a run be skipped when an equivalent one happened recently.
 
-// scheduleStateName is the schedule state file inside the run directory.
 const scheduleStateName = "schedule.json"
 
-// dueSlack absorbs scheduler jitter. launchd and Task Scheduler fire a poll a
-// little early or late; without slack, a poll landing a second short of the
-// interval would defer convergence by a whole extra poll period.
+// dueSlack absorbs scheduler jitter: launchd and Task Scheduler fire polls a
+// little early or late, and a poll a second short of the interval would
+// otherwise defer convergence by a whole poll period.
 const dueSlack = time.Minute
 
-// scheduleState records the last convergence attempt and the inputs it ran
-// with. A change to any of the inputs makes the next poll due immediately,
-// rather than waiting out the interval.
+// scheduleState records the last successful run and its inputs; a change to
+// any input makes the next poll due.
 type scheduleState struct {
 	LastRunAt time.Time `json:"lastRunAt"`
-	// Version is the obot-sentry build that ran, so an upgrade converges on
-	// its first poll with whatever hooks the new build installs.
-	Version string `json:"version"`
-	Enforce bool   `json:"enforce"`
-	// Homes are the home directories of the users converged, sorted. A new
-	// profile (a first sign-in) or a removed one changes the set.
-	Homes []string `json:"homes"`
+	Version   string    `json:"version"`
+	Enforce   bool      `json:"enforce"`
+	Homes     []string  `json:"homes"` // sorted
 }
 
-// scheduleInputs is what a run would converge with, compared to the recorded
-// state to decide whether the run is due.
 type scheduleInputs struct {
 	Version string
 	Enforce bool
@@ -61,15 +48,13 @@ func newScheduleInputs(enforce bool, users []*TargetUser) scheduleInputs {
 	return scheduleInputs{Version: version.Get().String(), Enforce: enforce, Homes: homes}
 }
 
-// dueDecision explains whether a run is due and why.
 type dueDecision struct {
 	Due    bool
 	Reason string
 }
 
-// decideDue reports whether a run with inputs is due given the recorded state
-// (nil when there is none or it could not be trusted), the configured interval,
-// the current time, and the system boot time (zero when unknown).
+// decideDue takes nil state when there is none or it is untrusted, and a zero
+// boot time when unknown.
 func decideDue(state *scheduleState, inputs scheduleInputs, interval time.Duration, now, boot time.Time) dueDecision {
 	switch {
 	case state == nil:
@@ -92,10 +77,8 @@ func decideDue(state *scheduleState, inputs scheduleInputs, interval time.Durati
 	}
 }
 
-// loadScheduleState reads the state from dir. Any problem — absent, not a
-// regular file, owned by an untrusted account, or malformed — returns nil
-// state so the run is due; the error is returned alongside for logging when it
-// is anything other than absence.
+// loadScheduleState returns nil state (so the run is due) on any problem, with
+// an error for logging unless the file is simply absent.
 func loadScheduleState(dir string) (*scheduleState, error) {
 	data, err := readRunFile(dir, scheduleStateName)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -111,7 +94,6 @@ func loadScheduleState(dir string) (*scheduleState, error) {
 	return &st, nil
 }
 
-// saveScheduleState atomically records a run that started at startedAt.
 func saveScheduleState(dir string, inputs scheduleInputs, startedAt time.Time) error {
 	data, err := json.MarshalIndent(scheduleState{
 		LastRunAt: startedAt.UTC(),
@@ -125,8 +107,6 @@ func saveScheduleState(dir string, inputs scheduleInputs, startedAt time.Time) e
 	return writeRunFile(dir, scheduleStateName, append(data, '\n'))
 }
 
-// removeScheduleState forgets the last recorded run, so the next scheduled
-// run is due. An absent state file is not an error.
 func removeScheduleState(dir string) error {
 	root, err := os.OpenRoot(dir)
 	if err != nil {
@@ -139,8 +119,6 @@ func removeScheduleState(dir string) error {
 	return nil
 }
 
-// readRunFile reads name from the run directory through an os.Root, refusing a
-// non-regular file or one an untrusted account created.
 func readRunFile(dir, name string) ([]byte, error) {
 	root, err := os.OpenRoot(dir)
 	if err != nil {
@@ -153,7 +131,6 @@ func readRunFile(dir, name string) ([]byte, error) {
 	return root.ReadFile(name)
 }
 
-// writeRunFile atomically replaces name in the run directory.
 func writeRunFile(dir, name string, data []byte) error {
 	root, err := os.OpenRoot(dir)
 	if err != nil {
@@ -168,8 +145,7 @@ func writeRunFile(dir, name string, data []byte) error {
 	return nil
 }
 
-// checkRunFile verifies an existing run-directory file is a regular file owned
-// by a trusted account. It returns fs.ErrNotExist (wrapped) when absent.
+// checkRunFile refuses a non-regular file or one an untrusted account created.
 func checkRunFile(root *os.Root, dir, name string) error {
 	info, err := root.Lstat(name)
 	if err != nil {

@@ -16,22 +16,19 @@ import (
 // trustedInstallerSID owns the protected parts of Program Files.
 const trustedInstallerSID = "S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464"
 
-// runDirLocation is the run directory and its parent: the package's install
-// directory under Program Files, which no unprivileged user can create
-// entries in.
+// runDirLocation is under the install directory in Program Files, where no
+// unprivileged user can create entries.
 func runDirLocation() (parent, dir string, err error) {
 	parent = filepath.Dir(packagedWindowsExecutable)
 	return parent, filepath.Join(parent, "hook-install"), nil
 }
 
-// makeRunDir creates the run directory with its protected ACL in place from
-// the start. os.Mkdir would create it with the ACL inherited from Program
-// Files, which lets Users list it; a user who opened a handle to it in that
-// window, before secureRunDir tightens the ACL, would keep that handle — and
-// could hold the directory open to block the run log and state.
+// makeRunDir creates the directory with its protected ACL already applied.
+// os.Mkdir would briefly give it Program Files' inherited ACL, which lets
+// Users open it, and a handle opened then keeps its access after the ACL is
+// tightened.
 func makeRunDir(dir string) error {
-	// The owner is left unset: Windows assigns the creator's default owner
-	// (SYSTEM, or Administrators for an elevated administrator), and
+	// The owner is left unset, so Windows assigns the creator's default owner;
 	// secureRunDir then sets it explicitly.
 	acl, _, err := runDirACL(windows.OBJECT_INHERIT_ACE | windows.CONTAINER_INHERIT_ACE)
 	if err != nil {
@@ -61,12 +58,10 @@ func makeRunDir(dir string) error {
 	return nil
 }
 
-// secureRunDir verifies the run directory and its parent and restricts the run
-// directory to SYSTEM and Administrators. Everything is done through handles
-// opened without following reparse points, so a junction cannot redirect the
-// ACL change, and each directory must be owned by a trusted account — a
-// directory a user created and still holds a handle to would keep whatever
-// access that handle was opened with, whatever ACL is applied afterward.
+// secureRunDir works through handles opened without following reparse points,
+// so a junction cannot redirect the ACL change, and requires a trusted owner:
+// a user who created the directory could hold a handle whose access survives
+// any later ACL change.
 func secureRunDir(parent, dir string) error {
 	ph, err := openDirNoReparse(parent, windows.READ_CONTROL)
 	if err != nil {
@@ -94,8 +89,6 @@ func secureRunDir(parent, dir string) error {
 		owner, nil, acl, nil)
 }
 
-// openDirNoReparse opens path as a directory without following a reparse point
-// in its final component, and refuses anything that is not a plain directory.
 func openDirNoReparse(path string, access uint32) (windows.Handle, error) {
 	p, err := windows.UTF16PtrFromString(path)
 	if err != nil {
@@ -119,8 +112,6 @@ func openDirNoReparse(path string, access uint32) (windows.Handle, error) {
 	return h, nil
 }
 
-// checkTrustedOwner requires the object behind h to be owned by SYSTEM,
-// Administrators, TrustedInstaller, or the account this run executes as.
 func checkTrustedOwner(h windows.Handle, path string) error {
 	sd, err := windows.GetSecurityInfo(h, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION)
 	if err != nil {
@@ -136,6 +127,8 @@ func checkTrustedOwner(h windows.Handle, path string) error {
 	return nil
 }
 
+// trustedRunOwner also accepts the running account, because files an elevated
+// administrator creates can be owned by that administrator, not the group.
 func trustedRunOwner(owner *windows.SID) bool {
 	if trustedExecutableOwner(owner) {
 		return true
@@ -149,9 +142,6 @@ func trustedRunOwner(owner *windows.SID) bool {
 	return false
 }
 
-// runDirACL is full control for SYSTEM and Administrators and nothing for
-// anyone else, with the owner set to SYSTEM (when running as SYSTEM) or
-// Administrators.
 func runDirACL(inheritance uint32) (*windows.ACL, *windows.SID, error) {
 	systemSID, err := windows.CreateWellKnownSid(windows.WinLocalSystemSid)
 	if err != nil {
@@ -175,10 +165,8 @@ func runDirACL(inheritance uint32) (*windows.ACL, *windows.SID, error) {
 	return acl, owner, nil
 }
 
-// checkRunFileOwner refuses a run-directory file that neither SYSTEM, the
-// Administrators group, nor the account this run executes as created. The run
-// directory admits no one else, so this is defense in depth. An unprivileged
-// run (tests) has no such guarantee to check.
+// checkRunFileOwner is defense in depth: the run directory admits no one else.
+// An unprivileged run (tests) has nothing to check.
 func checkRunFileOwner(path string, _ os.FileInfo) error {
 	token := windows.GetCurrentProcessToken()
 	if !isSystemToken(token) && !token.IsElevated() {
@@ -194,11 +182,9 @@ func checkRunFileOwner(path string, _ os.FileInfo) error {
 	return nil
 }
 
-// claimRunFile gives a run-directory file the run directory's ACL with SYSTEM
-// or Administrators as its owner, so a later run under a different
-// administrative account still trusts it. It is best-effort: an unprivileged
-// run (tests) cannot change the owner, and the file already inherits the
-// directory's restrictive ACL.
+// claimRunFile makes SYSTEM or Administrators the owner, so a later run under a
+// different administrative account still trusts the file. Best-effort: an
+// unprivileged run (tests) cannot change the owner.
 func claimRunFile(path string) {
 	acl, owner, err := runDirACL(0)
 	if err != nil {

@@ -135,9 +135,7 @@ func TestDarwinUsersSkipsInvalidAccountsAndSortsByUID(t *testing.T) {
 	if len(set.Users) != 2 || set.Users[0].Username != "alice" || set.Users[1].Username != "bob" {
 		t.Fatalf("users = %+v, want alice then bob", set.Users)
 	}
-	// "gone" has no home yet (never logged in), so it is dropped silently;
-	// the account that cannot be looked up and the one whose home it does not
-	// own are reported.
+	// "gone" has never logged in, so has no home and is dropped silently.
 	if len(set.Skipped) != 2 || set.Skipped[0].Name != "ghost" || set.Skipped[1].Name != "shared" {
 		t.Fatalf("skipped = %+v, want ghost and shared", set.Skipped)
 	}

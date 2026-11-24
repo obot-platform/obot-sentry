@@ -26,15 +26,12 @@ func checkPrivilege() error {
 	return nil
 }
 
-// dsclTimeout bounds the directory-service listing. dscl answers from the
-// local node, so it is normally instant; the bound only keeps a wedged
-// opendirectoryd from hanging the scheduled run forever.
+// dsclTimeout keeps a wedged opendirectoryd from hanging the run; dscl
+// normally answers from the local node instantly.
 const dsclTimeout = 30 * time.Second
 
-// resolveTargetUsers lists every real local account on macOS, whether or not it
-// is signed in, so drift in a signed-out user's files is repaired too. The
-// local directory node is the source of truth for accounts; the home directory
-// comes from the account database, never the environment.
+// resolveTargetUsers takes each home from the account database, never the
+// environment.
 func resolveTargetUsers() (UserSet, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), dsclTimeout)
 	defer cancel()
@@ -45,9 +42,8 @@ func resolveTargetUsers() (UserSet, error) {
 	return darwinUsers(parseDsclUserList(out), user.LookupId, homeOwnedBy), nil
 }
 
-// homeOwnedBy requires home to be owned by uid. A home shared between
-// accounts (/Users/Shared) or owned by the system (/var/empty) is not that
-// user's to have root create and chown hook directories in.
+// homeOwnedBy rejects homes the account does not own, such as /Users/Shared or
+// /var/empty, which are not that user's to have root create directories in.
 func homeOwnedBy(home string, uid int) error {
 	info, err := os.Lstat(home)
 	if err != nil {
@@ -63,9 +59,6 @@ func homeOwnedBy(home string, uid int) error {
 	return nil
 }
 
-// darwinUsers resolves each listed account through the account database,
-// skipping (and reporting) any that do not validate or whose home the account
-// does not own. The result is ordered by uid so runs are deterministic.
 func darwinUsers(accounts []dsclAccount, lookup func(uid string) (*user.User, error), ownedBy func(home string, uid int) error) UserSet {
 	var set UserSet
 	for _, a := range accounts {

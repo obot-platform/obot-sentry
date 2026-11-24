@@ -30,8 +30,8 @@ const (
 )
 
 // HookInterval bounds, mirrored by the fields schema in build/manifest.json.
-// The minimum matches the scheduler's poll period (see the hook-install
-// LaunchDaemon and scheduled task): a shorter interval could not be honored.
+// The minimum is the scheduler's poll period; a shorter interval could not be
+// honored.
 const (
 	defaultHookIntervalMinutes = 15
 	minHookIntervalMinutes     = 5
@@ -51,8 +51,7 @@ type Config struct {
 	// by updating the MDM configuration alone.
 	ScanIntervalMinutes int
 	// HookIntervalMinutes is the minimum number of minutes between scheduled
-	// hook convergences; 0 means unset. Like ScanIntervalMinutes, the OS
-	// scheduler polls faster and `hook-install --if-due` throttles to this.
+	// hook convergences; 0 means unset.
 	HookIntervalMinutes int
 	// EnforcementEnabled turns the pre-tool enforcement hooks on. It is a
 	// tri-state: nil means the key was absent, so a lower-precedence layer may
@@ -93,9 +92,6 @@ func (c Config) ScanInterval() time.Duration {
 	return clampMinutes(c.ScanIntervalMinutes, defaultScanIntervalMinutes, minScanIntervalMinutes, maxScanIntervalMinutes)
 }
 
-// HookInterval returns the effective time between scheduled hook
-// convergences: the configured minutes clamped to the schema bounds,
-// defaulting to 15 minutes when unset.
 func (c Config) HookInterval() time.Duration {
 	return clampMinutes(c.HookIntervalMinutes, defaultHookIntervalMinutes, minHookIntervalMinutes, maxHookIntervalMinutes)
 }
@@ -146,9 +142,8 @@ func FromSource(src Source) (Config, error) {
 	return cfg, nil
 }
 
-// parseMinutes is lenient: an absent or non-numeric interval reads as 0
-// (unset) and the default applies, rather than failing every run on the
-// machine.
+// parseMinutes reads an absent or non-numeric value as 0 (unset), so a bad MDM
+// value falls back to the default rather than failing every run.
 func parseMinutes(value string) int {
 	minutes, err := strconv.Atoi(value)
 	if err != nil || minutes < 0 {

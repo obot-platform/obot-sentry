@@ -104,7 +104,6 @@ func TestScheduleStateRoundTripAndCorruption(t *testing.T) {
 		t.Fatalf("round-tripped state = %+v", st)
 	}
 
-	// A corrupt state file reads as no state, so the run is due.
 	if err := os.WriteFile(filepath.Join(dir, scheduleStateName), []byte("{"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -150,10 +149,6 @@ func TestOpenRunLogAppendsAndRotates(t *testing.T) {
 	}
 }
 
-// TestRunIfDueThrottlesAndLogs drives the scheduled path end to end: the first
-// poll converges and records state, an immediate second poll is skipped
-// without touching hook files, and a poll after the interval converges again.
-// The run log records the changes but not the skip.
 func TestRunIfDueThrottlesAndLogs(t *testing.T) {
 	home := t.TempDir()
 	machineRoot := realTempDir(t)
@@ -203,7 +198,6 @@ func TestRunIfDueThrottlesAndLogs(t *testing.T) {
 		t.Fatal("a skipped run wrote a hook file")
 	}
 
-	// After the interval the next poll repairs the drift.
 	now = now.Add(10 * time.Minute)
 	var third bytes.Buffer
 	if err := newInstaller(&third).Run(t.Context()); err != nil {
@@ -226,8 +220,6 @@ func TestRunIfDueThrottlesAndLogs(t *testing.T) {
 	}
 }
 
-// TestRunWithNoUsersConvergesMachineOnly proves a machine nobody has signed in
-// to still gets its machine-wide hooks instead of failing outright.
 func TestRunWithNoUsersConvergesMachineOnly(t *testing.T) {
 	machineRoot := realTempDir(t)
 	var out bytes.Buffer
@@ -251,9 +243,6 @@ func TestRunWithNoUsersConvergesMachineOnly(t *testing.T) {
 	}
 }
 
-// TestRunIfDueRetriesFailedRunOnNextPoll proves a failed run records no state,
-// so the next poll retries instead of waiting out the interval, and that a
-// successful run then records it.
 func TestRunIfDueRetriesFailedRunOnNextPoll(t *testing.T) {
 	machineRoot := realTempDir(t)
 	runDir := t.TempDir()
@@ -296,8 +285,6 @@ func TestRunIfDueRetriesFailedRunOnNextPoll(t *testing.T) {
 	}
 }
 
-// TestUninstallClearsScheduleState proves hook-uninstall forgets the last run,
-// so the next scheduled run reinstalls immediately.
 func TestUninstallClearsScheduleState(t *testing.T) {
 	runDir := t.TempDir()
 	if err := saveScheduleState(runDir, scheduleInputs{}, time.Now()); err != nil {

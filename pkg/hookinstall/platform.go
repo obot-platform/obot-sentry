@@ -16,16 +16,13 @@ type TargetUser struct {
 	GID      int
 }
 
-// UserSet is every local account whose per-user files a run converges, plus
-// the accounts that look like real users but were passed over, with the
-// reason. A skipped account is reported, not fatal: one profile on an
-// unmounted volume must not hold back every other user on the machine.
+// UserSet is the accounts a run converges and those it skipped. A skipped
+// account is reported, not fatal, so one bad profile cannot hold back the rest.
 type UserSet struct {
 	Users   []*TargetUser
 	Skipped []SkippedUser
 }
 
-// SkippedUser is an account that was enumerated but not converged.
 type SkippedUser struct {
 	Name string
 	Err  error
@@ -52,16 +49,14 @@ func validateHomeDir(home string) error {
 // Apple reserves everything below 500 for system use.
 const minDarwinUserUID = 500
 
-// dsclAccount is one row of `dscl . -list /Users UniqueID`.
 type dsclAccount struct {
 	Name string
 	UID  string
 }
 
-// parseDsclUserList extracts the real-user rows from `dscl . -list /Users
-// UniqueID` output. System accounts are dropped here: by uid range, and by the
-// leading underscore macOS gives every daemon account. It lives in a portable
-// file so the parse is tested on every platform.
+// parseDsclUserList parses `dscl . -list /Users UniqueID`, dropping system
+// accounts by uid range and by the leading underscore macOS gives every daemon
+// account. It lives in a portable file so the parse is tested everywhere.
 func parseDsclUserList(out []byte) []dsclAccount {
 	var accounts []dsclAccount
 	scanner := bufio.NewScanner(bytes.NewReader(out))

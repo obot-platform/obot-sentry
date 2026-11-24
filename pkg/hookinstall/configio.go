@@ -109,20 +109,13 @@ func statConfigFile(root *os.Root, rel, absPath string) (bool, error) {
 	return true, nil
 }
 
-// maxConfigBytes caps how much of a config file is read. Real agent settings
-// are kilobytes; the cap keeps a user from exhausting the privileged process's
-// memory with a huge (or sparse) file in place of a hook file.
+// maxConfigBytes keeps a user from exhausting the privileged process's memory
+// with a huge file in place of a hook file; real agent settings are kilobytes.
 const maxConfigBytes = 4 << 20
 
-// readConfigFile reads the config at absPath through its root, reporting false
-// when the file or its root is absent. u is the owning user for a user-scoped
-// path and nil for a machine-scoped one.
-//
-// Every check is made on the opened descriptor, not the path, so a file swapped
-// in after a path check cannot slip through: the open does not block (a FIFO
-// planted in place of a hook file would otherwise hang the run for every
-// user), the descriptor must be a regular file, it must pass the platform's
-// ownership checks (see checkOpenedConfig), and at most maxConfigBytes are read.
+// readConfigFile reports false when the file or its root is absent. u is nil
+// for a machine-scoped path. Checks are made on the opened descriptor, not the
+// path, so a file swapped in after the path check cannot slip through.
 func readConfigFile(scope Scope, u *TargetUser, absPath string) ([]byte, bool, error) {
 	root, rel, err := openConfigRoot(scope, homeOf(u), absPath)
 	if err != nil {
@@ -166,13 +159,9 @@ func readConfigFile(scope Scope, u *TargetUser, absPath string) ([]byte, bool, e
 
 // commitConfigFile creates any missing parents, replaces absPath atomically, and
 // stamps per-user ownership. The destination is re-checked even though preflight
-// already read it, so a link planted since then is refused.
-//
-// Every change of ownership goes through a descriptor, never a path, so
-// nothing the user swaps in at a path can be handed to them: a directory this
-// commit creates is opened (refusing a symlink or non-directory) and given to
-// the user immediately after it is created, and the file is given to the user
-// on its temporary descriptor before it is renamed into place.
+// already read it, so a link planted since then is refused. Ownership changes
+// go through descriptors, never paths, so nothing the user swaps in at a path
+// can be handed to them.
 func commitConfigFile(scope Scope, u *TargetUser, absPath string, data []byte) error {
 	root, rel, err := openConfigRoot(scope, homeOf(u), absPath)
 	if err != nil {
@@ -216,11 +205,9 @@ func commitConfigFile(scope Scope, u *TargetUser, absPath string, data []byte) e
 	return nil
 }
 
-// makeConfigDir creates d under root if it is missing. A directory created for
-// a user-scoped destination is handed to the user at once, through a
-// descriptor; if that fails it is removed again, so a failed run never leaves
-// a root-owned directory in the user's home that a later run, finding it
-// already present, would not re-own.
+// makeConfigDir removes a directory it could not hand to the user, so a failed
+// run never leaves a root-owned directory in a home that later runs, finding it
+// present, would not re-own.
 func makeConfigDir(root *os.Root, scope Scope, u *TargetUser, d string, perm os.FileMode) error {
 	err := root.Mkdir(d, perm)
 	if errors.Is(err, fs.ErrExist) {
@@ -239,8 +226,7 @@ func makeConfigDir(root *os.Root, scope Scope, u *TargetUser, d string, perm os.
 	return nil
 }
 
-// dirChain expands "a/b/c" into ["a", "a/b", "a/b/c"]: the last element is the
-// directory to create.
+// dirChain expands "a/b/c" into ["a", "a/b", "a/b/c"].
 func dirChain(dir string) []string {
 	if dir == "." || dir == "" || dir == string(filepath.Separator) {
 		return nil
@@ -259,9 +245,7 @@ func dirChain(dir string) []string {
 }
 
 // writeAtomic replaces rel under root with data. absPath is the same file as
-// the user knows it, and is the only path its errors name. A non-nil owner
-// receives ownership of the new file through its descriptor, before it is
-// published.
+// the user knows it, and is the only path its errors name.
 func writeAtomic(root *os.Root, rel, absPath string, data []byte, perm os.FileMode, owner *TargetUser) error {
 	// The pid keeps concurrent installers off each other's in-flight write; the
 	// rename is atomic, so whichever commits last wins with identical content.
@@ -304,10 +288,9 @@ func withoutRootPath(err error) error {
 	return err
 }
 
-// writeAndClose writes data, forces perm past the process umask, hands the file
-// to owner (when set), and flushes so the rename can only publish complete
-// content. The chmod, chown, and sync are all on the descriptor, so none is
-// exposed to a path race.
+// writeAndClose forces perm past the process umask, and syncs so the rename can
+// only publish complete content. Everything is on the descriptor, so none of
+// it is exposed to a path race.
 func writeAndClose(f *os.File, data []byte, perm os.FileMode, owner *TargetUser) (err error) {
 	defer func() {
 		if cerr := f.Close(); err == nil {

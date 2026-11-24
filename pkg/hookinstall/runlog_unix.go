@@ -8,28 +8,20 @@ import (
 	"syscall"
 )
 
-// darwinRunDirParent holds the run directory. It is root-owned and 0755: the
-// package creates it, and /Library/Application Support admits only root. The
-// machine data directory beneath it (obot/obot-sentry) is deliberately NOT
-// used: the package makes it mode 1777 so any user can create the shared
-// device identity, so any user could also plant or race the run directory
-// there.
+// darwinRunDirParent is root-owned 0755 (postinstall creates it). The machine
+// data directory beneath it, obot/obot-sentry, is mode 1777 and must not hold
+// the run directory.
 const darwinRunDirParent = "/Library/Application Support/obot"
 
-// runDirLocation is the run directory and its parent.
 func runDirLocation() (parent, dir string, err error) {
 	return darwinRunDirParent, darwinRunDirParent + "/obot-sentry-hook-install", nil
 }
 
-// makeRunDir creates the run directory private to its creator (root).
 func makeRunDir(dir string) error { return os.Mkdir(dir, 0o700) }
 
-// secureRunDir verifies the parent is a root-owned directory no one else can
-// write, then makes the run directory root-owned and private to root. The run
-// directory is opened without following a symlink and its ownership and mode
-// are changed through that descriptor, so nothing swapped in at the path can
-// redirect the change. Ownership checks apply only when running as root, which
-// every real hook-install run is; tests run unprivileged.
+// secureRunDir changes ownership and mode through a descriptor opened without
+// following symlinks, so nothing swapped in at the path can redirect it.
+// Ownership checks apply only when running as root; tests run unprivileged.
 func secureRunDir(parent, dir string) error {
 	pinfo, err := os.Lstat(parent)
 	if err != nil {
@@ -76,8 +68,7 @@ func secureRunDir(parent, dir string) error {
 	return f.Chmod(0o700)
 }
 
-// checkRunFileOwner refuses a run-directory file that a privileged run did not
-// create. An unprivileged run (tests) has no such guarantee to check.
+// checkRunFileOwner has nothing to check in an unprivileged run (tests).
 func checkRunFileOwner(path string, info os.FileInfo) error {
 	if os.Geteuid() != 0 {
 		return nil
@@ -92,5 +83,4 @@ func checkRunFileOwner(path string, info os.FileInfo) error {
 	return nil
 }
 
-// claimRunFile is a no-op outside Windows: files root creates are root's.
 func claimRunFile(string) {}

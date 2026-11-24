@@ -9,9 +9,8 @@ import (
 	"testing"
 )
 
-// TestSecureRunDirNamesWhatItRefuses proves a run directory replaced by a
-// symlink or a regular file is refused with an error that says which, rather
-// than the "not a directory" the no-follow open reports for both.
+// TestSecureRunDirNamesWhatItRefuses: the no-follow open reports "not a
+// directory" for both a symlink and a regular file.
 func TestSecureRunDirNamesWhatItRefuses(t *testing.T) {
 	parent := t.TempDir()
 	target := t.TempDir()

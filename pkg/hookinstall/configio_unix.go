@@ -8,22 +8,17 @@ import (
 	"syscall"
 )
 
-// openNonblock keeps opening a FIFO from blocking: a user who swaps a named
-// pipe in for a hook file between the path check and the open must not be able
-// to hang the privileged run. The descriptor is then rejected as non-regular.
+// openNonblock keeps a FIFO swapped in for a hook file from hanging the open;
+// the descriptor is then rejected as non-regular.
 const openNonblock = syscall.O_NONBLOCK
 
 func secureMachineConfig(string) error { return nil }
 
 func secureMachineConfigDir(string) error { return nil }
 
-// checkOpenedConfig refuses a user-scoped file that a user could have used to
-// make root read (and then rewrite, owned by that user) a file they cannot
-// read: one with another hard link — a link to a root-only file — or one owned
-// by anyone other than the user. Root-owned files are refused too: a user can
-// rename a root-owned, root-only file left in their home (by a sudo'd tool,
-// say) into a hook path. Machine-scoped files live in root-owned directories
-// and need no such check.
+// checkOpenedConfig refuses user files a user could use to make root read, and
+// rewrite as theirs, a file they cannot read: a hard link to a root-only file,
+// or a root-owned file (from a sudo'd tool, say) renamed into a hook path.
 func checkOpenedConfig(scope Scope, u *TargetUser, info os.FileInfo, absPath string, _ *os.File) error {
 	if scope != ScopeUser || u == nil {
 		return nil
@@ -41,16 +36,12 @@ func checkOpenedConfig(scope Scope, u *TargetUser, info os.FileInfo, absPath str
 	return nil
 }
 
-// fchownToUser gives a file being written for u to u, through its descriptor.
 func fchownToUser(f *os.File, u *TargetUser) error {
 	return f.Chown(u.UID, u.GID)
 }
 
-// chownCreatedDir gives a directory just created under the user's home to the
-// user through a descriptor. The open refuses a symlink (O_NOFOLLOW) and
-// anything that is not a directory (O_DIRECTORY), so if the user renamed the
-// new directory away and planted a link to some other file in its place, that
-// file is not touched.
+// chownCreatedDir opens with O_NOFOLLOW|O_DIRECTORY so that if the user swapped
+// a link in for the new directory, the link's target is not handed to them.
 func chownCreatedDir(root *os.Root, d string, u *TargetUser) error {
 	f, err := root.OpenFile(d, os.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW, 0)
 	if err != nil {

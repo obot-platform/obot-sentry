@@ -10,13 +10,11 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// openNonblock has no Windows equivalent and needs none: NTFS has no FIFOs.
+// openNonblock is unneeded: NTFS has no FIFOs.
 const openNonblock = 0
 
-// checkOpenedConfig refuses a user-scoped file with more than one hard link,
-// checked on the opened handle. A user who links a file they cannot read into
-// their profile must not get SYSTEM to read it and write its contents back
-// into a file the user owns.
+// checkOpenedConfig refuses hard links, so a user cannot get SYSTEM to read a
+// file they cannot and write its contents back into one they own.
 func checkOpenedConfig(scope Scope, u *TargetUser, _ os.FileInfo, absPath string, f *os.File) error {
 	if scope != ScopeUser || u == nil {
 		return nil
@@ -31,12 +29,10 @@ func checkOpenedConfig(scope Scope, u *TargetUser, _ os.FileInfo, absPath string
 	return nil
 }
 
-// fchownToUser is a no-op on Windows: new files inherit their DACL from the
-// parent, which in a profile grants the user full control.
+// fchownToUser and chownCreatedDir are no-ops: new files and directories
+// inherit the profile's DACL, which grants the user full control.
 func fchownToUser(*os.File, *TargetUser) error { return nil }
 
-// chownCreatedDir is a no-op on Windows: new directories inherit their DACL
-// from the profile, which grants the user full control.
 func chownCreatedDir(*os.Root, string, *TargetUser) error { return nil }
 
 // secureMachineConfigDir protects the directory that controls deletion and

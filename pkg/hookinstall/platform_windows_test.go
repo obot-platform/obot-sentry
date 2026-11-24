@@ -35,9 +35,8 @@ func TestTrustedExecutableOwner(t *testing.T) {
 	}
 }
 
-// TestResolveTargetUsersReadsProfileList runs the real ProfileList enumeration
-// (read-only, no privilege needed). Every machine that can run the tests has
-// at least the profile of the account running them.
+// TestResolveTargetUsersReadsProfileList reads the real ProfileList, which on
+// any machine running the tests holds at least the running account's profile.
 func TestResolveTargetUsersReadsProfileList(t *testing.T) {
 	set, err := resolveTargetUsers()
 	if err != nil {
@@ -63,8 +62,6 @@ func TestBootTimeIsInThePast(t *testing.T) {
 	}
 }
 
-// TestOpenDirNoReparseRefusesLinks proves the run directory is opened without
-// following a symlink or junction in place of it.
 func TestOpenDirNoReparseRefusesLinks(t *testing.T) {
 	dir := t.TempDir()
 	h, err := openDirNoReparse(dir, windows.READ_CONTROL)
@@ -83,17 +80,14 @@ func TestOpenDirNoReparseRefusesLinks(t *testing.T) {
 	}
 }
 
-// TestMakeRunDirIsBornProtected proves the run directory is created with its
-// protected SYSTEM/Administrators-only ACL in the same call, never inheriting
-// the parent's (Users-readable) ACL even briefly.
 func TestMakeRunDirIsBornProtected(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "hook-install")
 	if err := makeRunDir(dir); err != nil {
 		t.Fatalf("makeRunDir: %v", err)
 	}
 	t.Cleanup(func() {
-		// Re-open the DACL to inheritance so the temp dir can be removed by an
-		// unprivileged test run (the creator, as owner, may change it).
+		// Re-open the DACL to inheritance so an unprivileged test run can remove
+		// the temp dir; as owner, the creator may change it.
 		_ = windows.SetNamedSecurityInfo(dir, windows.SE_FILE_OBJECT,
 			windows.DACL_SECURITY_INFORMATION|windows.UNPROTECTED_DACL_SECURITY_INFORMATION, nil, nil, nil, nil)
 	})

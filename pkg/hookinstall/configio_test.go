@@ -356,9 +356,6 @@ func TestReadConfigFileRefusesOversizedFile(t *testing.T) {
 	}
 }
 
-// TestReadConfigFileRefusesHardLinkedUserFile covers a user linking a file they
-// cannot read into their home: the privileged run must not read it and write
-// its contents back into a file the user owns.
 func TestReadConfigFileRefusesHardLinkedUserFile(t *testing.T) {
 	home := t.TempDir()
 	target := filepath.Join(t.TempDir(), "secret.json")

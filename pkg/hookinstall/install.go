@@ -45,8 +45,8 @@ type Installer struct {
 	// commands; defaults to the platform's MDM package path +
 	// validateExecutable.
 	ResolveExe func() (string, error)
-	// ResolveUsers lists every local user whose per-user files are converged,
-	// signed in or not; defaults to the platform resolver.
+	// ResolveUsers lists every local user, signed in or not; defaults to the
+	// platform resolver.
 	ResolveUsers func() (UserSet, error)
 	// ProvisionIdentity establishes the shared machine device identity read by
 	// per-user hook executions and returns the resolved machine directory;
@@ -56,9 +56,8 @@ type Installer struct {
 	// to Destinations. Tests inject a set rooted under a temporary directory so
 	// the anchored commit can be exercised without writing to real system paths.
 	ResolveDestinations func(goos string) []Destination
-	// RunDir resolves the directory holding the run log and the schedule state
-	// (see runlog.go and schedule.go). Nil disables both, which is what tests
-	// that do not exercise them leave it as.
+	// RunDir resolves the directory holding the run log and schedule state; nil
+	// disables both.
 	RunDir func() (string, error)
 	// Enforce installs the pre-tool enforcement hooks in addition to the
 	// post-tool audit hooks. It is resolved by the command layer from the
@@ -67,14 +66,9 @@ type Installer struct {
 	// Uninstall removes every marker-owned hook instead of installing desired
 	// hooks. Supporting settings without ownership markers remain unchanged.
 	Uninstall bool
-	// IfDue converges only when the run is due under Interval (see
-	// decideDue); otherwise Run returns without touching any hook file. It is
-	// how the OS scheduler's frequent poll is throttled to the configured
-	// cadence.
-	IfDue bool
-	// Interval is the configured time between scheduled convergences.
+	// IfDue skips the run unless decideDue says it is due.
+	IfDue    bool
 	Interval time.Duration
-	// Now and BootTime default to the real clock and the platform boot time.
 	Now      func() time.Time
 	BootTime func() (time.Time, error)
 	// Out receives operator-facing output; defaults to os.Stdout.
@@ -142,16 +136,13 @@ type Plan struct {
 	Enforce      bool
 	Uninstall    bool
 
-	// read reads one destination's config. converge sets it from readConfig
-	// on the calling goroutine, so a unit abandoned past its deadline, still
-	// running in the background, never reads the package variable.
+	// read is copied from readConfig on the calling goroutine, so a unit
+	// abandoned past its deadline never reads the package variable.
 	read configReader
 }
 
-// configReader is the signature of readConfigFile.
 type configReader func(scope Scope, u *TargetUser, absPath string) ([]byte, bool, error)
 
-// reader returns the plan's config reader, or readConfigFile when none is set.
 func (p Plan) reader() configReader {
 	if p.read != nil {
 		return p.read
@@ -197,9 +188,8 @@ func (i *Installer) Run(ctx context.Context) error {
 	return err
 }
 
-// openRunDir resolves the run directory and opens the run log in it. Neither is
-// required for convergence: a failure is reported to the operator and the run
-// continues with logging disabled and no schedule state.
+// openRunDir resolves the run directory and opens the run log. Neither is
+// required: on failure the run continues unlogged and without schedule state.
 func (i *Installer) openRunDir(out io.Writer) (string, *slog.Logger, func()) {
 	if i.RunDir == nil {
 		return "", discardLogger(), func() {}
@@ -228,9 +218,8 @@ func (i *Installer) run(ctx context.Context, goos string, out io.Writer, log *sl
 	}
 
 	if i.Uninstall && runDir != "" {
-		// Hooks are gone, so the next scheduled run must not trust a record of
-		// having just converged them — for example after a reinstall of the
-		// same version, which would otherwise wait out the whole interval.
+		// Otherwise a same-version reinstall would wait out the interval before
+		// reinstalling the hooks removed here.
 		if err := removeScheduleState(runDir); err != nil {
 			log.Warn("clearing schedule state failed", "err", logErr(err))
 		}
@@ -244,9 +233,8 @@ func (i *Installer) run(ctx context.Context, goos string, out io.Writer, log *sl
 			return nil
 		}
 		log.Info("hook convergence due", "reason", decision.Reason)
-		// Record only a run that fully converged. A failed run leaves the
-		// previous record in place, so it is retried on the next poll rather
-		// than after a whole interval; the log's size cap bounds the repeats.
+		// Record only a run that fully converged, so a failed run is retried on
+		// the next poll rather than after a whole interval.
 		defer func() {
 			if err != nil || runDir == "" {
 				return
@@ -321,8 +309,8 @@ func (i *Installer) run(ctx context.Context, goos string, out io.Writer, log *sl
 	return nil
 }
 
-// due decides whether a scheduled run should converge, from the state recorded
-// in runDir. Without a run directory there is no state, so every poll is due.
+// due reports whether a scheduled run should converge. Without a run directory
+// there is no state, so every poll is due.
 func (i *Installer) due(runDir string, inputs scheduleInputs, now time.Time, log *slog.Logger) dueDecision {
 	var state *scheduleState
 	if runDir != "" {
@@ -341,9 +329,8 @@ func (i *Installer) due(runDir string, inputs scheduleInputs, now time.Time, log
 	return decideDue(state, inputs, i.Interval, now, boot)
 }
 
-// logResults writes one line per destination that changed or failed, and a
-// closing line with the totals. Unchanged destinations are counted, not listed,
-// so a steady-state run adds two lines to the log.
+// logResults logs each destination that changed or failed; unchanged ones are
+// only counted, to keep steady-state runs to a few lines.
 func logResults(log *slog.Logger, results []Result, startedAt time.Time) {
 	var changed, unchanged, failed int
 	for _, r := range results {
@@ -403,26 +390,18 @@ type plannedChange struct {
 	err      error
 }
 
-// readConfig is readConfigFile; tests replace it to simulate a read that stalls.
-// It is read only by converge, which copies it into the Plan before starting
-// any unit.
+// readConfig is a seam tests replace to simulate a stalled read.
 var readConfig configReader = readConfigFile
 
-// unitTimeout bounds one unit of convergence — the machine-scoped destinations,
-// or one user's — from first read to last write. Reads are non-blocking and
-// size-capped, but an open can still stall: a home on a dead network mount, or
-// on Windows a user holding an opportunistic lock on their own hook file, which
-// blocks SYSTEM's open until the lock is released. When the deadline passes,
-// the unit's rows are reported failed, its context is cancelled so it starts no
-// further writes, and the run moves on to the next unit.
+// unitTimeout bounds one unit (the machine scope, or one user) from first read
+// to last write. Reads don't block on FIFOs and are size-capped, but an open
+// can still stall, for example on a home whose network volume is unreachable.
 var unitTimeout = 2 * time.Minute
 
-// converge plans and commits every destination, one unit at a time: the
-// machine-scoped destinations first, then each user's. A machine-scoped
-// preflight failure aborts the run before any write, as before. Committing the
-// machine scope before reading any user file means no user's files — however
-// slow, large, or malformed — can hold back machine policy, and each user is
-// planned and committed independently of the others.
+// converge commits the machine-scoped destinations before reading any user's
+// files, then each user independently, so no user's files can hold back
+// machine policy or another user. A machine-scope preflight failure aborts the
+// run before any write.
 func converge(ctx context.Context, plan Plan) ([]Result, error) {
 	if plan.read == nil {
 		plan.read = readConfig
@@ -448,8 +427,7 @@ func converge(ctx context.Context, plan Plan) ([]Result, error) {
 		userPlan.Destinations, userPlan.Users = perUser, []*TargetUser{u}
 		userResults, _, err := runUnit(ctx, userPlan, u, machineFailed)
 		if err != nil {
-			// Only a cancelled run gets here; mark the rest of this user and
-			// carry on so every remaining row still reports the cancellation.
+			// Only a cancelled run gets here.
 			userResults = failedRows(perUser, u, err)
 		}
 		results = append(results, userResults...)
@@ -458,13 +436,9 @@ func converge(ctx context.Context, plan Plan) ([]Result, error) {
 }
 
 // runUnit plans and commits one unit (u is nil for the machine scope) under
-// unitTimeout. priorFailed holds the machine scope's live failures for
-// retired-destination gating; it is copied, never written, so an abandoned
-// unit still running in the background shares no state with later units.
-//
-// It returns the unit's results and live failures. A machine-scope preflight
-// failure, or a cancelled ctx, is returned as an error. A timeout is not: the
-// unit's destinations are reported failed with a timeout error.
+// unitTimeout. A timeout is reported as failed rows rather than an error, and
+// the unit's goroutine is abandoned with its context cancelled. priorFailed is
+// copied, never written, so an abandoned unit shares no state with later ones.
 func runUnit(ctx context.Context, unitPlan Plan, u *TargetUser, priorFailed map[liveKey]bool) ([]Result, map[liveKey]bool, error) {
 	unitCtx, cancel := context.WithTimeout(ctx, unitTimeout)
 	defer cancel()
@@ -504,9 +478,7 @@ func runUnit(ctx context.Context, unitPlan Plan, u *TargetUser, priorFailed map[
 			return nil, nil, err
 		}
 		if errors.Is(o.err, context.DeadlineExceeded) {
-			// The deadline passed between two of the unit's own context checks;
-			// it is the same timeout, and must gate retired destinations the same
-			// way.
+			// The unit saw its own deadline before the select above did.
 			rows, failed := timedOutUnit(unitPlan.Destinations, u, priorFailed)
 			return rows, failed, nil
 		}
@@ -515,9 +487,8 @@ func runUnit(ctx context.Context, unitPlan Plan, u *TargetUser, priorFailed map[
 	return o.results, o.failed, nil
 }
 
-// timedOutUnit reports every destination of a unit that ran past unitTimeout
-// as failed, and marks each as a live failure so retired destinations waiting
-// on it are held back.
+// timedOutUnit marks the unit's destinations as live failures too, so retired
+// destinations waiting on them are held back.
 func timedOutUnit(dests []Destination, u *TargetUser, priorFailed map[liveKey]bool) ([]Result, map[liveKey]bool) {
 	who := "machine-wide hooks"
 	if u != nil {
@@ -531,7 +502,6 @@ func timedOutUnit(dests []Destination, u *TargetUser, priorFailed map[liveKey]bo
 	return failedRows(dests, u, timeout), failed
 }
 
-// failedRows reports every destination of a unit as failed with err.
 func failedRows(dests []Destination, u *TargetUser, err error) []Result {
 	rows := make([]Result, 0, len(dests))
 	for _, d := range dests {
@@ -541,13 +511,9 @@ func failedRows(dests []Destination, u *TargetUser, err error) []Result {
 	return rows
 }
 
-// buildChanges resolves, reads, and merges every destination in memory: the
-// machine-scoped destinations once, then the user-scoped destinations for each
-// user. It returns an error (aborting the whole run before any write) when a
-// machine destination cannot be resolved, read safely, or merged, or when ctx
-// is cancelled. A user destination that fails the same way marks every
-// destination of that user failed, leaving the user's files untouched, so one
-// user's malformed settings cannot hold back the machine or any other user.
+// buildChanges reads and merges every destination in memory. A machine
+// destination that fails, or a cancelled ctx, returns an error; a user
+// destination that fails marks all of that user's destinations failed instead.
 func buildChanges(ctx context.Context, plan Plan) ([]plannedChange, error) {
 	var machine, perUser []Destination
 	for _, d := range plan.Destinations {
@@ -620,8 +586,8 @@ func planDestinations(ctx context.Context, plan Plan, dests []Destination, u *Ta
 	return changes, nil
 }
 
-// liveKey identifies the live destinations a retired one waits on: an agent's
-// machine-scoped destinations (home "") or one user's.
+// liveKey identifies an agent's live destinations: machine-scoped (home "") or
+// one user's.
 type liveKey struct {
 	agent Agent
 	home  string
@@ -642,9 +608,8 @@ func commitChanges(ctx context.Context, plan Plan, changes []plannedChange) []Re
 	return commitChangesWith(ctx, plan, changes, map[liveKey]bool{})
 }
 
-// commitChangesWith is commitChanges with the live failures of an earlier
-// commit (the machine scope, when users are committed one at a time) already
-// in liveFailed. It adds this commit's live failures to the map.
+// commitChangesWith is commitChanges seeded with an earlier unit's live
+// failures; it adds this unit's to liveFailed.
 func commitChangesWith(ctx context.Context, plan Plan, changes []plannedChange, liveFailed map[liveKey]bool) []Result {
 	results := make([]Result, len(changes))
 	for i, c := range changes {
@@ -687,8 +652,8 @@ func commitChange(ctx context.Context, read configReader, c plannedChange) Resul
 		if exists != c.existed || !bytes.Equal(current, c.original) {
 			return failedResult(c, errors.New("config changed after preflight; refusing to overwrite concurrent edits"))
 		}
-		// The re-read can stall past the unit's deadline; once the unit has been
-		// abandoned and reported failed, it must not write.
+		// The re-read may have stalled past the deadline; an abandoned unit
+		// must not write.
 		if err := ctx.Err(); err != nil {
 			return failedResult(c, err)
 		}
@@ -818,13 +783,10 @@ func resultDetail(r Result) string {
 	return strings.Join(details, ", ")
 }
 
-// maxLoggedErrBytes caps an error's text in the run log. Errors can quote
-// content from a user's own config file — a JSON key, for example — and a
-// user must not be able to flood the shared log, and rotate other runs'
-// history out of it, by planting a megabytes-long key.
+// maxLoggedErrBytes caps logged error text. Errors can quote a user's own
+// config (a JSON key, say), and a user must not be able to flood the log.
 const maxLoggedErrBytes = 512
 
-// logErr renders err for the run log, truncated to maxLoggedErrBytes.
 func logErr(err error) string {
 	if err == nil {
 		return ""

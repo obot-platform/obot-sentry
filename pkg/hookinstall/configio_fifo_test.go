@@ -9,8 +9,6 @@ import (
 	"testing"
 )
 
-// TestReadConfigFileRefusesFIFOWithoutBlocking proves a named pipe in place of a
-// hook file is refused instead of hanging the privileged run.
 func TestReadConfigFileRefusesFIFOWithoutBlocking(t *testing.T) {
 	home := t.TempDir()
 	abs := filepath.Join(home, "settings.json")
