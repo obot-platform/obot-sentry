@@ -212,9 +212,16 @@ func (i *Installer) run(ctx context.Context, goos string, out io.Writer, log *sl
 	if resolveUsers == nil {
 		resolveUsers = resolveTargetUsers
 	}
-	users, err := resolveUsers()
-	if err != nil {
-		return err
+	// A failed listing must not hold back machine policy: converge it with no
+	// users, then still fail the run so it is retried and not recorded.
+	users, listErr := resolveUsers()
+	if listErr != nil {
+		users = UserSet{}
+		log.Error("listing users failed; converging machine-wide hooks only", "err", logErr(listErr))
+		_, _ = fmt.Fprintf(out, "warning: listing users failed; converging machine-wide hooks only: %v\n", listErr)
+		defer func() {
+			err = errors.Join(fmt.Errorf("listing users: %w", listErr), err)
+		}()
 	}
 
 	if i.Uninstall && runDir != "" {
@@ -236,7 +243,7 @@ func (i *Installer) run(ctx context.Context, goos string, out io.Writer, log *sl
 		// Record only a run that fully converged, so a failed run is retried on
 		// the next poll rather than after a whole interval.
 		defer func() {
-			if err != nil || runDir == "" {
+			if err != nil || listErr != nil || runDir == "" {
 				return
 			}
 			if saveErr := saveScheduleState(runDir, inputs, startedAt); saveErr != nil {
@@ -513,7 +520,7 @@ func failedRows(dests []Destination, u *TargetUser, err error) []Result {
 
 // buildChanges reads and merges every destination in memory. A machine
 // destination that fails, or a cancelled ctx, returns an error; a user
-// destination that fails marks all of that user's destinations failed instead.
+// destination that fails gets a failed row of its own.
 func buildChanges(ctx context.Context, plan Plan) ([]plannedChange, error) {
 	var machine, perUser []Destination
 	for _, d := range plan.Destinations {
@@ -529,18 +536,21 @@ func buildChanges(ctx context.Context, plan Plan) ([]plannedChange, error) {
 		return nil, err
 	}
 	for _, u := range plan.Users {
-		userChanges, err := planDestinations(ctx, plan, perUser, u)
-		if err != nil {
-			if ctxErr := ctx.Err(); ctxErr != nil {
-				return nil, ctxErr
-			}
-			userChanges = make([]plannedChange, 0, len(perUser))
-			for _, d := range perUser {
+		// Each of a user's destinations is planned on its own: one file the
+		// user can make unreadable or refused (a hard link, a malformed
+		// settings.json) must not stop their other hooks, the Kiro
+		// enforcement hook included, from being installed or repaired.
+		for _, d := range perUser {
+			c, err := planDestination(ctx, plan, d, u)
+			if err != nil {
+				if ctxErr := ctx.Err(); ctxErr != nil {
+					return nil, ctxErr
+				}
 				abs, _ := d.ResolvePath(u)
-				userChanges = append(userChanges, plannedChange{dest: d, user: u, absPath: abs, err: err})
+				c = plannedChange{dest: d, user: u, absPath: abs, err: err}
 			}
+			changes = append(changes, c)
 		}
-		changes = append(changes, userChanges...)
 	}
 	return changes, nil
 }
@@ -550,40 +560,48 @@ func buildChanges(ctx context.Context, plan Plan) ([]plannedChange, error) {
 func planDestinations(ctx context.Context, plan Plan, dests []Destination, u *TargetUser) ([]plannedChange, error) {
 	changes := make([]plannedChange, 0, len(dests))
 	for _, d := range dests {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		abs, err := d.ResolvePath(u)
+		c, err := planDestination(ctx, plan, d, u)
 		if err != nil {
 			return nil, err
 		}
-		existing, existed, err := plan.reader()(d.Scope, u, abs)
-		if err != nil {
-			return nil, fmt.Errorf("%s (%s): %w", d.Label, abs, err)
-		}
-		var outcome mergeOutcome
-		if plan.Uninstall || d.Retired {
-			outcome, err = removeConfig(d, existing)
-		} else {
-			outcome, err = mergeConfig(d, existing, plan.Executable, plan.GOOS, plan.Enforce)
-		}
-		if err != nil {
-			return nil, fmt.Errorf("%s (%s): %w", d.Label, abs, err)
-		}
-		changes = append(changes, plannedChange{
-			dest:     d,
-			user:     u,
-			absPath:  abs,
-			data:     outcome.data,
-			original: slices.Clone(existing),
-			existed:  existed,
-			status:   outcome.status,
-			dupes:    outcome.dupes,
-			removed:  outcome.removed,
-			write:    outcome.write,
-		})
+		changes = append(changes, c)
 	}
 	return changes, nil
+}
+
+func planDestination(ctx context.Context, plan Plan, d Destination, u *TargetUser) (plannedChange, error) {
+	if err := ctx.Err(); err != nil {
+		return plannedChange{}, err
+	}
+	abs, err := d.ResolvePath(u)
+	if err != nil {
+		return plannedChange{}, err
+	}
+	existing, existed, err := plan.reader()(d.Scope, u, abs)
+	if err != nil {
+		return plannedChange{}, fmt.Errorf("%s (%s): %w", d.Label, abs, err)
+	}
+	var outcome mergeOutcome
+	if plan.Uninstall || d.Retired {
+		outcome, err = removeConfig(d, existing)
+	} else {
+		outcome, err = mergeConfig(d, existing, plan.Executable, plan.GOOS, plan.Enforce)
+	}
+	if err != nil {
+		return plannedChange{}, fmt.Errorf("%s (%s): %w", d.Label, abs, err)
+	}
+	return plannedChange{
+		dest:     d,
+		user:     u,
+		absPath:  abs,
+		data:     outcome.data,
+		original: slices.Clone(existing),
+		existed:  existed,
+		status:   outcome.status,
+		dupes:    outcome.dupes,
+		removed:  outcome.removed,
+		write:    outcome.write,
+	}, nil
 }
 
 // liveKey identifies an agent's live destinations: machine-scoped (home "") or

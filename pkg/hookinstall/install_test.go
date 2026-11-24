@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/obot-platform/obot-sentry/pkg/localagent"
 )
@@ -124,23 +125,32 @@ func TestRunResolveExeFailure(t *testing.T) {
 	}
 }
 
-func TestRunUserResolutionFailureShortCircuits(t *testing.T) {
-	wantErr := errors.New("no active console user")
+func TestRunUserListingFailureStillConvergesMachinePolicy(t *testing.T) {
+	wantErr := errors.New("dscl failed")
+	machineRoot := realTempDir(t)
+	runDir := t.TempDir()
 	var out bytes.Buffer
 	inst := &Installer{
-		GOOS:              "darwin",
-		Privilege:         func() error { return nil },
-		ResolveExe:        func() (string, error) { return macExe, nil },
-		ResolveUsers:      func() (UserSet, error) { return UserSet{}, wantErr },
-		ProvisionIdentity: failIfCalledProvision(t),
-		Out:               &out,
+		GOOS:                "darwin",
+		Privilege:           func() error { return nil },
+		ResolveExe:          func() (string, error) { return macExe, nil },
+		ResolveUsers:        func() (UserSet, error) { return UserSet{}, wantErr },
+		ProvisionIdentity:   func() (string, error) { return "/id", nil },
+		ResolveDestinations: tempDestinations(machineRoot),
+		RunDir:              func() (string, error) { return runDir, nil },
+		IfDue:               true,
+		Interval:            15 * time.Minute,
+		Out:                 &out,
 	}
 	err := inst.Run(context.Background())
 	if !errors.Is(err, wantErr) {
-		t.Fatalf("expected user-resolution error, got %v", err)
+		t.Fatalf("expected the listing error, got %v", err)
 	}
-	if out.Len() != 0 {
-		t.Fatalf("expected no output on user-resolution failure, got %q", out.String())
+	if _, statErr := os.Stat(filepath.Join(machineRoot, "Cursor/hooks.json")); statErr != nil {
+		t.Fatalf("machine policy not converged after a listing failure: %v\n%s", statErr, out.String())
+	}
+	if st, _ := loadScheduleState(runDir); st != nil {
+		t.Fatalf("a run whose user listing failed recorded state: %+v", st)
 	}
 }
 
@@ -309,7 +319,7 @@ func TestRunAbortsOnMalformedMachineConfigBeforeWriting(t *testing.T) {
 	}
 }
 
-func TestRunHoldsBackOnlyTheUserWithMalformedConfig(t *testing.T) {
+func TestRunFailsOnlyTheMalformedUserDestination(t *testing.T) {
 	aliceHome, bobHome := t.TempDir(), t.TempDir()
 	machineRoot := realTempDir(t)
 	alice := &TargetUser{Username: "alice", HomeDir: aliceHome, UID: os.Getuid(), GID: os.Getgid()}
@@ -346,11 +356,24 @@ func TestRunHoldsBackOnlyTheUserWithMalformedConfig(t *testing.T) {
 			t.Fatalf("%s was not converged despite only alice's config being malformed: %v", path, err)
 		}
 	}
-	if _, err := os.Stat(filepath.Join(aliceHome, ".copilot/hooks/obot-sentry.json")); err == nil {
-		t.Fatal("alice's files were written despite her preflight failure")
+	// Alice's other hooks still converge; only her malformed file fails.
+	if _, err := os.Stat(filepath.Join(aliceHome, ".copilot/hooks/obot-sentry.json")); err != nil {
+		t.Fatalf("alice's other hooks were held back by one malformed file: %v\n%s", err, out.String())
 	}
-	if !strings.Contains(out.String(), "failed") || !strings.Contains(out.String(), "bob") {
-		t.Fatalf("summary should report alice's failure and bob's rows:\n%s", out.String())
+	if got, _ := os.ReadFile(claudePath); string(got) != `{"hooks": ` {
+		t.Fatalf("alice's malformed file was modified: %q", got)
+	}
+	failedRows := 0
+	for line := range strings.SplitSeq(out.String(), "\n") {
+		if strings.Contains(line, " failed ") {
+			failedRows++
+			if !strings.Contains(line, "Claude Code (user settings)") || !strings.Contains(line, "alice") {
+				t.Fatalf("unexpected failed row: %s", line)
+			}
+		}
+	}
+	if failedRows != 1 {
+		t.Fatalf("want exactly alice's malformed destination failed, got %d failed rows:\n%s", failedRows, out.String())
 	}
 }
 

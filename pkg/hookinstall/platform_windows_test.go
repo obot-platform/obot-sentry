@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 	"unsafe"
@@ -45,10 +46,17 @@ func TestResolveTargetUsersReadsProfileList(t *testing.T) {
 	if len(set.Users) == 0 {
 		t.Fatalf("no user profiles resolved; skipped: %+v", set.Skipped)
 	}
+	named := false
 	for _, u := range set.Users {
 		if u.Username == "" || !filepath.IsAbs(u.HomeDir) {
 			t.Errorf("resolved user %+v lacks a name or an absolute home", u)
 		}
+		if !strings.HasPrefix(u.Username, "S-1-") {
+			named = true
+		}
+	}
+	if !named {
+		t.Errorf("no profile resolved to an account name; got %+v", set.Users)
 	}
 }
 

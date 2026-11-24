@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"time"
 
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
@@ -102,7 +103,43 @@ func resolveTargetUsers() (UserSet, error) {
 			return profileUser(name)
 		}})
 	}
-	return resolveCandidates(cands, userResolveTimeout), nil
+	set := resolveCandidates(cands, userResolveTimeout)
+	nameAccounts(set.Users, accountNameTimeout)
+	return set, nil
+}
+
+// accountNameTimeout bounds the display-name lookups. LookupAccountSid can
+// block on the network for a domain account when no domain controller is
+// reachable; the name is cosmetic, so it must not cost the user their hooks.
+const accountNameTimeout = 5 * time.Second
+
+// nameAccounts replaces each user's SID-string Username with the account name,
+// keeping the SID for any lookup that has not finished by the deadline.
+func nameAccounts(users []*TargetUser, timeout time.Duration) {
+	type named struct {
+		i    int
+		name string
+	}
+	done := make(chan named, len(users))
+	pending := 0
+	for i, u := range users {
+		sid, err := windows.StringToSid(u.Username)
+		if err != nil {
+			continue
+		}
+		pending++
+		go func() { done <- named{i, accountName(sid)} }()
+	}
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+	for range pending {
+		select {
+		case n := <-done:
+			users[n.i].Username = n.name
+		case <-deadline.C:
+			return
+		}
+	}
 }
 
 // profileUser opens its own registry key, so a lookup abandoned past the
@@ -128,7 +165,9 @@ func profileUser(sidString string) (*TargetUser, error) {
 	if err := validateHomeDir(home); err != nil {
 		return nil, err
 	}
-	return &TargetUser{Username: accountName(sid), HomeDir: home}, nil
+	// Username is the SID string until nameAccounts resolves it, outside the
+	// deadline that decides whether the user is converged.
+	return &TargetUser{Username: sid.String(), HomeDir: home}, nil
 }
 
 // accountName renders sid for operator-facing output. The name is never used to
