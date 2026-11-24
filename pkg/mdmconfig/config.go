@@ -17,6 +17,7 @@ const (
 	KeyServerURL           = "ServerURL"
 	KeyEnrollmentKey       = "EnrollmentKey"
 	KeyScanIntervalMinutes = "ScanIntervalMinutes"
+	KeyHookIntervalMinutes = "HookIntervalMinutes"
 	KeyEnforcementEnabled  = "EnforcementEnabled"
 )
 
@@ -26,6 +27,15 @@ const (
 	defaultScanIntervalMinutes = 60
 	minScanIntervalMinutes     = 15
 	maxScanIntervalMinutes     = 1440
+)
+
+// HookInterval bounds, mirrored by the fields schema in build/manifest.json.
+// The minimum matches the scheduler's poll period (see the hook-install
+// LaunchDaemon and scheduled task): a shorter interval could not be honored.
+const (
+	defaultHookIntervalMinutes = 15
+	minHookIntervalMinutes     = 5
+	maxHookIntervalMinutes     = 1440
 )
 
 // Config is the resolved deployment configuration.
@@ -40,6 +50,10 @@ type Config struct {
 	// obot-sentry throttles to this at runtime, so admins change the cadence
 	// by updating the MDM configuration alone.
 	ScanIntervalMinutes int
+	// HookIntervalMinutes is the minimum number of minutes between scheduled
+	// hook convergences; 0 means unset. Like ScanIntervalMinutes, the OS
+	// scheduler polls faster and `hook-install --if-due` throttles to this.
+	HookIntervalMinutes int
 	// EnforcementEnabled turns the pre-tool enforcement hooks on. It is a
 	// tri-state: nil means the key was absent, so a lower-precedence layer may
 	// still supply it. Merge cannot use a bare bool because it fills only
@@ -76,14 +90,24 @@ func ParseBool(value string) (bool, bool) {
 // configured minutes clamped to the schema bounds, defaulting when
 // unset.
 func (c Config) ScanInterval() time.Duration {
-	minutes := c.ScanIntervalMinutes
+	return clampMinutes(c.ScanIntervalMinutes, defaultScanIntervalMinutes, minScanIntervalMinutes, maxScanIntervalMinutes)
+}
+
+// HookInterval returns the effective time between scheduled hook
+// convergences: the configured minutes clamped to the schema bounds,
+// defaulting to 15 minutes when unset.
+func (c Config) HookInterval() time.Duration {
+	return clampMinutes(c.HookIntervalMinutes, defaultHookIntervalMinutes, minHookIntervalMinutes, maxHookIntervalMinutes)
+}
+
+func clampMinutes(minutes, def, lo, hi int) time.Duration {
 	switch {
 	case minutes == 0:
-		minutes = defaultScanIntervalMinutes
-	case minutes < minScanIntervalMinutes:
-		minutes = minScanIntervalMinutes
-	case minutes > maxScanIntervalMinutes:
-		minutes = maxScanIntervalMinutes
+		minutes = def
+	case minutes < lo:
+		minutes = lo
+	case minutes > hi:
+		minutes = hi
 	}
 	return time.Duration(minutes) * time.Minute
 }
@@ -110,21 +134,27 @@ func FromSource(src Source) (Config, error) {
 	get := func(key string) string {
 		return strings.TrimSpace(values[key])
 	}
-	// Lenient: an absent or non-numeric interval reads as 0 (unset) and
-	// the default applies, rather than failing every scan on the machine.
-	interval, err := strconv.Atoi(get(KeyScanIntervalMinutes))
-	if err != nil || interval < 0 {
-		interval = 0
-	}
 	cfg := Config{
 		ServerURL:           get(KeyServerURL),
 		EnrollmentKey:       get(KeyEnrollmentKey),
-		ScanIntervalMinutes: interval,
+		ScanIntervalMinutes: parseMinutes(get(KeyScanIntervalMinutes)),
+		HookIntervalMinutes: parseMinutes(get(KeyHookIntervalMinutes)),
 	}
 	if enabled, ok := ParseBool(get(KeyEnforcementEnabled)); ok {
 		cfg.EnforcementEnabled = &enabled
 	}
 	return cfg, nil
+}
+
+// parseMinutes is lenient: an absent or non-numeric interval reads as 0
+// (unset) and the default applies, rather than failing every run on the
+// machine.
+func parseMinutes(value string) int {
+	minutes, err := strconv.Atoi(value)
+	if err != nil || minutes < 0 {
+		return 0
+	}
+	return minutes
 }
 
 // Merge returns c with any empty field filled from fallback. Callers
@@ -138,6 +168,9 @@ func (c Config) Merge(fallback Config) Config {
 	}
 	if c.ScanIntervalMinutes == 0 {
 		c.ScanIntervalMinutes = fallback.ScanIntervalMinutes
+	}
+	if c.HookIntervalMinutes == 0 {
+		c.HookIntervalMinutes = fallback.HookIntervalMinutes
 	}
 	// Absent, not false: a higher layer that says false keeps it.
 	if c.EnforcementEnabled == nil {

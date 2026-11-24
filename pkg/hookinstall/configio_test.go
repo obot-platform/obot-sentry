@@ -20,7 +20,7 @@ func TestCommitAndReadUserConfigRoundTrip(t *testing.T) {
 	u := testUser(home)
 	abs := filepath.Join(home, ".copilot", "hooks", "obot-sentry.json")
 
-	if _, ok, err := readConfigFile(ScopeUser, home, abs); err != nil || ok {
+	if _, ok, err := readConfigFile(ScopeUser, testUser(home), abs); err != nil || ok {
 		t.Fatalf("missing file should read as absent: ok=%v err=%v", ok, err)
 	}
 
@@ -29,7 +29,7 @@ func TestCommitAndReadUserConfigRoundTrip(t *testing.T) {
 		t.Fatalf("commit failed: %v", err)
 	}
 
-	got, ok, err := readConfigFile(ScopeUser, home, abs)
+	got, ok, err := readConfigFile(ScopeUser, testUser(home), abs)
 	if err != nil || !ok {
 		t.Fatalf("expected to read back the file: ok=%v err=%v", ok, err)
 	}
@@ -66,7 +66,7 @@ func TestCommitOverwritesRegularFile(t *testing.T) {
 	if err := commitConfigFile(ScopeUser, u, abs, []byte("second")); err != nil {
 		t.Fatal(err)
 	}
-	got, _, err := readConfigFile(ScopeUser, home, abs)
+	got, _, err := readConfigFile(ScopeUser, testUser(home), abs)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,13 +126,13 @@ func TestMachineConfigTraversesRootContainedIntermediateSymlink(t *testing.T) {
 
 	abs := filepath.Join(base, "etc", "codex", "requirements.toml")
 	data := []byte("[features]\nhooks = true\n")
-	if _, ok, err := readConfigFile(ScopeMachine, "", abs); err != nil || ok {
+	if _, ok, err := readConfigFile(ScopeMachine, nil, abs); err != nil || ok {
 		t.Fatalf("missing config should read as absent: ok=%v err=%v", ok, err)
 	}
 	if err := commitConfigFile(ScopeMachine, nil, abs, data); err != nil {
 		t.Fatalf("commit through root-contained machine symlink failed: %v", err)
 	}
-	got, ok, err := readConfigFile(ScopeMachine, "", abs)
+	got, ok, err := readConfigFile(ScopeMachine, nil, abs)
 	if err != nil || !ok {
 		t.Fatalf("read through root-contained machine symlink failed: ok=%v err=%v", ok, err)
 	}
@@ -169,7 +169,7 @@ func TestSymlinkedDestinationIsRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, _, err := readConfigFile(ScopeUser, home, link); err == nil {
+	if _, _, err := readConfigFile(ScopeUser, testUser(home), link); err == nil {
 		t.Fatal("expected a symlinked config to be refused, not followed")
 	}
 	if err := commitConfigFile(ScopeUser, u, link, []byte("managed")); err == nil {
@@ -209,7 +209,7 @@ func TestRefusesEscapingIntermediateSymlink(t *testing.T) {
 		t.Fatal(err)
 	}
 	abs := filepath.Join(home, ".copilot", "hooks", "obot-sentry.json")
-	if _, _, err := readConfigFile(ScopeUser, home, abs); err == nil {
+	if _, _, err := readConfigFile(ScopeUser, testUser(home), abs); err == nil {
 		t.Fatal("expected a read through an escaping intermediate symlink to be refused")
 	}
 	if err := commitConfigFile(ScopeUser, u, abs, []byte("managed")); err == nil {
@@ -235,7 +235,7 @@ func TestUserConfigRefusesRootContainedIntermediateSymlink(t *testing.T) {
 	}
 	abs := filepath.Join(home, ".copilot", "hooks", "obot-sentry.json")
 
-	if _, _, err := readConfigFile(ScopeUser, home, abs); err == nil {
+	if _, _, err := readConfigFile(ScopeUser, testUser(home), abs); err == nil {
 		t.Fatal("read followed a user-scope intermediate symlink")
 	}
 	if err := commitConfigFile(ScopeUser, u, abs, []byte("managed")); err == nil {
@@ -249,7 +249,7 @@ func TestUserConfigRefusesRootContainedIntermediateSymlink(t *testing.T) {
 func TestReadRefusesPathEscapingHome(t *testing.T) {
 	home := t.TempDir()
 	outside := filepath.Join(filepath.Dir(home), "elsewhere.json")
-	if _, _, err := readConfigFile(ScopeUser, home, outside); err == nil {
+	if _, _, err := readConfigFile(ScopeUser, testUser(home), outside); err == nil {
 		t.Fatal("expected a path outside the rooted home to be refused")
 	}
 }
@@ -329,7 +329,7 @@ func TestWriteAtomicErrorsNameTheAbsolutePath(t *testing.T) {
 	t.Cleanup(func() { _ = root.Close() })
 
 	abs := filepath.Join(dir, "managed-settings.json")
-	err = writeAtomic(root, "managed-settings.json", abs, []byte("{}"), 0o644)
+	err = writeAtomic(root, "managed-settings.json", abs, []byte("{}"), 0o644, nil)
 	if err == nil {
 		t.Fatal("writeAtomic replaced a non-empty directory")
 	}
@@ -342,5 +342,34 @@ func TestWriteAtomicErrorsNameTheAbsolutePath(t *testing.T) {
 	}
 	if entries, _ := os.ReadDir(dir); len(entries) != 1 {
 		t.Fatalf("temporary file left behind: %v", entries)
+	}
+}
+
+func TestReadConfigFileRefusesOversizedFile(t *testing.T) {
+	home := t.TempDir()
+	abs := filepath.Join(home, "settings.json")
+	if err := os.WriteFile(abs, make([]byte, maxConfigBytes+1), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := readConfigFile(ScopeUser, testUser(home), abs); err == nil || !strings.Contains(err.Error(), "larger than") {
+		t.Fatalf("oversized config err = %v, want a size refusal", err)
+	}
+}
+
+// TestReadConfigFileRefusesHardLinkedUserFile covers a user linking a file they
+// cannot read into their home: the privileged run must not read it and write
+// its contents back into a file the user owns.
+func TestReadConfigFileRefusesHardLinkedUserFile(t *testing.T) {
+	home := t.TempDir()
+	target := filepath.Join(t.TempDir(), "secret.json")
+	if err := os.WriteFile(target, []byte(`{"secret":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	abs := filepath.Join(home, "settings.json")
+	if err := os.Link(target, abs); err != nil {
+		t.Skipf("hard links unsupported here: %v", err)
+	}
+	if _, _, err := readConfigFile(ScopeUser, testUser(home), abs); err == nil || !strings.Contains(err.Error(), "hard links") {
+		t.Fatalf("hard-linked config err = %v, want a hard-link refusal", err)
 	}
 }

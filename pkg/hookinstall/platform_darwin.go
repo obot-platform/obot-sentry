@@ -3,16 +3,18 @@
 package hookinstall
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
+	"os/exec"
 	"os/user"
+	"sort"
 	"strconv"
 	"syscall"
+	"time"
 )
-
-// minDarwinUserUID is the lowest uid macOS assigns to a real local account.
-// Apple reserves everything below 500 for system use.
-const minDarwinUserUID = 500
 
 // checkPrivilege requires an effective UID of 0 on macOS. Machine policy and
 // per-user files under other accounts' homes both require root; anything less
@@ -24,52 +26,72 @@ func checkPrivilege() error {
 	return nil
 }
 
-// resolveTargetUser resolves the active console user on macOS. It prefers the
-// account named by SUDO_UID (the interactive sudo command case), then falls
-// back to the owner of /dev/console (the MDM/root case where a user is logged
-// in at the GUI).
-func resolveTargetUser() (*TargetUser, error) {
-	if u := targetUserFromSudo(); u != nil {
-		return u, nil
+// dsclTimeout bounds the directory-service listing. dscl answers from the
+// local node, so it is normally instant; the bound only keeps a wedged
+// opendirectoryd from hanging the scheduled run forever.
+const dsclTimeout = 30 * time.Second
+
+// resolveTargetUsers lists every real local account on macOS, whether or not it
+// is signed in, so drift in a signed-out user's files is repaired too. The
+// local directory node is the source of truth for accounts; the home directory
+// comes from the account database, never the environment.
+func resolveTargetUsers() (UserSet, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), dsclTimeout)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "/usr/bin/dscl", ".", "-list", "/Users", "UniqueID").Output()
+	if err != nil {
+		return UserSet{}, fmt.Errorf("listing local accounts with dscl: %w", err)
 	}
-	return targetUserFromConsole()
+	return darwinUsers(parseDsclUserList(out), user.LookupId, homeOwnedBy), nil
 }
 
-func targetUserFromSudo() *TargetUser {
-	uidStr := os.Getenv("SUDO_UID")
-	if uidStr == "" {
-		return nil
-	}
-	u, err := user.LookupId(uidStr)
+// homeOwnedBy requires home to be owned by uid. A home shared between
+// accounts (/Users/Shared) or owned by the system (/var/empty) is not that
+// user's to have root create and chown hook directories in.
+func homeOwnedBy(home string, uid int) error {
+	info, err := os.Lstat(home)
 	if err != nil {
-		return nil
-	}
-	tu, err := targetUserFromAccount(u)
-	if err != nil {
-		return nil
-	}
-	return tu
-}
-
-// targetUserFromConsole resolves the owner of /dev/console — the user logged in
-// at the graphical session. A root-owned console means no user is logged in.
-func targetUserFromConsole() (*TargetUser, error) {
-	info, err := os.Stat("/dev/console")
-	if err != nil {
-		return nil, fmt.Errorf("no active console user: %w", err)
+		return err
 	}
 	st, ok := info.Sys().(*syscall.Stat_t)
-	if !ok {
-		return nil, fmt.Errorf("cannot read /dev/console ownership")
+	if !ok || st == nil {
+		return fmt.Errorf("cannot read ownership of home %q", home)
 	}
-	if st.Uid == 0 {
-		return nil, fmt.Errorf("no active console user (no one is logged in); rerun after a user logs in")
+	if int(st.Uid) != uid {
+		return fmt.Errorf("home %q is owned by uid %d, not the account's uid %d", home, st.Uid, uid)
 	}
-	u, err := user.LookupId(strconv.FormatUint(uint64(st.Uid), 10))
-	if err != nil {
-		return nil, fmt.Errorf("looking up console user (uid %d): %w", st.Uid, err)
+	return nil
+}
+
+// darwinUsers resolves each listed account through the account database,
+// skipping (and reporting) any that do not validate or whose home the account
+// does not own. The result is ordered by uid so runs are deterministic.
+func darwinUsers(accounts []dsclAccount, lookup func(uid string) (*user.User, error), ownedBy func(home string, uid int) error) UserSet {
+	var set UserSet
+	for _, a := range accounts {
+		u, err := lookup(a.UID)
+		if err != nil {
+			set.Skipped = append(set.Skipped, SkippedUser{Name: a.Name, Err: fmt.Errorf("looking up uid %s: %w", a.UID, err)})
+			continue
+		}
+		tu, err := targetUserFromAccount(u)
+		if errors.Is(err, fs.ErrNotExist) {
+			// macOS creates a home directory at first login, so an account
+			// that has never logged in has nothing to converge yet. Its first
+			// login adds the home and makes the next scheduled poll due.
+			continue
+		}
+		if err == nil {
+			err = ownedBy(tu.HomeDir, tu.UID)
+		}
+		if err != nil {
+			set.Skipped = append(set.Skipped, SkippedUser{Name: a.Name, Err: err})
+			continue
+		}
+		set.Users = append(set.Users, tu)
 	}
-	return targetUserFromAccount(u)
+	sort.Slice(set.Users, func(i, j int) bool { return set.Users[i].UID < set.Users[j].UID })
+	return set
 }
 
 // targetUserFromAccount validates an account-database entry and builds a
@@ -81,7 +103,7 @@ func targetUserFromAccount(u *user.User) (*TargetUser, error) {
 		return nil, fmt.Errorf("user %q has non-numeric uid %q", u.Username, u.Uid)
 	}
 	if uid < minDarwinUserUID {
-		return nil, fmt.Errorf("resolved user %q (uid %d) is a system account, not a real console user", u.Username, uid)
+		return nil, fmt.Errorf("resolved user %q (uid %d) is a system account, not a real user", u.Username, uid)
 	}
 	gid, err := strconv.Atoi(u.Gid)
 	if err != nil {

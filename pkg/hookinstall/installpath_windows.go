@@ -12,7 +12,7 @@ import (
 
 func validateInstallHomePath(path string) error {
 	if err := validateLocalFixedPath(path); err != nil {
-		return fmt.Errorf("resolved console user home %q is not on a local fixed drive: %w", path, err)
+		return fmt.Errorf("resolved user home %q is not on a local fixed drive: %w", path, err)
 	}
 	return nil
 }

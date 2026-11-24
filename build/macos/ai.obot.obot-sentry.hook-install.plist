@@ -1,10 +1,14 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-	Converges the managed local-agent audit hooks. Runs as root: it writes
-	machine-scope agent configuration, and the per-user files it writes
-	belong to the user at /dev/console. With nobody signed in it exits with
-	an error and the next tick converges. RunAtLoad covers boot and
-	installation; StartInterval picks up drift and console-user switches.
+	Converges the managed local-agent hooks. Runs as root: it writes
+	machine-scope agent configuration and the per-user files of every local
+	user, signed in or not. RunAtLoad covers boot and installation.
+	StartInterval is a cheap five-minute poll: with the if-due flag, obot-sentry
+	converges only when the MDM-configured HookIntervalMinutes (default 15)
+	has elapsed, the machine restarted, a user profile appeared or went away,
+	the enforcement setting changed, or obot-sentry was upgraded. Changes and
+	failures are logged to
+	/Library/Application Support/obot/obot-sentry-hook-install/hook-install.log.
 -->
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -16,12 +20,13 @@
 	<array>
 		<string>/usr/local/bin/obot-sentry</string>
 		<string>hook-install</string>
+		<string>--if-due</string>
 	</array>
 
 	<key>RunAtLoad</key>
 	<true/>
 
 	<key>StartInterval</key>
-	<integer>3600</integer>
+	<integer>300</integer>
 </dict>
 </plist>

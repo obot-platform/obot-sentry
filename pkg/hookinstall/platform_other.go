@@ -8,8 +8,8 @@ func checkPrivilege() error {
 	return errUnsupportedPlatform
 }
 
-func resolveTargetUser() (*TargetUser, error) {
-	return nil, errUnsupportedPlatform
+func resolveTargetUsers() (UserSet, error) {
+	return UserSet{}, errUnsupportedPlatform
 }
 
 func validateExecutableOwner(string, os.FileInfo) error { return nil }

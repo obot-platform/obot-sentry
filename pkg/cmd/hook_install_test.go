@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	obotcmd "github.com/obot-platform/cmd"
 	"github.com/obot-platform/obot-sentry/pkg/hookinstall"
@@ -183,7 +184,7 @@ func TestHookInstallFlagReachesTheInstaller(t *testing.T) {
 						GOOS:                "darwin",
 						Privilege:           func() error { return nil },
 						ResolveExe:          func() (string, error) { return "/usr/local/bin/obot-sentry", nil },
-						ResolveUser:         func() (*hookinstall.TargetUser, error) { return &hookinstall.TargetUser{HomeDir: t.TempDir()}, nil },
+						ResolveUsers:        func() (hookinstall.UserSet, error) { return hookinstall.UserSet{}, nil },
 						ProvisionIdentity:   func() (string, error) { return t.TempDir(), nil },
 						ResolveDestinations: func(string) []hookinstall.Destination { return nil },
 					}
@@ -217,7 +218,7 @@ func TestHookUninstallReachesInstaller(t *testing.T) {
 			installer = &hookinstall.Installer{
 				GOOS:                "darwin",
 				Privilege:           func() error { return nil },
-				ResolveUser:         func() (*hookinstall.TargetUser, error) { return &hookinstall.TargetUser{HomeDir: t.TempDir()}, nil },
+				ResolveUsers:        func() (hookinstall.UserSet, error) { return hookinstall.UserSet{}, nil },
 				ResolveDestinations: func(string) []hookinstall.Destination { return nil },
 			}
 			return installer
@@ -233,5 +234,58 @@ func TestHookUninstallReachesInstaller(t *testing.T) {
 	}
 	if installer.Enforce {
 		t.Fatal("uninstall unexpectedly enabled enforcement")
+	}
+}
+
+// TestHookInstallIfDueReachesTheInstaller pins that --if-due and the resolved
+// interval (flag over MDM, default 15 minutes) reach the installer, and that a
+// plain run is never throttled.
+func TestHookInstallIfDueReachesTheInstaller(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		args      []string
+		mdm       int
+		wantIfDue bool
+		wantEvery time.Duration
+	}{
+		{name: "plain run", args: nil, wantIfDue: false, wantEvery: 0},
+		{name: "--if-due defaults to 15m", args: []string{"--if-due"}, wantIfDue: true, wantEvery: 15 * time.Minute},
+		{name: "--if-due uses MDM", args: []string{"--if-due"}, mdm: 60, wantIfDue: true, wantEvery: time.Hour},
+		{name: "flag beats MDM", args: []string{"--if-due", "--hook-interval-minutes=30"}, mdm: 60, wantIfDue: true, wantEvery: 30 * time.Minute},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv(envEnforcementEnabled, "")
+			t.Setenv("OBOT_SENTRY_HOOK_INTERVAL_MINUTES", "")
+
+			var installer *hookinstall.Installer
+			hook := &HookInstall{
+				loadMDMConfig: func() (mdmconfig.Config, error) {
+					return mdmconfig.Config{HookIntervalMinutes: tt.mdm}, nil
+				},
+				newInstaller: func() *hookinstall.Installer {
+					installer = &hookinstall.Installer{
+						GOOS:                "darwin",
+						Privilege:           func() error { return nil },
+						ResolveExe:          func() (string, error) { return "/usr/local/bin/obot-sentry", nil },
+						ResolveUsers:        func() (hookinstall.UserSet, error) { return hookinstall.UserSet{}, nil },
+						ProvisionIdentity:   func() (string, error) { return t.TempDir(), nil },
+						ResolveDestinations: func(string) []hookinstall.Destination { return nil },
+					}
+					return installer
+				},
+			}
+
+			cmd := obotcmd.Command(hook)
+			var out bytes.Buffer
+			cmd.SetOut(&out)
+			cmd.SetErr(&out)
+			cmd.SetArgs(tt.args)
+			if err := cmd.Execute(); err != nil {
+				t.Fatalf("execute: %v\n%s", err, out.String())
+			}
+			if installer.IfDue != tt.wantIfDue || installer.Interval != tt.wantEvery {
+				t.Errorf("installer IfDue=%v Interval=%v, want %v %v", installer.IfDue, installer.Interval, tt.wantIfDue, tt.wantEvery)
+			}
+		})
 	}
 }

@@ -4,172 +4,15 @@ package hookinstall
 
 import (
 	"errors"
-	"strings"
+	"io/fs"
+	"os"
+	"path/filepath"
 	"testing"
+	"time"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
-
-const (
-	systemSIDString         = "S-1-5-18"
-	localServiceSIDString   = "S-1-5-19"
-	networkServiceSIDString = "S-1-5-20"
-	aliceSIDString          = "S-1-5-21-1004336348-1177238915-682003330-1001"
-	bobSIDString            = "S-1-5-21-1004336348-1177238915-682003330-1002"
-)
-
-func mustSID(t *testing.T, s string) *windows.SID {
-	t.Helper()
-	sid, err := windows.StringToSid(s)
-	if err != nil {
-		t.Fatalf("parsing SID %s: %v", s, err)
-	}
-	return sid
-}
-
-func noCallingUser(t *testing.T) func() (sessionUser, error) {
-	t.Helper()
-	return func() (sessionUser, error) {
-		t.Fatal("calling-process fallback should not run after a session resolved")
-		return sessionUser{}, nil
-	}
-}
-
-func TestFindWindowsConsoleUserUsesSessionToken(t *testing.T) {
-	sessions := func() ([]sessionUser, error) {
-		return []sessionUser{
-			{sid: mustSID(t, aliceSIDString), name: `CORP\alice`, home: `D:\Profiles\alice`},
-		}, nil
-	}
-
-	user, err := findWindowsConsoleUser(sessions, noCallingUser(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if user.name != `CORP\alice` {
-		t.Fatalf("name = %q, want CORP\\alice", user.name)
-	}
-	if user.home != `D:\Profiles\alice` {
-		t.Fatalf("home = %q, want D:\\Profiles\\alice", user.home)
-	}
-}
-
-func TestFindWindowsConsoleUserSkipsServiceAccountSessions(t *testing.T) {
-	sessions := func() ([]sessionUser, error) {
-		return []sessionUser{
-			{sid: mustSID(t, systemSIDString), name: "SYSTEM", home: `C:\Windows\System32\config\systemprofile`},
-			{sid: mustSID(t, localServiceSIDString), name: "LOCAL SERVICE", home: `C:\Windows\ServiceProfiles\LocalService`},
-			{sid: mustSID(t, networkServiceSIDString), name: "NETWORK SERVICE", home: `C:\Windows\ServiceProfiles\NetworkService`},
-			{sid: mustSID(t, aliceSIDString), name: `CORP\alice`, home: `D:\Profiles\alice`},
-		}, nil
-	}
-
-	user, err := findWindowsConsoleUser(sessions, noCallingUser(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if user.name != `CORP\alice` {
-		t.Fatalf("name = %q, want CORP\\alice — a service session was picked as the console user", user.name)
-	}
-}
-
-func TestFindWindowsConsoleUserIgnoresAccountName(t *testing.T) {
-	sessions := func() ([]sessionUser, error) {
-		return []sessionUser{
-			// A service account under a name no name-based filter would list.
-			{sid: mustSID(t, networkServiceSIDString), name: "a name we never listed", home: `C:\Windows\ServiceProfiles\NetworkService`},
-			// A real user under a name a name-based filter would have rejected.
-			{sid: mustSID(t, bobSIDString), name: "NETWORK SERVICE", home: `D:\Profiles\bob`},
-		}, nil
-	}
-
-	user, err := findWindowsConsoleUser(sessions, noCallingUser(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if user.home != `D:\Profiles\bob` {
-		t.Fatalf("home = %q, want D:\\Profiles\\bob — the account name decided instead of the SID", user.home)
-	}
-}
-
-// A session table holding nothing but service accounts resolves nobody, so the
-// calling process's own token is the remaining candidate.
-func TestFindWindowsConsoleUserFallsBackPastServiceSessions(t *testing.T) {
-	sessions := func() ([]sessionUser, error) {
-		return []sessionUser{
-			{sid: mustSID(t, networkServiceSIDString), name: "NETWORK SERVICE", home: `C:\Windows\ServiceProfiles\NetworkService`},
-		}, nil
-	}
-	callingUser := func() (sessionUser, error) {
-		return sessionUser{sid: mustSID(t, bobSIDString), name: `CORP\bob`, home: `D:\Profiles\bob`}, nil
-	}
-
-	user, err := findWindowsConsoleUser(sessions, callingUser)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if user.name != `CORP\bob` {
-		t.Fatalf("name = %q, want CORP\\bob", user.name)
-	}
-}
-
-// An elevated-Administrator install cannot open any session token (that needs
-// SE_TCB_NAME), so it resolves itself.
-func TestFindWindowsConsoleUserFallsBackForInteractiveCaller(t *testing.T) {
-	sessions := func() ([]sessionUser, error) {
-		return nil, nil
-	}
-	callingUser := func() (sessionUser, error) {
-		return sessionUser{sid: mustSID(t, aliceSIDString), name: `CORP\alice`, home: `D:\Profiles\alice`}, nil
-	}
-
-	user, err := findWindowsConsoleUser(sessions, callingUser)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if user.home != `D:\Profiles\alice` {
-		t.Fatalf("home = %q, want D:\\Profiles\\alice", user.home)
-	}
-}
-
-func TestFindWindowsConsoleUserRejectsServiceAccountFallback(t *testing.T) {
-	sessions := func() ([]sessionUser, error) {
-		return nil, nil
-	}
-	callingUser := func() (sessionUser, error) {
-		return sessionUser{sid: mustSID(t, systemSIDString), name: "SYSTEM", home: `C:\Windows\System32\config\systemprofile`}, nil
-	}
-
-	_, err := findWindowsConsoleUser(sessions, callingUser)
-	if err == nil {
-		t.Fatal("a SYSTEM caller with no interactive session has no console user to fall back to")
-	}
-	if !strings.Contains(err.Error(), "no interactive session is owned by a real user") {
-		t.Errorf("error %q does not report why no session resolved", err)
-	}
-	if !strings.Contains(err.Error(), `service account "SYSTEM"`) {
-		t.Errorf("error %q does not report why the fallback was rejected", err)
-	}
-}
-
-func TestFindWindowsConsoleUserPreservesEnumerationError(t *testing.T) {
-	sessions := func() ([]sessionUser, error) {
-		return nil, errors.New("enumerating WTS sessions: access denied")
-	}
-	callingUser := func() (sessionUser, error) {
-		return sessionUser{}, errors.New("opening current process token: access denied")
-	}
-
-	_, err := findWindowsConsoleUser(sessions, callingUser)
-	if err == nil {
-		t.Fatal("both lookups failed, want an error")
-	}
-	for _, want := range []string{"enumerating WTS sessions", "opening current process token"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("error %q does not preserve %q", err, want)
-		}
-	}
-}
 
 func TestTrustedExecutableOwner(t *testing.T) {
 	system, err := windows.CreateWellKnownSid(windows.WinLocalSystemSid)
@@ -189,5 +32,97 @@ func TestTrustedExecutableOwner(t *testing.T) {
 	}
 	if trustedExecutableOwner(users) || trustedExecutableOwner(nil) {
 		t.Fatal("an untrusted executable owner was accepted")
+	}
+}
+
+// TestResolveTargetUsersReadsProfileList runs the real ProfileList enumeration
+// (read-only, no privilege needed). Every machine that can run the tests has
+// at least the profile of the account running them.
+func TestResolveTargetUsersReadsProfileList(t *testing.T) {
+	set, err := resolveTargetUsers()
+	if err != nil {
+		t.Fatalf("resolveTargetUsers: %v", err)
+	}
+	if len(set.Users) == 0 {
+		t.Fatalf("no user profiles resolved; skipped: %+v", set.Skipped)
+	}
+	for _, u := range set.Users {
+		if u.Username == "" || !filepath.IsAbs(u.HomeDir) {
+			t.Errorf("resolved user %+v lacks a name or an absolute home", u)
+		}
+	}
+}
+
+func TestBootTimeIsInThePast(t *testing.T) {
+	boot, err := bootTime()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if boot.IsZero() || !boot.Before(time.Now()) {
+		t.Fatalf("boot time %v is not in the past", boot)
+	}
+}
+
+// TestOpenDirNoReparseRefusesLinks proves the run directory is opened without
+// following a symlink or junction in place of it.
+func TestOpenDirNoReparseRefusesLinks(t *testing.T) {
+	dir := t.TempDir()
+	h, err := openDirNoReparse(dir, windows.READ_CONTROL)
+	if err != nil {
+		t.Fatalf("a plain directory was refused: %v", err)
+	}
+	_ = windows.CloseHandle(h)
+
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(dir, link); err != nil {
+		t.Skipf("cannot create a directory symlink here: %v", err)
+	}
+	if h, err := openDirNoReparse(link, windows.READ_CONTROL); err == nil {
+		_ = windows.CloseHandle(h)
+		t.Fatal("a directory symlink was opened as the run directory")
+	}
+}
+
+// TestMakeRunDirIsBornProtected proves the run directory is created with its
+// protected SYSTEM/Administrators-only ACL in the same call, never inheriting
+// the parent's (Users-readable) ACL even briefly.
+func TestMakeRunDirIsBornProtected(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "hook-install")
+	if err := makeRunDir(dir); err != nil {
+		t.Fatalf("makeRunDir: %v", err)
+	}
+	t.Cleanup(func() {
+		// Re-open the DACL to inheritance so the temp dir can be removed by an
+		// unprivileged test run (the creator, as owner, may change it).
+		_ = windows.SetNamedSecurityInfo(dir, windows.SE_FILE_OBJECT,
+			windows.DACL_SECURITY_INFORMATION|windows.UNPROTECTED_DACL_SECURITY_INFORMATION, nil, nil, nil, nil)
+	})
+	if err := makeRunDir(dir); !errors.Is(err, fs.ErrExist) {
+		t.Fatalf("second makeRunDir err = %v, want fs.ErrExist", err)
+	}
+	sd, err := windows.GetNamedSecurityInfo(dir, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
+	if err != nil {
+		t.Fatal(err)
+	}
+	control, _, err := sd.Control()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if control&windows.SE_DACL_PROTECTED == 0 {
+		t.Fatal("run directory DACL is not protected from inheritance")
+	}
+	dacl, _, err := sd.DACL()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := uint16(0); i < dacl.AceCount; i++ {
+		var ace *windows.ACCESS_ALLOWED_ACE
+		if err := windows.GetAce(dacl, uint32(i), &ace); err != nil {
+			t.Fatal(err)
+		}
+		sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
+		if !sid.IsWellKnown(windows.WinLocalSystemSid) && !sid.IsWellKnown(windows.WinBuiltinAdministratorsSid) {
+			t.Fatalf("run directory grants access to %s; want only SYSTEM and Administrators", sid)
+		}
 	}
 }

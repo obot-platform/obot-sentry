@@ -3,6 +3,7 @@
 package hookinstall
 
 import (
+	"errors"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -101,5 +102,53 @@ func TestTargetUserFromAccountRequiresRealHome(t *testing.T) {
 		Username: "alice", Uid: "501", Gid: "20", HomeDir: "/nonexistent/alice",
 	}); err == nil {
 		t.Error("a missing home directory should be rejected")
+	}
+}
+
+func TestDarwinUsersSkipsInvalidAccountsAndSortsByUID(t *testing.T) {
+	aliceHome, bobHome, sharedHome := t.TempDir(), t.TempDir(), t.TempDir()
+	accounts := map[string]*user.User{
+		"502": {Uid: "502", Gid: "20", Username: "bob", HomeDir: bobHome},
+		"501": {Uid: "501", Gid: "20", Username: "alice", HomeDir: aliceHome},
+		"503": {Uid: "503", Gid: "20", Username: "gone", HomeDir: filepath.Join(bobHome, "missing")},
+		"505": {Uid: "505", Gid: "20", Username: "shared", HomeDir: sharedHome},
+	}
+	lookup := func(uid string) (*user.User, error) {
+		if u, ok := accounts[uid]; ok {
+			return u, nil
+		}
+		return nil, user.UnknownUserIdError(0)
+	}
+	set := darwinUsers([]dsclAccount{
+		{Name: "bob", UID: "502"},
+		{Name: "alice", UID: "501"},
+		{Name: "gone", UID: "503"},
+		{Name: "ghost", UID: "504"},
+		{Name: "shared", UID: "505"},
+	}, lookup, func(home string, uid int) error {
+		if home == sharedHome {
+			return errors.New("home owned by another account")
+		}
+		return nil
+	})
+
+	if len(set.Users) != 2 || set.Users[0].Username != "alice" || set.Users[1].Username != "bob" {
+		t.Fatalf("users = %+v, want alice then bob", set.Users)
+	}
+	// "gone" has no home yet (never logged in), so it is dropped silently;
+	// the account that cannot be looked up and the one whose home it does not
+	// own are reported.
+	if len(set.Skipped) != 2 || set.Skipped[0].Name != "ghost" || set.Skipped[1].Name != "shared" {
+		t.Fatalf("skipped = %+v, want ghost and shared", set.Skipped)
+	}
+}
+
+func TestHomeOwnedBy(t *testing.T) {
+	home := t.TempDir()
+	if err := homeOwnedBy(home, os.Getuid()); err != nil {
+		t.Fatalf("a home owned by the account was rejected: %v", err)
+	}
+	if err := homeOwnedBy(home, os.Getuid()+1); err == nil {
+		t.Fatal("a home owned by another uid was accepted")
 	}
 }

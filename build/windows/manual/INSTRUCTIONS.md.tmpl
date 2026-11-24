@@ -16,7 +16,7 @@ Everything below needs an Administrator PowerShell.
    enrollment key:
 
    ```powershell
-   msiexec /i "obot-sentry.msi" /qn SERVER_URL="{{.serverURL}}" ENROLLMENT_KEY="REPLACE_WITH_ENROLLMENT_KEY" SCAN_INTERVAL_MINUTES="{{.scanIntervalMinutes}}"{{if .enforcementEnabled}} ENFORCEMENT=1{{end}}
+   msiexec /i "obot-sentry.msi" /qn SERVER_URL="{{.serverURL}}" ENROLLMENT_KEY="REPLACE_WITH_ENROLLMENT_KEY" SCAN_INTERVAL_MINUTES="{{.scanIntervalMinutes}}"{{if .hookIntervalMinutes}} HOOK_INTERVAL_MINUTES="{{.hookIntervalMinutes}}"{{end}}{{if .enforcementEnabled}} ENFORCEMENT=1{{end}}
    ```
 {{if .enforcementEnabled}}
    `ENFORCEMENT=1` writes `EnforcementEnabled` to the registry, which the hook
@@ -41,10 +41,15 @@ Everything below needs an Administrator PowerShell.
   run submits a scan at most every {{.scanIntervalMinutes}} minutes — change
   `ScanIntervalMinutes` in the registry without reinstalling.
 - Registers a second machine-wide scheduled task (`Obot Sentry Hook Install`)
-  running as SYSTEM at logon and hourly, converging the managed local-agent
-  hooks for the active console user. It reads `EnforcementEnabled` from the
-  registry on every run, so turning enforcement on or off there takes effect
-  without reinstalling.
+  running as SYSTEM at startup, at logon, and every 5 minutes. It checks the
+  managed local-agent hooks — machine policy plus the files of every user
+  profile on the device, signed in or not — and restores any that are missing
+  or modified, at most every
+  {{if .hookIntervalMinutes}}{{.hookIntervalMinutes}}{{else}}15{{end}} minutes
+  (`HookIntervalMinutes`, default 15), and immediately after a restart, a new
+  user's first logon, an upgrade, or a change to `EnforcementEnabled`. It reads
+  both settings from the registry on every run, so changing them there takes
+  effect without reinstalling.
 - Handles upgrades and uninstalls out of the box.
 
 ## Verify the install
@@ -74,7 +79,7 @@ Everything below needs an Administrator PowerShell.
    This will produce the following output:
 
    - `LastRunTime` climbs on schedule — every 10 minutes for the scan task,
-     hourly for the hook task, and at each logon for both.
+     every 5 minutes for the hook task, and at each logon for both.
    - `LastTaskResult = 0` means the last run succeeded. Non-zero is usually a
      configuration problem — recheck the registry values from step 2. `267011`
      means the task has not run yet.
@@ -93,6 +98,20 @@ Everything below needs an Administrator PowerShell.
    `error` with `lastError` carrying the reason.
 
    The adjacent `scan-logs` directory retains up to 14 days of the most recent scan attempts.
+
+5. Check the hook log:
+
+   The hook task logs every hook it restores or changes, and every failure. A
+   run that finds everything in place logs only a few summary lines (why it ran,
+   when it started, and when it finished). The
+   log is readable only by SYSTEM and Administrators, so run this from an
+   elevated PowerShell:
+
+   ```powershell
+   Get-Content "C:\Program Files\Obot\obot-sentry\hook-install\hook-install.log" -Tail 50
+   ```
+
+   The adjacent `schedule.json` records when the hooks were last checked.
 
 ## Standalone binary (Alternate)
 
@@ -115,6 +134,9 @@ yourself.
    Set-ItemProperty -Path $key -Name ServerURL -Value "{{.serverURL}}"
    Set-ItemProperty -Path $key -Name EnrollmentKey -Value "REPLACE_WITH_ENROLLMENT_KEY"
    Set-ItemProperty -Path $key -Name ScanIntervalMinutes -Value "{{.scanIntervalMinutes}}"
+{{- if .hookIntervalMinutes}}
+   Set-ItemProperty -Path $key -Name HookIntervalMinutes -Value "{{.hookIntervalMinutes}}"
+{{- end}}
    Set-ItemProperty -Path $key -Name EnforcementEnabled -Type DWord -Value {{if .enforcementEnabled}}1{{else}}0{{end}}
    ```
 
@@ -143,6 +165,10 @@ install.
 ```powershell
 & "C:\Program Files\Obot\obot-sentry\obot-sentry.exe" hook-install{{if .enforcementEnabled}} --enforce{{end}}
 ```
+
+This installs machine policy and the hooks of every user profile on the device.
+Without the scheduled task, nothing re-checks them afterward; rerun it to restore
+drifted hooks.
 {{if .enforcementEnabled}}
 ## Tool-call enforcement
 
