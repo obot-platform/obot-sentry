@@ -274,6 +274,24 @@ administrator-owned. The Kiro hook file is **user-scoped**
 can delete it. The hourly `hook-install` task re-converges it, so the bypass
 window is bounded by that interval rather than permanent.
 
+`KIRO_HOME` widens that gap, and this one is not bounded. When the variable is
+set, Kiro uses it in place of `~/.kiro` as its whole configuration base, reading
+everything it would keep there — settings, sessions, agents, powers, and its
+hooks — from `$KIRO_HOME` instead. A session started with `KIRO_HOME` pointing
+anywhere else therefore loads neither the enforcement hook nor the audit hook,
+so its tool calls run unchecked and unlogged. The hourly `hook-install` cannot
+heal this the way it heals a deleted file: it writes to `~/.kiro/hooks` under
+the account's home directory, which the relocated session never reads, so the
+bypass lasts as long as the variable is set. There is no machine-owned Kiro
+hooks path to install into instead — Kiro loads hooks only from its
+configuration base and from each workspace's `.kiro/hooks`, both of which the
+user controls — so obot-sentry cannot close this on the device. `enforce` cannot
+detect it either: setting `KIRO_HOME` is exactly what takes obot-sentry's hook
+out of the set Kiro runs, so the hook is never invoked to observe the variable
+it would object to (Kiro does pass `KIRO_HOME` through to the hooks it does run).
+Treat a device whose users can set `KIRO_HOME` for their Kiro sessions as one
+where Kiro enforcement and audit are advisory.
+
 Claude Code's hooks are installed in its managed settings file, which Claude
 Code reads from a fixed path. On Windows that path is always on drive `C:`,
 even on a machine whose Program Files folder has been moved, so `hook-install`
