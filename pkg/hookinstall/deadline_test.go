@@ -10,6 +10,12 @@ import (
 	"time"
 )
 
+// testUnitTimeout is the unit deadline in these tests. It applies to every unit,
+// not only the stalled one, so it must leave the others ample time: a unit
+// fsyncs each file it writes, which can take hundreds of milliseconds on a
+// loaded CI runner.
+const testUnitTimeout = 2 * time.Second
+
 // stallReadsUnder replaces readConfig so any read of a path under prefix blocks
 // until the test ends, simulating a stalled open (a dead network home, or on
 // Windows a user holding an oplock on their hook file).
@@ -23,7 +29,7 @@ func stallReadsUnder(t *testing.T, prefix string) {
 		}
 		return orig(scope, u, absPath)
 	}
-	unitTimeout = 300 * time.Millisecond
+	unitTimeout = testUnitTimeout
 	t.Cleanup(func() {
 		close(release)
 		readConfig, unitTimeout = orig, origTimeout
@@ -66,7 +72,7 @@ func TestRunAbandonsAStalledUserAndConvergesTheRest(t *testing.T) {
 		filepath.Join(bobHome, ".copilot/hooks/obot-sentry.json"),
 	} {
 		if _, err := os.Stat(path); err != nil {
-			t.Fatalf("%s not converged despite only alice stalling: %v", path, err)
+			t.Fatalf("%s not converged despite only alice stalling: %v\n%s", path, err, out.String())
 		}
 	}
 	if !strings.Contains(out.String(), "alice's hooks took longer than") {
@@ -106,10 +112,10 @@ func TestRunAbandonsStalledMachineScopeAndStillConvergesUsers(t *testing.T) {
 		t.Fatalf("summary should report the machine timeout:\n%s", out.String())
 	}
 	if _, err := os.Stat(filepath.Join(home, ".copilot/hooks/obot-sentry.json")); err != nil {
-		t.Fatalf("user hooks not converged after the machine scope stalled: %v", err)
+		t.Fatalf("user hooks not converged after the machine scope stalled: %v\n%s", err, out.String())
 	}
 	if got, err := os.ReadFile(userFile); err != nil || !bytes.Equal(got, old.data) {
-		t.Fatalf("retired user hooks were removed although their machine replacement never landed: err=%v", err)
+		t.Fatalf("retired user hooks were removed although their machine replacement never landed: err=%v\n%s", err, out.String())
 	}
 }
 
@@ -123,14 +129,14 @@ func TestAbandonedUnitDoesNotWriteAfterDeadline(t *testing.T) {
 	target := filepath.Join(home, ".copilot", "hooks", "obot-sentry.json")
 
 	orig, origTimeout := readConfig, unitTimeout
-	unitTimeout = 300 * time.Millisecond
+	unitTimeout = testUnitTimeout
 	resumed := make(chan struct{})
 	reads := 0
 	readConfig = func(scope Scope, u *TargetUser, absPath string) ([]byte, bool, error) {
 		if absPath == target {
 			reads++
 			if reads == 2 { // the re-read just before commit
-				time.Sleep(2 * unitTimeout)
+				time.Sleep(unitTimeout + time.Second)
 				defer close(resumed)
 			}
 		}
@@ -147,7 +153,7 @@ func TestAbandonedUnitDoesNotWriteAfterDeadline(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("the stalled re-read never resumed")
 	}
-	time.Sleep(100 * time.Millisecond) // let the abandoned unit finish its commit attempt
+	time.Sleep(500 * time.Millisecond) // let the abandoned unit finish its commit attempt
 	if _, err := os.Stat(target); err == nil {
 		t.Fatal("an abandoned unit wrote its file after the deadline")
 	}
