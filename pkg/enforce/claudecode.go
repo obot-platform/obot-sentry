@@ -43,6 +43,10 @@ const (
 	// Claude Code itself reads every drop-in, so past this many the managed set is
 	// treated as unreadable rather than truncated.
 	maxClaudeManagedDropIns = 512
+	// claudeLegacyConfigFile is the older name of .claude.json, kept inside the
+	// configuration directory. When it exists Claude Code reads it and ignores
+	// .claude.json altogether (verified against Claude Code 2.1.323).
+	claudeLegacyConfigFile = ".config.json"
 	// claudeConfigDirEnv relocates Claude Code's user configuration, .claude.json
 	// included, away from the home directory.
 	claudeConfigDirEnv = "CLAUDE_CONFIG_DIR"
@@ -97,18 +101,43 @@ func (e Env) managedMCPPath() string {
 	return e.claudeManagedPath(claudeManagedMCPFile)
 }
 
-// claudeConfigPaths returns the .claude.json the calling Claude Code session
-// reads and the configuration directory that holds its plugins. Both move with
-// CLAUDE_CONFIG_DIR.
-func (e Env) claudeConfigPaths() (claudeJSONPath, configDir string, ok bool) {
-	dir := e.getenv(claudeConfigDirEnv)
-	if dir == "" {
-		return e.homePath(".claude.json"), e.homePath(".claude"), true
+// claudeConfigDir returns the configuration directory that holds the calling
+// Claude Code session's plugins: CLAUDE_CONFIG_DIR, or ~/.claude without it. ok
+// is false for a relative value, which Claude Code resolves against the
+// directory it was started from.
+//
+// A variable that is set to nothing is relative too, not unset: Claude Code
+// then keeps its plugins, transcripts and credentials in the directory it was
+// started from. Its settings can also set the variable to nothing after it has
+// read .claude.json from the directory it was started with. (Both verified
+// against Claude Code 2.1.323.)
+//
+// .claude.json is not looked for there; see claudeConfigDirUnsettled.
+func (e Env) claudeConfigDir() (dir string, ok bool) {
+	dir, set := e.lookupEnv(claudeConfigDirEnv)
+	if !set {
+		return e.homePath(".claude"), true
 	}
-	if !filepath.IsAbs(dir) {
-		return "", "", false
-	}
-	return filepath.Join(dir, ".claude.json"), dir, true
+	return dir, filepath.IsAbs(dir)
+}
+
+// claudeConfigDirUnsettled is the reason a user or local server is left
+// unresolved while the hook's environment sets CLAUDE_CONFIG_DIR.
+//
+// Claude Code reads .claude.json, which holds both scopes, from the directory
+// the variable named when it was started. Its settings can then change the
+// variable: an env block in a --settings file or in the user settings file is
+// applied after .claude.json has been read, and the hooks inherit the new
+// value. Plugins, transcripts and credentials follow the new value;
+// .claude.json does not. A session started with the variable and one whose
+// settings set it afterwards give the hook the same environment and the same
+// payload, transcript_path included, so the hook cannot tell which .claude.json
+// the session read, and a decoy in the directory it is shown would vouch for a
+// server that is not the one running. (Verified against Claude Code 2.1.323.)
+func claudeConfigDirUnsettled(env Env, serverName, source string) string {
+	return fmt.Sprintf(
+		"%[1]s is set (%[2]q), and Claude Code's settings can set it after Claude Code has read its %[3]s MCP servers from another directory, so which .claude.json defines MCP server %[4]q cannot be determined; start Claude Code without %[1]s, or provide the server from a project, plugin or managed configuration",
+		claudeConfigDirEnv, env.getenv(claudeConfigDirEnv), source, serverName)
 }
 
 // Claude Code's mcp_server.source values for servers whose definition the
@@ -146,7 +175,7 @@ func resolveClaudeCode(ctx context.Context, loader *configLoader, env Env, req R
 	if builtin, ok := claudeBuiltinSources[serverName]; ok && source == builtin {
 		return Resolution{ServerName: serverName}
 	}
-	claudePath, configDir, ok := env.claudeConfigPaths()
+	configDir, ok := env.claudeConfigDir()
 	if !ok {
 		return unresolved(serverName, fmt.Sprintf(
 			"%s is set to a relative path (%q); set it to an absolute path",
@@ -194,10 +223,11 @@ func resolveClaudeCode(ctx context.Context, loader *configLoader, env Env, req R
 	}
 
 	// The user and local scopes and installed plugins are read from the home
-	// directory unless CLAUDE_CONFIG_DIR relocates them. The project scope is
+	// directory unless CLAUDE_CONFIG_DIR is set, which relocates plugins and
+	// leaves the user and local scopes unresolved below. The project scope is
 	// read from the project directory, like every source returned above reads
 	// from somewhere other than the home directory.
-	if source != claudeSourceProject && env.getenv(claudeConfigDirEnv) == "" {
+	if _, set := env.lookupEnv(claudeConfigDirEnv); source != claudeSourceProject && !set {
 		if reason, overridden := env.homeOverridden(); overridden {
 			return unresolved(serverName, reason)
 		}
@@ -206,11 +236,24 @@ func resolveClaudeCode(ctx context.Context, loader *configLoader, env Env, req R
 	// Only the user and local scopes live in .claude.json, which can run to tens
 	// of megabytes, so it is not parsed for the others.
 	var (
-		claude    claudeJSON
-		claudeRes loadResult
+		claudePath = env.homePath(".claude.json")
+		claude     claudeJSON
+		claudeRes  loadResult
 	)
 	if source == claudeSourceUser || source == claudeSourceLocal {
-		if claude, claudeRes = loader.loadClaudeJSON(ctx, claudePath); claudeRes != loadOK {
+		if _, set := env.lookupEnv(claudeConfigDirEnv); set {
+			return unresolved(serverName, claudeConfigDirUnsettled(env, serverName, source))
+		}
+		// A legacy file that exists is the one the session read, whatever
+		// .claude.json holds. One that exists and cannot be read is not passed
+		// over for .claude.json either, which the session did not use.
+		legacyPath := filepath.Join(configDir, claudeLegacyConfigFile)
+		if claude, claudeRes = loader.loadClaudeJSON(ctx, legacyPath); claudeRes == loadAbsent {
+			claude, claudeRes = loader.loadClaudeJSON(ctx, claudePath)
+		} else {
+			claudePath = legacyPath
+		}
+		if claudeRes != loadOK {
 			return unresolved(serverName, fmt.Sprintf(
 				"Claude Code's %s, which holds %s MCP servers, could not be read", claudePath, source))
 		}

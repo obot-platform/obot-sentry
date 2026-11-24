@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -434,59 +435,150 @@ func TestClaudeCodeClaudeJSONMustBeRead(t *testing.T) {
 	assertUnresolved(t, Resolve(f.Env, req), "could not be read")
 }
 
-// TestClaudeCodeConfigDirRelocatesClaudeJSON covers a session started with
-// CLAUDE_CONFIG_DIR. Claude Code then reads .claude.json from that directory and
-// ignores the one in the home directory, so the resolver has to as well.
-func TestClaudeCodeConfigDirRelocatesClaudeJSON(t *testing.T) {
+// TestClaudeCodeLegacyConfigFileReplacesClaudeJSON covers ~/.claude/.config.json,
+// the older name of .claude.json. When it exists Claude Code reads user and
+// local servers from it and ignores .claude.json, so a definition there is not
+// one the session runs.
+func TestClaudeCodeLegacyConfigFileReplacesClaudeJSON(t *testing.T) {
+	f := newFixture(t, "darwin")
+	project := f.mkdir(f.path("proj"))
+	claudeJSON := func(url string) string {
+		return `{"mcpServers":{"myserver":{"type":"http","url":"` + url + `"}},` +
+			`"projects":{` + quote(project) + `:{"mcpServers":{"localserver":{"type":"http","url":"` + url + `"}}}}}`
+	}
+	user := claudeCodeReq(claudeSourceUser, "myserver", project)
+	local := claudeCodeReq(claudeSourceLocal, "localserver", project)
+	modern, legacy := f.homePath(".claude.json"), f.homePath(".claude", ".config.json")
+	f.write(modern, claudeJSON("https://modern.example.com/mcp"))
+	assertURL(t, Resolve(f.Env, user), "https://modern.example.com/mcp")
+
+	f.write(legacy, claudeJSON("https://legacy.example.com/mcp"))
+	for _, req := range []ResolveRequest{user, local} {
+		res := Resolve(f.Env, req)
+		assertURL(t, res, "https://legacy.example.com/mcp")
+		if slices.Contains(consultedPaths(res), modern) {
+			t.Errorf("%s: consulted .claude.json beside a legacy file:\n%s", req.ServerSource, resolveTrace(res))
+		}
+	}
+
+	// A server only .claude.json defines is not one this session can run.
+	f.write(legacy, `{"mcpServers":{"other":{"type":"http","url":"https://legacy.example.com/mcp"}}}`)
+	assertUnresolved(t, Resolve(f.Env, user), "did not find it there")
+	assertUnresolved(t, Resolve(f.Env, local), "did not find it there")
+
+	// A legacy file the hook cannot use is not passed over for .claude.json.
+	f.write(legacy, `{"mcpServers":`)
+	assertUnresolved(t, Resolve(f.Env, user), "could not be read")
+	if err := os.Remove(legacy); err != nil {
+		t.Fatal(err)
+	}
+	f.mkdir(legacy)
+	res := Resolve(f.Env, user)
+	assertUnresolved(t, res, legacy)
+	assertUnresolved(t, res, "could not be read")
+
+	// The other sources do not read either file.
+	f.write(filepath.Join(project, ".mcp.json"), `{"mcpServers":{"proj":{"type":"http","url":"https://project.example.com/mcp"}}}`)
+	assertURL(t, Resolve(f.Env, claudeCodeReq(claudeSourceProject, "proj", project)), "https://project.example.com/mcp")
+}
+
+// TestClaudeCodeConfigDirLeavesUserAndLocalUnresolved covers a hook whose
+// environment sets CLAUDE_CONFIG_DIR. Claude Code reads .claude.json from the
+// directory it was started with, and its settings can change the variable for
+// its hooks afterwards, so the hook cannot tell which .claude.json the session
+// read: neither one may identify a user or local server. The other sources are
+// read from places the variable does not decide, or that follow it.
+func TestClaudeCodeConfigDirLeavesUserAndLocalUnresolved(t *testing.T) {
 	f := newFixture(t, "darwin")
 	project := f.mkdir(f.path("proj"))
 	configDir := f.path("alt-claude")
-	user := func(name string) ResolveRequest { return claudeCodeReq(claudeSourceUser, name, project) }
-	f.write(f.homePath(".claude.json"), `{"mcpServers":{"myserver":{"type":"http","url":"https://home.example.com/sse"}}}`)
-	assertURL(t, Resolve(f.Env, user("myserver")), "https://home.example.com/sse")
+	claudeJSON := func(url string) string {
+		return `{"mcpServers":{"myserver":{"type":"http","url":"` + url + `"}},` +
+			`"projects":{` + quote(project) + `:{"mcpServers":{"localserver":{"type":"http","url":"` + url + `"}}}}}`
+	}
+	user := claudeCodeReq(claudeSourceUser, "myserver", project)
+	local := claudeCodeReq(claudeSourceLocal, "localserver", project)
+	f.write(f.homePath(".claude.json"), claudeJSON("https://home.example.com/mcp"))
+	assertURL(t, Resolve(f.Env, user), "https://home.example.com/mcp")
+	assertURL(t, Resolve(f.Env, local), "https://home.example.com/mcp")
 
 	f.setenv(claudeConfigDirEnv, configDir)
-	f.write(filepath.Join(configDir, ".claude.json"), `{"mcpServers":{"myserver":{"type":"http","url":"https://alt.example.com/sse"}},`+
-		`"projects":{`+quote(project)+`:{"mcpServers":{"localserver":{"type":"http","url":"https://alt-local.example.com/sse"}}}}}`)
-	res := Resolve(f.Env, user("myserver"))
-	assertURL(t, res, "https://alt.example.com/sse")
-	if slices.Contains(consultedPaths(res), f.homePath(".claude.json")) {
-		t.Fatalf("consulted the home .claude.json despite %s:\n%s", claudeConfigDirEnv, resolveTrace(res))
+	f.write(filepath.Join(configDir, ".claude.json"), claudeJSON("https://alt.example.com/mcp"))
+	for _, req := range []ResolveRequest{user, local} {
+		res := Resolve(f.Env, req)
+		assertUnresolved(t, res, "CLAUDE_CONFIG_DIR is set ("+strconv.Quote(configDir)+")")
+		assertUnresolved(t, res, "its "+req.ServerSource+" MCP servers")
+		assertUnresolved(t, res, "start Claude Code without CLAUDE_CONFIG_DIR")
+		if len(res.Trace) != 0 {
+			t.Errorf("%s: read a .claude.json although neither can be trusted:\n%s", req.ServerSource, resolveTrace(res))
+		}
 	}
-	assertURL(t, Resolve(f.Env, claudeCodeReq(claudeSourceLocal, "localserver", project)), "https://alt-local.example.com/sse")
 
-	// A server only the home file defines is not one this session can run.
-	f.write(f.homePath(".claude.json"), `{"mcpServers":{"homeonly":{"type":"http","url":"https://home.example.com/sse"}}}`)
-	assertUnresolved(t, Resolve(f.Env, user("homeonly")), "did not find it there")
+	const elsewhere = "https://elsewhere.example.com/mcp"
+	f.write(filepath.Join(project, ".mcp.json"), `{"mcpServers":{"proj":{"type":"http","url":"`+elsewhere+`"}}}`)
+	f.write(f.Env.managedMCPPath(), `{"mcpServers":{"ent":{"type":"http","url":"`+elsewhere+`"}}}`)
+	f.write(f.Env.claudeManagedPath(claudeManagedSettings), `{"managedMcpServers":{"mgd":`+managedServer(elsewhere)+`}}`)
+	for source, name := range map[string]string{claudeSourceProject: "proj", claudeSourceEnterprise: "ent", claudeSourceManaged: "mgd"} {
+		t.Run(source, func(t *testing.T) { assertURL(t, Resolve(f.Env, claudeCodeReq(source, name, project)), elsewhere) })
+	}
+	if res := Resolve(f.Env, claudeCodeReq("dynamic", "computer-use", project)); res.Unresolved {
+		t.Errorf("a built-in server was unresolved: %s", res.Reason)
+	}
 }
 
 // TestClaudeCodeConfigDirIsUsedVerbatim covers values that only differ from
 // another directory, or from unset, by whitespace. Claude Code does not trim the
-// variable, so trimming it here would read a file the session does not.
+// variable, so trimming it here would read a plugin registry the session does
+// not.
 func TestClaudeCodeConfigDirIsUsedVerbatim(t *testing.T) {
 	f := newFixture(t, "darwin")
 	project := f.path("proj")
-	req := claudeCodeReq(claudeSourceUser, "myserver", project)
-	f.write(f.homePath(".claude.json"), `{"mcpServers":{"myserver":{"type":"http","url":"https://home.example.com/sse"}}}`)
-	f.write(filepath.Join(f.path("alt"), ".claude.json"), `{"mcpServers":{"myserver":{"type":"http","url":"https://alt.example.com/sse"}}}`)
+	req := pluginReq("tool", "myserver", project)
+	install := func(configDir, url string) {
+		dir := f.mkdir(filepath.Join(configDir, "plugins", "cache", "mkt", "tool", "1.0.0"))
+		f.write(filepath.Join(dir, ".mcp.json"), `{"mcpServers":{"myserver":{"type":"http","url":"`+url+`"}}}`)
+		f.pluginRegistry(configDir, `{"version":2,"plugins":{"tool@mkt":[{"scope":"user","installPath":`+quote(dir)+`}]}}`)
+	}
+	install(f.homePath(".claude"), "https://home.example.com/mcp")
+	install(f.path("alt"), "https://alt.example.com/mcp")
+	assertURL(t, Resolve(f.Env, req), "https://home.example.com/mcp")
 
 	// Windows strips trailing spaces from a path's final name, so a directory
 	// named "alt " cannot exist there.
 	if runtime.GOOS != "windows" {
-		f.write(filepath.Join(f.path("alt "), ".claude.json"), `{"mcpServers":{"myserver":{"type":"http","url":"https://alt-space.example.com/sse"}}}`)
+		install(f.path("alt "), "https://alt-space.example.com/mcp")
 		f.setenv(claudeConfigDirEnv, f.path("alt "))
-		assertURL(t, Resolve(f.Env, req), "https://alt-space.example.com/sse")
+		assertURL(t, Resolve(f.Env, req), "https://alt-space.example.com/mcp")
 	}
 
 	// Leading whitespace makes an absolute directory relative. Trimmed, it
-	// would read the "alt" file, which this session does not.
+	// would read the "alt" registry, which this session does not.
 	f.setenv(claudeConfigDirEnv, " "+f.path("alt"))
 	assertUnresolved(t, Resolve(f.Env, req), "relative path")
 
 	// Only spaces is a relative directory name to Claude Code, not unset, so it
-	// must not fall back to the home file.
+	// must not fall back to the home directory.
 	f.setenv(claudeConfigDirEnv, " ")
 	assertUnresolved(t, Resolve(f.Env, req), "relative path")
+
+	// Set to nothing is a relative directory to Claude Code as well: it keeps
+	// its plugins in the directory it was started from. Its settings can also
+	// empty the variable after .claude.json was read from another directory,
+	// so no source falls back to the home directory.
+	f.write(f.homePath(".claude.json"), `{"mcpServers":{"myserver":{"type":"http","url":"https://home.example.com/mcp"}}}`)
+	f.setenv(claudeConfigDirEnv, "")
+	for _, req := range []ResolveRequest{req, claudeCodeReq(claudeSourceUser, "myserver", project)} {
+		res := Resolve(f.Env, req)
+		assertUnresolved(t, res, `CLAUDE_CONFIG_DIR is set to a relative path ("")`)
+		if len(res.Trace) != 0 {
+			t.Errorf("%s: read configuration despite an empty %s:\n%s", req.ServerSource, claudeConfigDirEnv, resolveTrace(res))
+		}
+	}
+
+	// Unset, the home directory answers again.
+	delete(f.env, claudeConfigDirEnv)
+	assertURL(t, Resolve(f.Env, req), "https://home.example.com/mcp")
+	assertURL(t, Resolve(f.Env, claudeCodeReq(claudeSourceUser, "myserver", project)), "https://home.example.com/mcp")
 }
 
 // TestClaudeCodeRelativeConfigDirIsDenied covers a relative CLAUDE_CONFIG_DIR.

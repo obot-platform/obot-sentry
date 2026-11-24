@@ -269,8 +269,10 @@ func TestSamePathRefusesParentElements(t *testing.T) {
 // environment names a home directory other than the account's. The agent may
 // have read either one, so nothing under the home directory is resolved, for
 // any agent. A Claude Code server from a source that is not read from the home
-// directory resolves as it does without an override, and so does every source
-// once CLAUDE_CONFIG_DIR takes Claude Code's configuration out of it.
+// directory resolves as it does without an override, and so does an installed
+// plugin once CLAUDE_CONFIG_DIR takes Claude Code's configuration out of it. The
+// user and local scopes stay unresolved under CLAUDE_CONFIG_DIR, for its own
+// reason.
 func TestHomeOverrideLeavesHomeConfigurationUnresolved(t *testing.T) {
 	f := newFixture(t, "darwin")
 	project := f.mkdir(f.path("proj"))
@@ -328,7 +330,9 @@ func TestHomeOverrideLeavesHomeConfigurationUnresolved(t *testing.T) {
 		t.Errorf("a claude.ai connector under the override: unresolved=%v (%s) connector=%q", connector.Unresolved, connector.Reason, connector.Identity.Connector)
 	}
 
-	// CLAUDE_CONFIG_DIR takes all of it out of the home directory.
+	// CLAUDE_CONFIG_DIR takes all of it out of the home directory. Plugins follow
+	// it; .claude.json is never read under it, so user and local servers are
+	// unresolved for the variable rather than for the HOME override.
 	const alt = "https://alt.example.com/sse"
 	configDir := f.path("alt-claude")
 	f.setenv(claudeConfigDirEnv, configDir)
@@ -339,11 +343,14 @@ func TestHomeOverrideLeavesHomeConfigurationUnresolved(t *testing.T) {
 	f.write(filepath.Join(configDir, ".claude.json"), `{"mcpServers":{"linear":{"type":"http","url":"`+alt+`"}},`+
 		`"projects":{`+quote(project)+`:{"mcpServers":{"mine":{"type":"http","url":"`+alt+`"}}}}}`)
 	for name, req := range underHome {
-		if req.Agent != localagent.ClaudeCode {
+		switch {
+		case req.Agent != localagent.ClaudeCode:
 			assertUnresolved(t, Resolve(f.Env, req), "HOME set to")
-			continue
+		case req.ServerSource == claudeSourceUser || req.ServerSource == claudeSourceLocal:
+			assertUnresolved(t, Resolve(f.Env, req), claudeConfigDirEnv+" is set")
+		default:
+			t.Run(name+" with CLAUDE_CONFIG_DIR", func(t *testing.T) { assertURL(t, Resolve(f.Env, req), alt) })
 		}
-		t.Run(name+" with CLAUDE_CONFIG_DIR", func(t *testing.T) { assertURL(t, Resolve(f.Env, req), alt) })
 	}
 
 	f.Env.GOOS = "windows"

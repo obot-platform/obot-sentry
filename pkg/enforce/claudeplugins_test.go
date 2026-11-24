@@ -120,7 +120,9 @@ func TestClaudeCodePluginInstallScopes(t *testing.T) {
 }
 
 // TestClaudeCodePluginRegistryFollowsConfigDir covers CLAUDE_CONFIG_DIR, which
-// moves the plugin registry along with .claude.json.
+// moves the plugin registry. Claude Code loads plugins from the directory the
+// variable names when the hook runs, even when its settings set it after
+// startup, so unlike .claude.json the registry is read from there.
 func TestClaudeCodePluginRegistryFollowsConfigDir(t *testing.T) {
 	f := newFixture(t, "darwin")
 	configDir := f.path("alt-claude")
