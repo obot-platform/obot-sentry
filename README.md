@@ -6,7 +6,7 @@ It enrolls each machine with an [Obot](https://github.com/obot-platform/obot) se
 
 ## How it works
 
-- **Machine-wide scheduler entries.** The MDM installer registers a scan task that the OS runs *as each signed-in user*: on Windows it uses a `BUILTIN\Users` group principal (logon + a 10-minute poll). Each run is a plain `obot-sentry scan --submit --quiet` in the user's own session, so attribution, paths, and permissions are native — no privileged fan-out and no MDM per-user scheduling. The poll is cheap: obot-sentry throttles real submissions to the MDM-configured `ScanIntervalMinutes` (default 60, clamped to 15–1440) against its per-user scan state, so admins retune the cadence from the MDM alone (`scan --submit --force` bypasses the throttle for a one-off manual submission). Users who aren't signed in aren't scanned; their inventory can't change while they're signed out, so nothing is missed beyond first-report latency for accounts that haven't signed in since install. The installer also registers an elevated SYSTEM task that runs `obot-sentry hook-install` at logon and hourly. Because `hook-install` targets only the active console user, it converges at each sign-in (after a one-minute settle) plus the install kick, with the hourly run picking up later drift and console-user switches.
+- **Machine-wide scheduler entries.** The MDM installer registers a scan task that the OS runs *as each signed-in user*: on Windows it uses a `BUILTIN\Users` group principal (logon + a 10-minute poll). Each run is a plain `obot-sentry scan --submit --quiet` in the user's own session, so attribution, paths, and permissions are native — no privileged fan-out and no MDM per-user scheduling. The poll is cheap: obot-sentry throttles real submissions to the MDM-configured `ScanIntervalMinutes` (default 60, clamped to 15–1440) against its per-user scan state, so admins retune the cadence from the MDM alone (`scan --submit --force` bypasses the throttle for a one-off manual submission). Users who aren't signed in aren't scanned; their inventory can't change while they're signed out, so nothing is missed beyond first-report latency for accounts that haven't signed in since install. The installer also registers an elevated hook check — a SYSTEM scheduled task on Windows (startup, logon, and every 5 minutes) and a root LaunchDaemon on macOS (at load and every 5 minutes) — that runs `obot-sentry hook-install --if-due`. Each start is a cheap check: it converges only when one is due, which is when the MDM-configured `HookCheckIntervalMinutes` (default 15, clamped to 5–1440) has passed, the machine has restarted, a user profile has appeared or gone, or the obot-sentry version, executable, or enforcement setting has changed. A converging run restores missing hooks and repairs changed ones in machine policy and in the profile of every local user whose profile has been set up by a first sign-in, signed in or not, leaving third-party hooks and unrelated settings alone. Machine-wide hooks are converged first, then each user's in turn, each under a two-minute limit, so one destination that cannot be read or parsed — or that blocks its reader — fails on its own without holding up the rest. A check that fails is retried after 5 minutes, then 10, 20, and so on up to the interval. Every hook installed, repaired, or removed, every failure, and a summary per run are appended to the run log, readable only by administrators: `/Library/Logs/obot/hook-install.log` on macOS, `%ProgramData%\obot\hook-install\hook-install.log` on Windows (rotated at 1 MiB). On Windows, every folder hook-install writes in under `%ProgramData%` and `Program Files` is opened as itself and held open for the run, so it cannot be swapped for a junction while in use. A folder created by an administrator is taken over in place with its contents kept; one created by a standard user is taken over and emptied; a junction is moved aside. One remaining gap: a user who created such a folder before Obot Sentry first secured it, and keeps a handle with delete access open on it, can make that one destination fail until the handle closes (at the latest, their sign-out or a restart). The failure is logged and retried.
 - **Enrollment.** Configuration (server URL + an `ode1-...` enrollment credential) is pushed by the MDM — via registry values on Windows, a managed-preferences profile on macOS. On the machine's first scan — by whichever user runs first — obot-sentry generates a shared Ed25519 identity key in the machine-scoped data dir (`%PROGRAMDATA%\obot\obot-sentry` on Windows, `/Library/Application Support/obot/obot-sentry` on macOS; both are prepared user-writable by the installer, with a per-user fallback when unavailable) and enrolls the public key via `POST /api/mdm/enroll` (trust-on-first-use). The device ID derives from the machine ID + key fingerprint, so all users present one device — and a lost key simply mints a fresh device ID instead of a TOFU conflict. Each user's first scan re-enrolls the same identity, which is an idempotent update server-side.
 - **Submission.** Every submission is authenticated with a short-lived self-signed JWT (`aud=obot/device`) verified server-side against the enrolled key; scans land via `POST /api/devices/scans`, attributed to the submitting user by the manifest's `username`. Local-agent audit logs land via `POST /api/local-agent-audit-logs`, with the server stamping authoritative device attribution from the JWT.
 - **Local-agent audit hooks.** Managed hook configuration invokes the hidden `obot-sentry audit submit` command for supported local agents. The hook parser normalizes terminal tool-call events, submits them fail-open, and writes only warnings to stderr when enrollment or submission is unavailable so agent execution is not blocked.
@@ -22,6 +22,7 @@ obot-sentry scan              # build + print the manifest (add --submit to enro
 obot-sentry enroll            # explicit enrollment, for verifying a configuration
 obot-sentry hook-install      # install managed local-agent hooks (root/Administrator)
                               #   --enforce also installs the tool-call enforcement hooks
+                              #   --if-due converges only when a periodic check is due (the schedulers pass it)
 obot-sentry hook-uninstall    # remove all marker-owned hooks (root/Administrator)
 obot-sentry version
 ```
@@ -38,6 +39,7 @@ Resolution order per key: flags > env > MDM store.
 | Enrollment key | `--enrollment-key` | `OBOT_SENTRY_ENROLLMENT_KEY` | `EnrollmentKey` |
 | Scan interval (minutes) | `--scan-interval-minutes` | `OBOT_SENTRY_SCAN_INTERVAL_MINUTES` | `ScanIntervalMinutes` |
 | Enforcement enabled | `hook-install --enforce` | `OBOT_SENTRY_ENFORCEMENT_ENABLED` | `EnforcementEnabled` |
+| Hook check interval (minutes) | `hook-install --hook-check-interval-minutes` | `OBOT_SENTRY_HOOK_CHECK_INTERVAL_MINUTES` | `HookCheckIntervalMinutes` |
 
 `EnforcementEnabled` is a boolean and every store spells it differently, so all
 of these are accepted: a real plist boolean, `1`/`0` from a `REG_DWORD`,
@@ -47,7 +49,7 @@ the next layer instead of quietly disabling the control. Absent everywhere means
 enforcement is off.
 
 On Windows the registry value is what turns enforcement on for a device that is
-already installed: the hook scheduled task registers a fixed `hook-install`
+already installed: the hook scheduled task registers a fixed `hook-install --if-due`
 argument list, so the MSI property (`ENFORCEMENT=1`) or a pushed `REG_DWORD` is
 the only way in.
 
@@ -268,8 +270,9 @@ unresolved: stdio command "/opt/homebrew/bin/some-server" is a path, not a bare 
 The Claude Code, Codex, and Cursor hook files are machine-scoped and
 administrator-owned. The Kiro hook file is **user-scoped**
 (`~/.kiro/hooks/obot-sentry.json`), so the user whose calls are being enforced
-can delete it. The hourly `hook-install` task re-converges it, so the bypass
-window is bounded by that interval rather than permanent.
+can delete it. The periodic `hook-install` check restores it, so the bypass
+window is bounded by `HookCheckIntervalMinutes` (15 minutes by default) rather
+than permanent.
 
 Claude Code's hooks are installed in its managed settings file, which Claude
 Code reads from a fixed path. On Windows that path is always on drive `C:`,
@@ -327,9 +330,9 @@ sudo obot-sentry hook-uninstall
 On Windows, run the equivalent command in an elevated PowerShell. The command
 removes all hook entries whose command contains `--managed-by obot-sentry` from
 Claude Code, Codex, VS Code, Cursor, and Kiro while preserving third-party
-hooks. It targets machine-wide files and the active console user's files, so
-repeat it for each user on a shared machine. Stop the scheduled hook task or
-uninstall the package afterward so a later convergence does not reinstall them.
+hooks. It covers machine-wide files and the files of every local user. Stop the
+scheduled hook task or uninstall the package afterward so a later check does not
+reinstall them.
 
 Every entry Obot Sentry writes carries the `--managed-by obot-sentry` marker
 — the same signal `hook-install` uses to recognize and replace its own entries
@@ -463,8 +466,8 @@ pointing it at `dist/mdm-assets` serves a local build.
 
 | Platform | installer | scheduling | tenant config |
 |---|---|---|---|
-| Intune (Windows) | `.msi` wrapped as `.intunewin` | per-user scan task (logon + 10-min poll, submissions throttled to `ScanIntervalMinutes`) plus elevated SYSTEM hook-install task (logon + hourly) | MSI properties → `HKLM\SOFTWARE\Obot\obot-sentry` |
-| Intune, Jamf Pro (macOS) | `.pkg` | per-user scan LaunchAgent (login + 15-min poll matching the `ScanIntervalMinutes` floor, submissions throttled to `ScanIntervalMinutes`) plus root hook-install LaunchDaemon (load + hourly) | configuration profile → `/Library/Managed Preferences/ai.obot.obot-sentry.plist` |
+| Intune (Windows) | `.msi` wrapped as `.intunewin` | per-user scan task (logon + 10-min poll, submissions throttled to `ScanIntervalMinutes`) plus elevated SYSTEM hook-install task (startup + logon + 5-min poll, checks throttled to `HookCheckIntervalMinutes`) | MSI properties → `HKLM\SOFTWARE\Obot\obot-sentry` |
+| Intune, Jamf Pro (macOS) | `.pkg` | per-user scan LaunchAgent (login + 15-min poll matching the `ScanIntervalMinutes` floor, submissions throttled to `ScanIntervalMinutes`) plus root hook-install LaunchDaemon (load + 5-min poll, checks throttled to `HookCheckIntervalMinutes`) | configuration profile → `/Library/Managed Preferences/ai.obot.obot-sentry.plist` |
 | Manual (Windows) | `.msi`, or the bare exe | as above for the MSI | MSI properties, or `OBOT_SENTRY_*` environment variables |
 | Manual (macOS) | `.pkg`, or the bare universal binary | as above for the pkg | `sudo defaults write /Library/Preferences/ai.obot.obot-sentry`, or `OBOT_SENTRY_*` environment variables |
 

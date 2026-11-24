@@ -41,10 +41,19 @@ Everything below needs an Administrator PowerShell.
   run submits a scan at most every {{.scanIntervalMinutes}} minutes — change
   `ScanIntervalMinutes` in the registry without reinstalling.
 - Registers a second machine-wide scheduled task (`Obot Sentry Hook Install`)
-  running as SYSTEM at logon and hourly, converging the managed local-agent
-  hooks for the active console user. It reads `EnforcementEnabled` from the
-  registry on every run, so turning enforcement on or off there takes effect
-  without reinstalling.
+  running as SYSTEM at startup, at logon, and every 5 minutes. Every 15 minutes
+  it checks the managed local-agent hooks of every user profile on the device,
+  signed in or not, and restores any that are missing or changed; third-party
+  hooks are left alone. It checks sooner, within about 5 minutes, after a
+  restart, a new user's first sign-in, an upgrade, a change to
+  `EnforcementEnabled`, or a failed check (retried after 5, 10, 20… minutes, up to the
+  interval). To change the 15 minutes, set
+  `HookCheckIntervalMinutes` (5–1440) as a `REG_DWORD` under
+  `HKLM\SOFTWARE\Obot\obot-sentry`. A *Shut down* with Fast Startup on
+  resumes rather than restarts, so it is not treated as one; the next check
+  comes within the interval.
+  Both values are read from the registry on every run, so changing them there
+  takes effect without reinstalling.
 - Handles upgrades and uninstalls out of the box.
 
 ## Verify the install
@@ -74,12 +83,20 @@ Everything below needs an Administrator PowerShell.
    This will produce the following output:
 
    - `LastRunTime` climbs on schedule — every 10 minutes for the scan task,
-     hourly for the hook task, and at each logon for both.
+     every 5 minutes for the hook task, and at each logon for both.
    - `LastTaskResult = 0` means the last run succeeded. Non-zero is usually a
      configuration problem — recheck the registry values from step 2. `267011`
      means the task has not run yet.
    - `NumberOfMissedRuns` above 0 means the device was asleep or off when a run
      was due; the next run catches up.
+
+   The hook task records every hook it installs, repairs, or removes, every
+   failure, and a summary line per check in its run log, which only
+   administrators can read (run this elevated):
+
+   ```powershell
+   Get-Content "$env:ProgramData\obot\hook-install\hook-install.log" -Tail 50
+   ```
 
 4. Ensure scans are landing:
 

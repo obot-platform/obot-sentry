@@ -528,7 +528,7 @@ func TestRunEnforceEndToEnd(t *testing.T) {
 			GOOS:                "darwin",
 			Privilege:           func() error { return nil },
 			ResolveExe:          func() (string, error) { return macExe, nil },
-			ResolveUser:         func() (*TargetUser, error) { return user, nil },
+			ResolveUsers:        func() (UserList, error) { return UserList{Users: []*TargetUser{user}}, nil },
 			ProvisionIdentity:   func() (string, error) { return "/Library/Application Support/obot/obot-sentry", nil },
 			ResolveDestinations: tempDestinations(machineRoot),
 			Enforce:             enforce,

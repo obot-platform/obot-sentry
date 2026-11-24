@@ -3,11 +3,17 @@
 package hookinstall
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"os/user"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
+	"time"
 )
 
 // minDarwinUserUID is the lowest uid macOS assigns to a real local account.
@@ -24,31 +30,89 @@ func checkPrivilege() error {
 	return nil
 }
 
-// resolveTargetUser resolves the active console user on macOS. It prefers the
-// account named by SUDO_UID (the interactive sudo command case), then falls
-// back to the owner of /dev/console (the MDM/root case where a user is logged
-// in at the GUI).
-func resolveTargetUser() (*TargetUser, error) {
-	if u := targetUserFromSudo(); u != nil {
-		return u, nil
+// resolveTargetUsers lists every local account with a set-up home on macOS,
+// plus the account at the console. The console account is added because a
+// network account (Active Directory without a mobile account, or LDAP) is not in
+// the local directory dscl lists, yet can be signed in and running agents. If
+// the directory service cannot be read, the console account alone is returned
+// with the error, so the run converges what it can and still reports the
+// failure.
+func resolveTargetUsers() (UserList, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "/usr/bin/dscl", ".", "-list", "/Users", "UniqueID").Output()
+	var list UserList
+	var listErr error
+	if err == nil {
+		list = vetDarwinAccounts(parseDsclUIDs(out, minDarwinUserUID), user.LookupId)
+	} else {
+		listErr = fmt.Errorf("listing local accounts with dscl: %w", err)
 	}
-	return targetUserFromConsole()
+	console, consoleErr := targetUserFromConsole()
+	switch {
+	case consoleErr == nil:
+		if reason := darwinHomeUnusable(console); reason != "" {
+			if !hasHome(list, console.HomeDir) {
+				list.Skipped = append(list.Skipped, SkippedUser{Username: console.Username, Reason: reason})
+			}
+		} else {
+			list = withUser(list, console)
+		}
+	case listErr != nil:
+		return UserList{}, errors.Join(listErr, consoleErr)
+	}
+	return list, listErr
 }
 
-func targetUserFromSudo() *TargetUser {
-	uidStr := os.Getenv("SUDO_UID")
-	if uidStr == "" {
-		return nil
+// vetDarwinAccounts turns listed accounts into the users to converge, passing
+// over any whose home is missing (a network account whose share is not mounted),
+// not yet set up by a first sign-in, or owned by a different account.
+func vetDarwinAccounts(accounts []localAccount, lookup func(uid string) (*user.User, error)) UserList {
+	var list UserList
+	seen := map[string]bool{}
+	for _, a := range accounts {
+		u, err := lookup(a.UID)
+		if err != nil {
+			list.Skipped = append(list.Skipped, SkippedUser{Username: a.Name, Reason: err.Error()})
+			continue
+		}
+		tu, err := targetUserFromAccount(u)
+		if err != nil {
+			list.Skipped = append(list.Skipped, SkippedUser{Username: a.Name, Reason: err.Error()})
+			continue
+		}
+		if seen[tu.HomeDir] {
+			continue
+		}
+		if reason := darwinHomeUnusable(tu); reason != "" {
+			list.Skipped = append(list.Skipped, SkippedUser{Username: tu.Username, Reason: reason})
+			continue
+		}
+		seen[tu.HomeDir] = true
+		list.Users = append(list.Users, tu)
 	}
-	u, err := user.LookupId(uidStr)
+	return list
+}
+
+// darwinHomeUnusable says why hooks should not be written into u's home, or ""
+// when they can be. macOS fills a new home from the user template at first
+// sign-in; writing into it first could race that, so a home without its Library
+// folder is left until it has one. A home owned by another account is left
+// alone, since the files written there would be handed to an account that does
+// not control the directory.
+func darwinHomeUnusable(u *TargetUser) string {
+	info, err := os.Lstat(u.HomeDir)
 	if err != nil {
-		return nil
+		return fmt.Sprintf("home %s is not accessible: %v", u.HomeDir, err)
 	}
-	tu, err := targetUserFromAccount(u)
-	if err != nil {
-		return nil
+	if st, ok := info.Sys().(*syscall.Stat_t); !ok || int(st.Uid) != u.UID {
+		return fmt.Sprintf("home %s is not owned by the account", u.HomeDir)
 	}
-	return tu
+	lib, err := os.Lstat(filepath.Join(u.HomeDir, "Library"))
+	if err != nil || !lib.IsDir() {
+		return fmt.Sprintf("home %s has not been set up by a first sign-in", u.HomeDir)
+	}
+	return ""
 }
 
 // targetUserFromConsole resolves the owner of /dev/console — the user logged in
@@ -102,4 +166,14 @@ func validateExecutableOwner(path string, info os.FileInfo) error {
 		return fmt.Errorf("obot-sentry executable %q is owned by uid %d, not root", path, st.Uid)
 	}
 	return nil
+}
+
+// hasHome reports whether list already has a user whose home is home.
+func hasHome(list UserList, home string) bool {
+	for _, u := range list.Users {
+		if strings.EqualFold(u.HomeDir, home) {
+			return true
+		}
+	}
+	return false
 }

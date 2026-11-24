@@ -6,14 +6,16 @@
 // back the hook-install and hook-uninstall commands.
 //
 //   - who and where we are: platform.go and its per-GOOS files resolve the
-//     console user and the privilege to write for them,
+//     machine's users and the privilege to write for them,
 //   - what should be on disk: destinations.go models every managed file,
 //     command.go builds the hook command and recognizes our own marker in one,
 //     and desired.go assembles each agent's desired document,
 //   - how it gets there: converge.go merges desired state into existing state
 //     through the editors in jsonconfig.go and tomlconfig.go, and configio.go
 //     performs the symlink-safe read and atomic commit, and
-//   - install.go drives all of it behind injectable seams.
+//   - install.go drives all of it behind injectable seams, schedule.go
+//     decides whether a periodic check is due, and runlog.go records what each
+//     run changed.
 //
 // This file defines the vocabulary those stages share: the managed agents, the
 // scope and format of a destination, and the per-destination convergence result.
@@ -37,13 +39,13 @@ func Agents() []Agent {
 }
 
 // Scope distinguishes machine-wide destinations (one file for all users) from
-// active-user destinations (one file under a single console user's home).
+// per-user destinations (one file under each local user's home).
 type Scope string
 
 const (
 	// ScopeMachine is a fixed, absolute path owned by administrators.
 	ScopeMachine Scope = "machine"
-	// ScopeUser is resolved against the active console user's home directory.
+	// ScopeUser is resolved against each local user's home directory.
 	ScopeUser Scope = "user"
 )
 
@@ -83,6 +85,12 @@ type Result struct {
 	// "VS Code settings". It disambiguates the two vscode-related files.
 	Label string
 	Scope Scope
+	// Retired marks a destination obot-sentry no longer installs into and only
+	// removes its old hooks from.
+	Retired bool
+	// User names the account a user-scoped destination belongs to; it is
+	// empty for a machine-wide destination.
+	User string
 	// Path is the resolved absolute destination path, populated once path
 	// resolution lands. It may be empty for a preflight-only plan.
 	Path   string

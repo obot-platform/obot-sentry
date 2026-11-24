@@ -3,6 +3,7 @@ package hookinstall
 import (
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -109,9 +110,17 @@ func statConfigFile(root *os.Root, rel, absPath string) (bool, error) {
 }
 
 // readConfigFile reads the config at absPath through its root, reporting false
-// when the file or its root is absent.
-func readConfigFile(scope Scope, home, absPath string) ([]byte, bool, error) {
-	root, rel, err := openConfigRoot(scope, home, absPath)
+// when the file or its root is absent. u is the user whose home holds a
+// user-scoped file, and nil for a machine-wide one.
+//
+// The file is checked through the descriptor it is read from, so it cannot be
+// swapped between the check and the read: it must be a regular file with a
+// single link, and a user-scoped one must belong to that user (or root). A hard
+// link is refused because it lets whoever made it point the privileged reader at
+// a file they cannot read themselves, whose contents the merge would then copy
+// into a file they own.
+func readConfigFile(scope Scope, u *TargetUser, absPath string) ([]byte, bool, error) {
+	root, rel, err := openConfigRoot(scope, homeOf(u), absPath)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return nil, false, nil
@@ -123,7 +132,27 @@ func readConfigFile(scope Scope, home, absPath string) ([]byte, bool, error) {
 	if ok, err := statConfigFile(root, rel, absPath); err != nil || !ok {
 		return nil, false, err
 	}
-	data, err := root.ReadFile(rel)
+	// Opened without blocking: a FIFO swapped in after the Lstat above would
+	// otherwise hold the open, and with it the whole group, until timed out.
+	f, err := root.OpenFile(rel, configReadFlags, 0)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	defer func() { _ = f.Close() }()
+	info, err := f.Stat()
+	if err != nil {
+		return nil, false, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, false, fmt.Errorf("refusing to use non-regular config %q", absPath)
+	}
+	if err := checkConfigFileIdentity(f, info, scope, u, absPath); err != nil {
+		return nil, false, err
+	}
+	data, err := io.ReadAll(f)
 	if err != nil {
 		return nil, false, err
 	}
@@ -168,7 +197,11 @@ func commitConfigFile(scope Scope, u *TargetUser, absPath string, data []byte) e
 			return err
 		}
 	}
-	if err := writeAtomic(root, rel, absPath, data, filePerm); err != nil {
+	owner := u
+	if scope == ScopeMachine {
+		owner = nil
+	}
+	if err := writeAtomic(root, rel, absPath, data, filePerm, owner); err != nil {
 		return err
 	}
 	if scope == ScopeMachine {
@@ -177,7 +210,11 @@ func commitConfigFile(scope Scope, u *TargetUser, absPath string, data []byte) e
 	if u == nil {
 		return nil
 	}
-	return chownToUser(root, u, append(dirs, rel))
+	// The file itself was handed to the user before it was renamed into place.
+	// Directories are re-owned by name, which is safe where the file would not
+	// be: a directory cannot be hard-linked, and Lchown does not follow a
+	// symlink planted in its place.
+	return chownToUser(root, u, dirs)
 }
 
 // dirChain expands "a/b/c" into ["a", "a/b", "a/b/c"]: the last element is the
@@ -199,9 +236,17 @@ func dirChain(dir string) []string {
 	return chain
 }
 
+// chownOpenFile is chownFile, replaceable in tests to observe when the hand-over
+// happens.
+var chownOpenFile = chownFile
+
 // writeAtomic replaces rel under root with data. absPath is the same file as
-// the user knows it, and is the only path its errors name.
-func writeAtomic(root *os.Root, rel, absPath string, data []byte, perm os.FileMode) error {
+// the user knows it, and is the only path its errors name. A non-nil owner is
+// given the file through its descriptor before it is renamed into place: once
+// the name is in a directory the user controls, they could swap it for a hard
+// link to any file on the volume, and a chown by name would then hand them that
+// file instead.
+func writeAtomic(root *os.Root, rel, absPath string, data []byte, perm os.FileMode, owner *TargetUser) error {
 	// The pid keeps concurrent installers off each other's in-flight write; the
 	// rename is atomic, so whichever commits last wins with identical content.
 	tmp := filepath.Join(filepath.Dir(rel), fmt.Sprintf(".%s.%d.obot-sentry-tmp", filepath.Base(rel), os.Getpid()))
@@ -214,6 +259,13 @@ func writeAtomic(root *os.Root, rel, absPath string, data []byte, perm os.FileMo
 	}
 	if err != nil {
 		return fmt.Errorf("creating temporary file for %q: %w", absPath, withoutRootPath(err))
+	}
+	if owner != nil {
+		if err := chownOpenFile(f, owner); err != nil {
+			_ = f.Close()
+			_ = root.Remove(tmp)
+			return fmt.Errorf("handing temporary file for %q to %s: %w", absPath, owner.Username, withoutRootPath(err))
+		}
 	}
 	if err := writeAndClose(f, data, perm); err != nil {
 		_ = root.Remove(tmp)

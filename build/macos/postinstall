@@ -21,6 +21,10 @@ install -d -o root -g wheel -m 755 "/Library/Application Support/obot"
 install -d -o root -g wheel -m 1777 "/Library/Application Support/obot/obot-sentry"
 
 launchctl bootout system/ai.obot.obot-sentry.hook-install 2>/dev/null || true
+# Forget the last hook check, so the daemon's first run converges at once even
+# when the same version is reinstalled to restore hooks. Done after bootout, so
+# a check that was running cannot record itself after the clear.
+/usr/local/bin/obot-sentry hook-install --clear-check-record 2>/dev/null || true
 launchctl bootstrap system /Library/LaunchDaemons/ai.obot.obot-sentry.hook-install.plist 2>/dev/null || true
 
 consoleUID="$(stat -f %u /dev/console 2>/dev/null || echo "")"

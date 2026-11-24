@@ -36,11 +36,19 @@ defaults delete /Library/Preferences/ai.obot.obot-sentry 2>/dev/null || true
 # defaults delete empties the domain but leaves the plist behind.
 rm -f /Library/Preferences/ai.obot.obot-sentry.plist
 
-rm -rf "/Library/Application Support/obot/obot-sentry"
+rm -rf "/Library/Application Support/obot/obot-sentry" \
+	"/Library/Application Support/obot/hook-install"
+rm -f /Library/Logs/obot/hook-install.log /Library/Logs/obot/hook-install.log.1
+rmdir /Library/Logs/obot 2>/dev/null || true
+# Per-user state is removed as the user who owns the home, never as root: a
+# user can put symlinks anywhere in their own home, and root following one would
+# delete whatever it points at. Homes owned by root or missing are skipped.
 for home in /Users/*; do
-	[[ -d "$home" ]] || continue
-	rm -rf "$home/Library/Application Support/obot/obot-sentry" \
-		"$home/Library/Caches/obot/obot-sentry"
+	[[ -d "$home" && ! -L "$home" ]] || continue
+	owner="$(stat -f %u "$home" 2>/dev/null || echo 0)"
+	[[ "$owner" != 0 ]] || continue
+	sudo -u "#${owner}" /bin/rm -rf "$home/Library/Application Support/obot/obot-sentry" \
+		"$home/Library/Caches/obot/obot-sentry" 2>/dev/null || true
 done
 
 echo "Obot Sentry removed. Full Disk Access entries for /usr/local/bin/obot-sentry," \

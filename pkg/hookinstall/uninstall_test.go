@@ -223,7 +223,7 @@ func TestRunUninstallEndToEnd(t *testing.T) {
 			GOOS:                "darwin",
 			Privilege:           func() error { return nil },
 			ResolveExe:          func() (string, error) { return macExe, nil },
-			ResolveUser:         func() (*TargetUser, error) { return user, nil },
+			ResolveUsers:        func() (UserList, error) { return UserList{Users: []*TargetUser{user}}, nil },
 			ProvisionIdentity:   func() (string, error) { return "/id", nil },
 			ResolveDestinations: tempDestinations(machineRoot),
 			Enforce:             true,
@@ -297,8 +297,8 @@ func TestRunUninstallDoesNotCreateMissingFiles(t *testing.T) {
 	inst := &Installer{
 		GOOS:      "darwin",
 		Privilege: func() error { return nil },
-		ResolveUser: func() (*TargetUser, error) {
-			return &TargetUser{Username: "alice", HomeDir: home, UID: os.Getuid(), GID: os.Getgid()}, nil
+		ResolveUsers: func() (UserList, error) {
+			return UserList{Users: []*TargetUser{{Username: "alice", HomeDir: home, UID: os.Getuid(), GID: os.Getgid()}}}, nil
 		},
 		ResolveDestinations: tempDestinations(machineRoot),
 		Uninstall:           true,
@@ -321,7 +321,9 @@ func TestRunUninstallDoesNotCreateMissingFiles(t *testing.T) {
 	}
 }
 
-func TestRunUninstallMalformedConfigAbortsBeforeWriting(t *testing.T) {
+// TestRunUninstallMalformedConfigFailsWithoutRewriting proves uninstall reports a
+// malformed file as failed and leaves it as it was.
+func TestRunUninstallMalformedConfigFailsWithoutRewriting(t *testing.T) {
 	home := t.TempDir()
 	machineRoot := realTempDir(t)
 	user := &TargetUser{Username: "alice", HomeDir: home, UID: os.Getuid(), GID: os.Getgid()}
@@ -336,16 +338,19 @@ func TestRunUninstallMalformedConfigAbortsBeforeWriting(t *testing.T) {
 	inst := &Installer{
 		GOOS:                "darwin",
 		Privilege:           func() error { return nil },
-		ResolveUser:         func() (*TargetUser, error) { return user, nil },
+		ResolveUsers:        func() (UserList, error) { return UserList{Users: []*TargetUser{user}}, nil },
 		ResolveDestinations: tempDestinations(machineRoot),
 		Uninstall:           true,
 		Out:                 &bytes.Buffer{},
 	}
 	if err := inst.Run(t.Context()); err == nil {
-		t.Fatal("expected malformed config to abort uninstall")
+		t.Fatal("expected malformed config to fail uninstall")
+	}
+	if got, err := os.ReadFile(claudePath); err != nil || string(got) != `{"hooks":` {
+		t.Fatalf("malformed file was rewritten: %q (err=%v)", got, err)
 	}
 	if _, err := os.Stat(filepath.Join(machineRoot, "etc/codex/requirements.toml")); !os.IsNotExist(err) {
-		t.Fatalf("later destination was written despite preflight failure: %v", err)
+		t.Fatalf("uninstall created a destination: %v", err)
 	}
 }
 
@@ -376,7 +381,7 @@ func TestUninstallRemovesFromEachClaudeDestinationIndependently(t *testing.T) {
 
 	plan := Plan{
 		GOOS:      "darwin",
-		User:      user,
+		Users:     []*TargetUser{user},
 		Uninstall: true,
 		Destinations: []Destination{
 			{Agent: localagent.ClaudeCode, Label: "Claude Code", Scope: ScopeMachine, Format: FormatJSON, Abs: managedFile},

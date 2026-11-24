@@ -3,10 +3,12 @@ package cmd
 import (
 	"bytes"
 	"errors"
+	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	obotcmd "github.com/obot-platform/cmd"
 	"github.com/obot-platform/obot-sentry/pkg/hookinstall"
@@ -133,7 +135,7 @@ func TestHookInstallEnforcementPrecedence(t *testing.T) {
 					return mdmconfig.Config{EnforcementEnabled: tt.mdm}, nil
 				},
 			}
-			got, err := h.enforcing()
+			got, err := h.enforcing(h.mdmLoader())
 			if err != nil {
 				t.Fatalf("enforcing: %v", err)
 			}
@@ -149,7 +151,7 @@ func TestHookInstallEnforcementStoreErrorSurfaces(t *testing.T) {
 	h := &HookInstall{loadMDMConfig: func() (mdmconfig.Config, error) {
 		return mdmconfig.Config{}, errors.New("registry unavailable")
 	}}
-	if _, err := h.enforcing(); err == nil {
+	if _, err := h.enforcing(h.mdmLoader()); err == nil {
 		t.Fatal("expected an error when the MDM store cannot be read")
 	}
 }
@@ -183,7 +185,7 @@ func TestHookInstallFlagReachesTheInstaller(t *testing.T) {
 						GOOS:                "darwin",
 						Privilege:           func() error { return nil },
 						ResolveExe:          func() (string, error) { return "/usr/local/bin/obot-sentry", nil },
-						ResolveUser:         func() (*hookinstall.TargetUser, error) { return &hookinstall.TargetUser{HomeDir: t.TempDir()}, nil },
+						ResolveUsers:        func() (hookinstall.UserList, error) { return hookinstall.UserList{}, nil },
 						ProvisionIdentity:   func() (string, error) { return t.TempDir(), nil },
 						ResolveDestinations: func(string) []hookinstall.Destination { return nil },
 					}
@@ -217,7 +219,7 @@ func TestHookUninstallReachesInstaller(t *testing.T) {
 			installer = &hookinstall.Installer{
 				GOOS:                "darwin",
 				Privilege:           func() error { return nil },
-				ResolveUser:         func() (*hookinstall.TargetUser, error) { return &hookinstall.TargetUser{HomeDir: t.TempDir()}, nil },
+				ResolveUsers:        func() (hookinstall.UserList, error) { return hookinstall.UserList{}, nil },
 				ResolveDestinations: func(string) []hookinstall.Destination { return nil },
 			}
 			return installer
@@ -233,5 +235,161 @@ func TestHookUninstallReachesInstaller(t *testing.T) {
 	}
 	if installer.Enforce {
 		t.Fatal("uninstall unexpectedly enabled enforcement")
+	}
+}
+
+func TestHookInstallIfDueResolvesInterval(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		args []string
+		env  string
+		mdm  int
+		want time.Duration
+		due  bool
+	}{
+		{name: "no --if-due", args: nil, due: false},
+		{name: "default", args: []string{"--if-due"}, want: 15 * time.Minute, due: true},
+		{name: "MDM", args: []string{"--if-due"}, mdm: 60, want: time.Hour, due: true},
+		{name: "env over MDM", args: []string{"--if-due"}, env: "30", mdm: 60, want: 30 * time.Minute, due: true},
+		{name: "flag over MDM", args: []string{"--if-due", "--hook-check-interval-minutes=10"}, mdm: 60, want: 10 * time.Minute, due: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv(envEnforcementEnabled, "")
+			t.Setenv("OBOT_SENTRY_HOOK_CHECK_INTERVAL_MINUTES", tt.env)
+
+			var installer *hookinstall.Installer
+			hook := &HookInstall{
+				statePath: filepath.Join(t.TempDir(), "hook-install", "state.json"),
+				loadMDMConfig: func() (mdmconfig.Config, error) {
+					return mdmconfig.Config{HookCheckIntervalMinutes: tt.mdm}, nil
+				},
+				newInstaller: func() *hookinstall.Installer {
+					installer = &hookinstall.Installer{
+						GOOS:                "darwin",
+						Privilege:           func() error { return nil },
+						ResolveExe:          func() (string, error) { return "/usr/local/bin/obot-sentry", nil },
+						ResolveUsers:        func() (hookinstall.UserList, error) { return hookinstall.UserList{}, nil },
+						ProvisionIdentity:   func() (string, error) { return t.TempDir(), nil },
+						ResolveDestinations: func(string) []hookinstall.Destination { return nil },
+					}
+					return installer
+				},
+			}
+			cmd := obotcmd.Command(hook)
+			cmd.SetOut(&bytes.Buffer{})
+			cmd.SetErr(&bytes.Buffer{})
+			cmd.SetArgs(tt.args)
+			if err := cmd.Execute(); err != nil {
+				t.Fatalf("execute: %v", err)
+			}
+			if installer == nil {
+				t.Fatal("the command never built an installer")
+			}
+			if (installer.Schedule != nil) != tt.due {
+				t.Fatalf("Schedule = %+v, want set=%v", installer.Schedule, tt.due)
+			}
+			if tt.due && installer.Schedule.Interval != tt.want {
+				t.Errorf("Interval = %v, want %v", installer.Schedule.Interval, tt.want)
+			}
+		})
+	}
+}
+
+// TestHookInstallIfDueFallsBackWhenMDMUnreadable runs as the scheduler does —
+// no --enforce, no environment — against an unreadable MDM store: the check
+// keeps the last recorded enforcement setting and the default interval.
+func TestHookInstallIfDueFallsBackWhenMDMUnreadable(t *testing.T) {
+	t.Setenv(envEnforcementEnabled, "")
+	t.Setenv("OBOT_SENTRY_HOOK_CHECK_INTERVAL_MINUTES", "")
+	var installer *hookinstall.Installer
+	hook := &HookInstall{
+		statePath:       filepath.Join(t.TempDir(), "state.json"),
+		loadMDMConfig:   func() (mdmconfig.Config, error) { return mdmconfig.Config{}, errors.New("corrupt plist") },
+		lastEnforcement: func(string) (bool, error) { return true, nil },
+		newInstaller: func() *hookinstall.Installer {
+			installer = &hookinstall.Installer{
+				GOOS:                "darwin",
+				Privilege:           func() error { return nil },
+				ResolveExe:          func() (string, error) { return "/usr/local/bin/obot-sentry", nil },
+				ResolveUsers:        func() (hookinstall.UserList, error) { return hookinstall.UserList{}, nil },
+				ProvisionIdentity:   func() (string, error) { return t.TempDir(), nil },
+				ResolveDestinations: func(string) []hookinstall.Destination { return nil },
+			}
+			return installer
+		},
+	}
+	cmd := obotcmd.Command(hook)
+	var stderr bytes.Buffer
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&stderr)
+	cmd.SetArgs([]string{"--if-due"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("an unreadable MDM store stopped the check: %v", err)
+	}
+	if installer.Schedule == nil || installer.Schedule.Interval != 15*time.Minute {
+		t.Fatalf("Schedule = %+v, want the 15-minute default", installer.Schedule)
+	}
+	if !installer.Enforce {
+		t.Fatal("the last recorded enforcement setting was not kept")
+	}
+	if !strings.Contains(stderr.String(), "corrupt plist") {
+		t.Fatalf("no warning about the MDM store: %q", stderr.String())
+	}
+}
+
+func TestHookInstallClearCheckRecord(t *testing.T) {
+	cleared := false
+	hook := &HookInstall{
+		clearCheckRecord: func() error { cleared = true; return nil },
+		newInstaller: func() *hookinstall.Installer {
+			t.Fatal("--clear-check-record must not converge")
+			return nil
+		},
+	}
+	cmd := obotcmd.Command(hook)
+	cmd.SetArgs([]string{"--clear-check-record"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !cleared {
+		t.Fatal("the check record was not cleared")
+	}
+}
+
+func TestHookInstallIfDueFailsClosedWithoutRecord(t *testing.T) {
+	t.Setenv(envEnforcementEnabled, "")
+	hook := &HookInstall{
+		loadMDMConfig:   func() (mdmconfig.Config, error) { return mdmconfig.Config{}, errors.New("corrupt plist") },
+		lastEnforcement: func(string) (bool, error) { return false, errors.New("no record") },
+		newInstaller: func() *hookinstall.Installer {
+			t.Fatal("converged without an enforcement setting")
+			return nil
+		},
+	}
+	cmd := obotcmd.Command(hook)
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"--if-due"})
+	if err := cmd.Execute(); err == nil {
+		t.Fatal("expected the check to fail closed")
+	}
+}
+
+func TestHookInstallRemoveRunData(t *testing.T) {
+	removed := false
+	hook := &HookInstall{
+		removeRunData: func() error { removed = true; return nil },
+		newInstaller: func() *hookinstall.Installer {
+			t.Fatal("--remove-run-data must not converge")
+			return nil
+		},
+	}
+	cmd := obotcmd.Command(hook)
+	cmd.SetArgs([]string{"--remove-run-data"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !removed {
+		t.Fatal("run data was not removed")
 	}
 }

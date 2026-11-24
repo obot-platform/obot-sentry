@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 // testUser is owned by the current process user, so chownToUser is exercised
@@ -20,7 +21,7 @@ func TestCommitAndReadUserConfigRoundTrip(t *testing.T) {
 	u := testUser(home)
 	abs := filepath.Join(home, ".copilot", "hooks", "obot-sentry.json")
 
-	if _, ok, err := readConfigFile(ScopeUser, home, abs); err != nil || ok {
+	if _, ok, err := readConfigFile(ScopeUser, testUser(home), abs); err != nil || ok {
 		t.Fatalf("missing file should read as absent: ok=%v err=%v", ok, err)
 	}
 
@@ -29,7 +30,7 @@ func TestCommitAndReadUserConfigRoundTrip(t *testing.T) {
 		t.Fatalf("commit failed: %v", err)
 	}
 
-	got, ok, err := readConfigFile(ScopeUser, home, abs)
+	got, ok, err := readConfigFile(ScopeUser, testUser(home), abs)
 	if err != nil || !ok {
 		t.Fatalf("expected to read back the file: ok=%v err=%v", ok, err)
 	}
@@ -66,7 +67,7 @@ func TestCommitOverwritesRegularFile(t *testing.T) {
 	if err := commitConfigFile(ScopeUser, u, abs, []byte("second")); err != nil {
 		t.Fatal(err)
 	}
-	got, _, err := readConfigFile(ScopeUser, home, abs)
+	got, _, err := readConfigFile(ScopeUser, testUser(home), abs)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,13 +127,13 @@ func TestMachineConfigTraversesRootContainedIntermediateSymlink(t *testing.T) {
 
 	abs := filepath.Join(base, "etc", "codex", "requirements.toml")
 	data := []byte("[features]\nhooks = true\n")
-	if _, ok, err := readConfigFile(ScopeMachine, "", abs); err != nil || ok {
+	if _, ok, err := readConfigFile(ScopeMachine, nil, abs); err != nil || ok {
 		t.Fatalf("missing config should read as absent: ok=%v err=%v", ok, err)
 	}
 	if err := commitConfigFile(ScopeMachine, nil, abs, data); err != nil {
 		t.Fatalf("commit through root-contained machine symlink failed: %v", err)
 	}
-	got, ok, err := readConfigFile(ScopeMachine, "", abs)
+	got, ok, err := readConfigFile(ScopeMachine, nil, abs)
 	if err != nil || !ok {
 		t.Fatalf("read through root-contained machine symlink failed: ok=%v err=%v", ok, err)
 	}
@@ -169,7 +170,7 @@ func TestSymlinkedDestinationIsRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, _, err := readConfigFile(ScopeUser, home, link); err == nil {
+	if _, _, err := readConfigFile(ScopeUser, testUser(home), link); err == nil {
 		t.Fatal("expected a symlinked config to be refused, not followed")
 	}
 	if err := commitConfigFile(ScopeUser, u, link, []byte("managed")); err == nil {
@@ -209,7 +210,7 @@ func TestRefusesEscapingIntermediateSymlink(t *testing.T) {
 		t.Fatal(err)
 	}
 	abs := filepath.Join(home, ".copilot", "hooks", "obot-sentry.json")
-	if _, _, err := readConfigFile(ScopeUser, home, abs); err == nil {
+	if _, _, err := readConfigFile(ScopeUser, testUser(home), abs); err == nil {
 		t.Fatal("expected a read through an escaping intermediate symlink to be refused")
 	}
 	if err := commitConfigFile(ScopeUser, u, abs, []byte("managed")); err == nil {
@@ -235,7 +236,7 @@ func TestUserConfigRefusesRootContainedIntermediateSymlink(t *testing.T) {
 	}
 	abs := filepath.Join(home, ".copilot", "hooks", "obot-sentry.json")
 
-	if _, _, err := readConfigFile(ScopeUser, home, abs); err == nil {
+	if _, _, err := readConfigFile(ScopeUser, testUser(home), abs); err == nil {
 		t.Fatal("read followed a user-scope intermediate symlink")
 	}
 	if err := commitConfigFile(ScopeUser, u, abs, []byte("managed")); err == nil {
@@ -249,7 +250,7 @@ func TestUserConfigRefusesRootContainedIntermediateSymlink(t *testing.T) {
 func TestReadRefusesPathEscapingHome(t *testing.T) {
 	home := t.TempDir()
 	outside := filepath.Join(filepath.Dir(home), "elsewhere.json")
-	if _, _, err := readConfigFile(ScopeUser, home, outside); err == nil {
+	if _, _, err := readConfigFile(ScopeUser, testUser(home), outside); err == nil {
 		t.Fatal("expected a path outside the rooted home to be refused")
 	}
 }
@@ -329,7 +330,7 @@ func TestWriteAtomicErrorsNameTheAbsolutePath(t *testing.T) {
 	t.Cleanup(func() { _ = root.Close() })
 
 	abs := filepath.Join(dir, "managed-settings.json")
-	err = writeAtomic(root, "managed-settings.json", abs, []byte("{}"), 0o644)
+	err = writeAtomic(root, "managed-settings.json", abs, []byte("{}"), 0o644, nil)
 	if err == nil {
 		t.Fatal("writeAtomic replaced a non-empty directory")
 	}
@@ -342,5 +343,128 @@ func TestWriteAtomicErrorsNameTheAbsolutePath(t *testing.T) {
 	}
 	if entries, _ := os.ReadDir(dir); len(entries) != 1 {
 		t.Fatalf("temporary file left behind: %v", entries)
+	}
+}
+
+// TestReadRefusesHardLinkedConfig proves a config with a second link is
+// refused rather than read: the link could point the privileged reader at a
+// file its user cannot read, whose contents the merge would copy into a file
+// they own.
+func TestReadRefusesHardLinkedConfig(t *testing.T) {
+	home := t.TempDir()
+	secret := filepath.Join(t.TempDir(), "secret.json")
+	if err := os.WriteFile(secret, []byte(`{"token":"s3cret"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	abs := filepath.Join(home, ".cursor", "hooks.json")
+	if err := os.MkdirAll(filepath.Dir(abs), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(secret, abs); err != nil {
+		t.Skipf("hard links unavailable: %v", err)
+	}
+	if _, _, err := readConfigFile(ScopeUser, testUser(home), abs); err == nil || !strings.Contains(err.Error(), "hard links") {
+		t.Fatalf("readConfigFile = %v, want a hard-link refusal", err)
+	}
+	if _, _, err := readConfigFile(ScopeMachine, nil, abs); err == nil {
+		t.Fatal("a machine-scoped hard-linked config was read")
+	}
+}
+
+// TestReadRefusesConfigOwnedByAnotherUser proves a user-scoped config owned by
+// some third account is refused.
+func TestReadRefusesConfigOwnedByAnotherUser(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("owners are not compared on Windows")
+	}
+	home := t.TempDir()
+	abs := filepath.Join(home, "settings.json")
+	if err := os.WriteFile(abs, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	other := &TargetUser{Username: "other", HomeDir: home, UID: os.Getuid() + 1, GID: os.Getgid()}
+	if os.Getuid() == 0 {
+		t.Skip("a root-owned file is allowed")
+	}
+	if _, _, err := readConfigFile(ScopeUser, other, abs); err == nil {
+		t.Fatal("a config owned by another account was read")
+	}
+}
+
+// TestReadRefusesFIFOWithoutBlocking proves a FIFO where a config should be is
+// refused at once rather than blocking the reader.
+func TestReadRefusesFIFOWithoutBlocking(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("no FIFOs in the Windows file system")
+	}
+	home := t.TempDir()
+	abs := filepath.Join(home, "settings.json")
+	if err := mkfifo(abs); err != nil {
+		t.Skipf("mkfifo: %v", err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		// The Lstat check refuses a FIFO already in place; open it directly
+		// too, as a swap after that check would.
+		_, _, err := readConfigFile(ScopeUser, testUser(home), abs)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("a FIFO was read as a config")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("reading a FIFO blocked")
+	}
+	root, err := os.OpenRoot(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = root.Close() }()
+	opened := make(chan error, 1)
+	go func() {
+		f, err := root.OpenFile("settings.json", configReadFlags, 0)
+		if err == nil {
+			_ = f.Close()
+		}
+		opened <- err
+	}()
+	select {
+	case <-opened:
+	case <-time.After(5 * time.Second):
+		t.Fatal("opening a FIFO with configReadFlags blocked")
+	}
+}
+
+// TestWriteAtomicHandsFileToOwnerBeforeRename proves the new file is given to
+// its owner while it still has its temporary name: once renamed into the user's
+// directory, the name could be swapped for a hard link, and a chown by name
+// would then hand over whatever it pointed to.
+func TestWriteAtomicHandsFileToOwnerBeforeRename(t *testing.T) {
+	home := t.TempDir()
+	u := testUser(home)
+	abs := filepath.Join(home, "settings.json")
+	calls := 0
+	orig := chownOpenFile
+	t.Cleanup(func() { chownOpenFile = orig })
+	chownOpenFile = func(f *os.File, got *TargetUser) error {
+		calls++
+		if got != u {
+			t.Errorf("handed to %+v, want %+v", got, u)
+		}
+		if _, err := os.Lstat(abs); !os.IsNotExist(err) {
+			t.Errorf("the file was already in place when handed over (err=%v)", err)
+		}
+		if filepath.Base(f.Name()) == "settings.json" {
+			t.Errorf("handed over by its final name %q", f.Name())
+		}
+		return nil
+	}
+	if err := commitConfigFile(ScopeUser, u, abs, []byte("{}")); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 {
+		t.Fatalf("chownOpenFile called %d times, want 1", calls)
 	}
 }

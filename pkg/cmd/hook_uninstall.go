@@ -22,8 +22,8 @@ func (h *HookUninstall) Customize(cmd *cobra.Command) {
 
 Requires root on macOS or an elevated Administrator/SYSTEM token on Windows.
 Removes every hook entry marked --managed-by obot-sentry from machine policy
-and the active console user's files while leaving third-party hooks and
-unmarked supporting settings unchanged.`
+and every local user's files while leaving third-party hooks and unmarked
+supporting settings unchanged.`
 	cmd.Args = cobra.NoArgs
 }
 
@@ -34,6 +34,7 @@ func (h *HookUninstall) Run(cmd *cobra.Command, _ []string) error {
 	}
 	installer := newInstaller()
 	installer.Out = cmd.OutOrStdout()
+	installer.ErrOut = cmd.ErrOrStderr()
 	installer.Uninstall = true
 	return installer.Run(cmd.Context())
 }

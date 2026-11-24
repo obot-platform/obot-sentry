@@ -160,3 +160,38 @@ func TestMerge_EnforcementEnabled(t *testing.T) {
 		})
 	}
 }
+
+func TestHookCheckInterval(t *testing.T) {
+	for _, tt := range []struct {
+		value string
+		want  time.Duration
+	}{
+		{"", 15 * time.Minute},
+		{"junk", 15 * time.Minute},
+		{"-3", 15 * time.Minute},
+		{"1", 5 * time.Minute},
+		{"30", 30 * time.Minute},
+		{"99999", 1440 * time.Minute},
+	} {
+		src := mapSource{}
+		if tt.value != "" {
+			src[KeyHookCheckIntervalMinutes] = tt.value
+		}
+		cfg, err := FromSource(src)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := cfg.HookCheckInterval(); got != tt.want {
+			t.Errorf("HookCheckInterval(%q) = %v, want %v", tt.value, got, tt.want)
+		}
+	}
+}
+
+func TestMerge_HookCheckInterval(t *testing.T) {
+	if got := (Config{}).Merge(Config{HookCheckIntervalMinutes: 30}).HookCheckIntervalMinutes; got != 30 {
+		t.Errorf("unset value not filled from fallback: %d", got)
+	}
+	if got := (Config{HookCheckIntervalMinutes: 10}).Merge(Config{HookCheckIntervalMinutes: 30}).HookCheckIntervalMinutes; got != 10 {
+		t.Errorf("set value overridden by fallback: %d", got)
+	}
+}

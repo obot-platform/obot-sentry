@@ -145,7 +145,7 @@
                   ExeCommand="-ExecutionPolicy Bypass -NonInteractive -NoProfile -File &quot;[INSTALLDIR]scan-task.ps1&quot; -Mode uninstall"
                   Execute="deferred" Impersonate="no" Return="ignore" />
     <CustomAction Id="UninstallHookTask" Property="POWERSHELL"
-                  ExeCommand="-ExecutionPolicy Bypass -NonInteractive -NoProfile -File &quot;[INSTALLDIR]hook-task.ps1&quot; -Mode uninstall"
+                  ExeCommand="-ExecutionPolicy Bypass -NonInteractive -NoProfile -File &quot;[INSTALLDIR]hook-task.ps1&quot; -Mode uninstall -ExePath &quot;[INSTALLDIR]obot-sentry.exe&quot;"
                   Execute="deferred" Impersonate="no" Return="ignore" />
 
     <InstallExecuteSequence>

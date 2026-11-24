@@ -103,3 +103,33 @@ func TestTargetUserFromAccountRequiresRealHome(t *testing.T) {
 		t.Error("a missing home directory should be rejected")
 	}
 }
+
+func TestVetDarwinAccounts(t *testing.T) {
+	me, err := user.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ready := t.TempDir()
+	if err := os.Mkdir(filepath.Join(ready, "Library"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	fresh := t.TempDir()
+	homes := map[string]string{"501": ready, "502": fresh, "503": filepath.Join(t.TempDir(), "unmounted")}
+	lookup := func(uid string) (*user.User, error) {
+		home, ok := homes[uid]
+		if !ok {
+			return nil, user.UnknownUserIdError(0)
+		}
+		return &user.User{Username: "u" + uid, Uid: me.Uid, Gid: me.Gid, HomeDir: home}, nil
+	}
+	list := vetDarwinAccounts([]localAccount{{"u501", "501"}, {"u502", "502"}, {"u503", "503"}, {"u504", "504"}}, lookup)
+	if len(list.Users) != 1 || list.Users[0].HomeDir != ready {
+		t.Fatalf("Users = %+v, want only the set-up home", list.Users)
+	}
+	if len(list.Skipped) != 3 {
+		t.Fatalf("Skipped = %+v, want the fresh, unmounted, and unknown accounts", list.Skipped)
+	}
+	if !strings.Contains(list.Skipped[0].Reason, "first sign-in") {
+		t.Errorf("fresh home skipped for %q", list.Skipped[0].Reason)
+	}
+}

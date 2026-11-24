@@ -7,10 +7,16 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
+	"golang.org/x/sys/windows/registry"
 )
+
+// profileListKey is where Windows records every user profile on the machine,
+// one subkey per account SID.
+const profileListKey = `SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList`
 
 // wtsLocalServer is the WTSEnumerateSessions handle for the local session table.
 const wtsLocalServer = windows.Handle(0)
@@ -107,6 +113,153 @@ func trustedExecutableOwner(owner *windows.SID) bool {
 	return owner != nil && (owner.IsWellKnown(windows.WinLocalSystemSid) || owner.IsWellKnown(windows.WinBuiltinAdministratorsSid))
 }
 
+// resolveTargetUsers lists every user profile on the machine, signed in or not.
+// If the profile list cannot be read, the console user alone is returned with
+// the error, so the run converges what it can and still reports the failure.
+func resolveTargetUsers() (UserList, error) {
+	list, err := listWindowsProfiles()
+	if err == nil {
+		return list, nil
+	}
+	u, consoleErr := resolveTargetUser()
+	if consoleErr != nil {
+		return UserList{}, errors.Join(err, consoleErr)
+	}
+	return UserList{Users: []*TargetUser{u}}, err
+}
+
+// listWindowsProfiles reads the profile list. A profile is passed over when it
+// is not a person's (see isUserProfileSID), when it is a temporary profile
+// (C:\Users\TEMP or TEMP.<DOMAIN>, discarded at sign-out), when its directory
+// is missing or not on a local fixed drive, or when it has no NTUSER.DAT — the
+// hive Windows writes as it creates the profile at first sign-in. Ownership is
+// checked later, by lockUserHomes, on the handle the run then holds.
+func listWindowsProfiles() (UserList, error) {
+	key, err := registry.OpenKey(registry.LOCAL_MACHINE, profileListKey, registry.ENUMERATE_SUB_KEYS|registry.WOW64_64KEY)
+	if err != nil {
+		return UserList{}, fmt.Errorf("opening the profile list: %w", err)
+	}
+	defer func() { _ = key.Close() }()
+	names, err := key.ReadSubKeyNames(-1)
+	if err != nil {
+		return UserList{}, fmt.Errorf("reading the profile list: %w", err)
+	}
+
+	var list UserList
+	for _, name := range names {
+		if !isUserProfileSID(name) {
+			continue
+		}
+		sid, err := windows.StringToSid(name)
+		if err != nil {
+			continue
+		}
+		username := accountName(sid)
+		home, err := profileImagePath(name)
+		if err != nil {
+			list.Skipped = append(list.Skipped, SkippedUser{Username: username, Reason: err.Error()})
+			continue
+		}
+		if isTemporaryProfile(home, username) {
+			list.Skipped = append(list.Skipped, SkippedUser{Username: username, Reason: fmt.Sprintf("profile %s is a temporary profile", home)})
+			continue
+		}
+		if err := validateHomeDir(home); err != nil {
+			list.Skipped = append(list.Skipped, SkippedUser{Username: username, Reason: err.Error()})
+			continue
+		}
+		if _, err := os.Lstat(filepath.Join(home, "NTUSER.DAT")); err != nil {
+			list.Skipped = append(list.Skipped, SkippedUser{Username: username, Reason: fmt.Sprintf("profile %s has not been set up by a first sign-in", home)})
+			continue
+		}
+		// Not deduplicated here: two entries can name one directory, and the
+		// installer drops duplicates only after the ownership check, so a stale
+		// entry cannot displace the live one.
+		list.Users = append(list.Users, &TargetUser{Username: username, HomeDir: home, SID: name})
+	}
+	return list, nil
+}
+
+// profileImagePath reads a profile's directory, expanding the environment
+// references Windows stores it with (%SystemDrive%\Users\alice).
+func profileImagePath(sid string) (string, error) {
+	key, err := registry.OpenKey(registry.LOCAL_MACHINE, profileListKey+`\`+sid, registry.QUERY_VALUE|registry.WOW64_64KEY)
+	if err != nil {
+		return "", fmt.Errorf("opening profile %s: %w", sid, err)
+	}
+	defer func() { _ = key.Close() }()
+	raw, _, err := key.GetStringValue("ProfileImagePath")
+	if err != nil {
+		return "", fmt.Errorf("reading the profile directory of %s: %w", sid, err)
+	}
+	home, err := registry.ExpandString(raw)
+	if err != nil {
+		return "", fmt.Errorf("expanding the profile directory of %s: %w", sid, err)
+	}
+	return home, nil
+}
+
+// lockUserHomes opens each user's profile directory as itself (never through a
+// junction) and keeps it open, without delete sharing, until release is called.
+// A profile is moved to Skipped when its directory is a reparse point or is not
+// owned by the account itself, SYSTEM, or Administrators. Otherwise, a stale
+// profile entry whose directory had been deleted, on a drive where users may
+// create folders, would let any user plant the directory — or a junction in its
+// place — and have SYSTEM write wherever it pointed. Holding the handle stops
+// the checked directory being renamed and replaced while the run writes in it.
+func lockUserHomes(list UserList) (UserList, func()) {
+	all := &heldDirs{}
+	kept := list.Users[:0:0]
+	for _, u := range list.Users {
+		held := &heldDirs{}
+		if err := holdUserHome(u, held); err != nil {
+			held.release()
+			list.Skipped = append(list.Skipped, SkippedUser{Username: u.Username, Reason: err.Error()})
+			continue
+		}
+		all.handles = append(all.handles, held.handles...)
+		kept = append(kept, u)
+	}
+	list.Users = kept
+	return list, all.release
+}
+
+func holdUserHome(u *TargetUser, held *heldDirs) error {
+	// Every directory above the profile is held too, and must not be a
+	// reparse point: otherwise one a user could rename (a parent they created
+	// on a drive that allows it) could be swapped for a junction between this
+	// check and the writes, and the profile path would then lead elsewhere.
+	parent := filepath.Dir(u.HomeDir)
+	if base := filepath.VolumeName(u.HomeDir) + `\`; !strings.EqualFold(parent, base) {
+		if _, err := holdDirChain(base, parent, chainOptions{}, held); err != nil {
+			return fmt.Errorf("profile %s: %w", u.HomeDir, err)
+		}
+	}
+	h, attrs, owner, err := openDirAsItself(u.HomeDir, 0)
+	if err != nil {
+		return fmt.Errorf("opening profile %s: %w", u.HomeDir, err)
+	}
+	if attrs&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 || attrs&windows.FILE_ATTRIBUTE_DIRECTORY == 0 {
+		_ = windows.CloseHandle(h)
+		return fmt.Errorf("profile %s is not a plain directory", u.HomeDir)
+	}
+	if !trustedProfileOwner(owner, u.SID) {
+		_ = windows.CloseHandle(h)
+		return fmt.Errorf("profile %s is not owned by its account, SYSTEM, or Administrators", u.HomeDir)
+	}
+	held.handles = append(held.handles, h)
+	return nil
+}
+
+// trustedProfileOwner reports whether owner may own the profile of the account
+// with SID sid: the account itself, SYSTEM, or Administrators.
+func trustedProfileOwner(owner *windows.SID, sid string) bool {
+	if trustedExecutableOwner(owner) {
+		return true
+	}
+	return owner != nil && sid != "" && strings.EqualFold(owner.String(), sid)
+}
+
 // resolveTargetUser resolves the active console user on Windows. A SYSTEM
 // install reads the identity out of the interactive session's own access token;
 // an interactive install cannot open that token and falls back to its own, which
@@ -119,7 +272,7 @@ func resolveTargetUser() (*TargetUser, error) {
 	if err := validateHomeDir(user.home); err != nil {
 		return nil, err
 	}
-	return &TargetUser{Username: user.name, HomeDir: user.home}, nil
+	return &TargetUser{Username: user.name, HomeDir: user.home, SID: user.sid.String()}, nil
 }
 
 // findWindowsConsoleUser picks the console user from the accounts owning the

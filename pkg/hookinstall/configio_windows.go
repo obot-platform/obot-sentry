@@ -5,86 +5,68 @@ package hookinstall
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 
 	"golang.org/x/sys/windows"
 )
+
+// configReadFlags is a plain read on Windows, which has no FIFOs in the file
+// system; an open held up by an oplock is bounded by the group time limit.
+const configReadFlags = os.O_RDONLY
 
 // chownToUser is a no-op on Windows: new files inherit their DACL from the parent.
 func chownToUser(_ *os.Root, _ *TargetUser, _ []string) error {
 	return nil
 }
 
-// secureMachineConfigDir protects the directory that controls deletion and
-// replacement of a machine hook. The inheritable entries also ensure that the
-// temporary file begins life with the restricted ACL before it is renamed.
-func secureMachineConfigDir(absPath string) error {
-	dir := filepath.Dir(absPath)
-	return applyMachineConfigACL(dir, windows.OBJECT_INHERIT_ACE|windows.CONTAINER_INHERIT_ACE)
+// chownFile is a no-op on Windows, for the same reason.
+func chownFile(_ *os.File, _ *TargetUser) error {
+	return nil
 }
 
-// secureMachineConfig gives normal users read/execute access to the installed
-// configuration but reserves mutation and ACL control for SYSTEM and the local
-// Administrators group. The protected DACL deliberately discards broader
-// entries inherited from ProgramData.
-func secureMachineConfig(absPath string) error {
-	return applyMachineConfigACL(absPath, 0)
-}
-
-func applyMachineConfigACL(path string, inheritance uint32) error {
-	systemSID, err := windows.CreateWellKnownSid(windows.WinLocalSystemSid)
-	if err != nil {
-		return fmt.Errorf("resolving SYSTEM SID: %w", err)
+// checkConfigFileIdentity refuses a config with more than one link. Windows
+// owners are not compared: files SYSTEM creates in a profile are owned by SYSTEM
+// or Administrators, and the user owns the ones they create.
+func checkConfigFileIdentity(f *os.File, _ os.FileInfo, _ Scope, _ *TargetUser, absPath string) error {
+	var info windows.ByHandleFileInformation
+	if err := windows.GetFileInformationByHandle(windows.Handle(f.Fd()), &info); err != nil {
+		return fmt.Errorf("reading the identity of config %q: %w", absPath, err)
 	}
-	adminSID, err := windows.CreateWellKnownSid(windows.WinBuiltinAdministratorsSid)
-	if err != nil {
-		return fmt.Errorf("resolving Administrators SID: %w", err)
-	}
-	usersSID, err := windows.CreateWellKnownSid(windows.WinBuiltinUsersSid)
-	if err != nil {
-		return fmt.Errorf("resolving Users SID: %w", err)
-	}
-
-	acl, err := windows.ACLFromEntries([]windows.EXPLICIT_ACCESS{
-		machineConfigAccess(systemSID, windows.TRUSTEE_IS_USER, windows.GENERIC_ALL, inheritance),
-		machineConfigAccess(adminSID, windows.TRUSTEE_IS_GROUP, windows.GENERIC_ALL, inheritance),
-		machineConfigAccess(usersSID, windows.TRUSTEE_IS_GROUP, windows.FILE_GENERIC_READ|windows.FILE_GENERIC_EXECUTE, inheritance),
-	}, nil)
-	if err != nil {
-		return fmt.Errorf("building protected ACL for %q: %w", path, err)
-	}
-
-	// An elevated administrator can assign the Administrators group as owner;
-	// SYSTEM retains itself as owner. Keeping ownership within these two
-	// principals prevents an unprivileged account from rewriting the DACL via
-	// the owner's implicit WRITE_DAC right.
-	ownerSID := adminSID
-	if isSystemToken(windows.GetCurrentProcessToken()) {
-		ownerSID = systemSID
-	}
-	if err := windows.SetNamedSecurityInfo(
-		path,
-		windows.SE_FILE_OBJECT,
-		windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION,
-		ownerSID,
-		nil,
-		acl,
-		nil,
-	); err != nil {
-		return fmt.Errorf("securing machine config %q: %w", path, err)
+	if info.NumberOfLinks != 1 {
+		return fmt.Errorf("refusing config %q with %d hard links", absPath, info.NumberOfLinks)
 	}
 	return nil
 }
 
-func machineConfigAccess(sid *windows.SID, trusteeType windows.TRUSTEE_TYPE, permissions windows.ACCESS_MASK, inheritance uint32) windows.EXPLICIT_ACCESS {
-	return windows.EXPLICIT_ACCESS{
-		AccessPermissions: permissions,
-		AccessMode:        windows.GRANT_ACCESS,
-		Inheritance:       inheritance,
-		Trustee: windows.TRUSTEE{
-			TrusteeForm:  windows.TRUSTEE_IS_SID,
-			TrusteeType:  trusteeType,
-			TrusteeValue: windows.TrusteeValueFromSID(sid),
-		},
+// secureMachineConfigDir is a no-op on Windows: lockMachineDirs has already
+// created or taken over the directory and set its ACL through a handle, and
+// holds it for the run. Setting it again here by path is what let a planted
+// junction redirect the ACL change.
+func secureMachineConfigDir(string) error { return nil }
+
+// secureMachineConfig gives the hook file the machine-config ACL — users may
+// read and run it, only SYSTEM and Administrators change it — through a handle
+// to the file itself, refused if it is a link or has a second name.
+func secureMachineConfig(absPath string) error {
+	name, err := windows.UTF16PtrFromString(absPath)
+	if err != nil {
+		return err
 	}
+	h, err := windows.CreateFile(name,
+		windows.READ_CONTROL|windows.WRITE_DAC|windows.WRITE_OWNER|windows.FILE_READ_ATTRIBUTES,
+		windows.FILE_SHARE_READ, nil, windows.OPEN_EXISTING, windows.FILE_FLAG_OPEN_REPARSE_POINT, 0)
+	if err != nil {
+		return fmt.Errorf("opening %q to secure it: %w", absPath, err)
+	}
+	defer func() { _ = windows.CloseHandle(h) }()
+	var info windows.ByHandleFileInformation
+	if err := windows.GetFileInformationByHandle(h, &info); err != nil {
+		return fmt.Errorf("reading %q: %w", absPath, err)
+	}
+	if info.FileAttributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 || info.NumberOfLinks != 1 {
+		return fmt.Errorf("refusing to secure %q: it is a link", absPath)
+	}
+	if err := setSecurityOnHandle(h, machineConfigFileSDDL, true); err != nil {
+		return fmt.Errorf("securing machine config %q: %w", absPath, err)
+	}
+	return nil
 }

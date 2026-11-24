@@ -47,10 +47,16 @@ Everything below needs an administrator account.
   signed-in user's session, as that user, at login and every 15 minutes. Each
   run submits a scan at most every {{.scanIntervalMinutes}} minutes — change
   `ScanIntervalMinutes` in step 1 without reinstalling.
-- Installs a LaunchDaemon (`ai.obot.obot-sentry.hook-install`) that runs as root
-  at load and hourly, converging the managed local-agent audit hooks for the
-  signed-in user. It reads `EnforcementEnabled` from step 1 on every run, so
-  turning enforcement on or off there takes effect without reinstalling.
+- Installs a LaunchDaemon (`ai.obot.obot-sentry.hook-install`) that runs as
+  root at load and every 5 minutes. Every 15 minutes it checks the managed
+  local-agent hooks of every local user whose home has been set up, signed in
+  or not, and restores any that are missing or changed; third-party hooks are
+  left alone. It checks sooner, within about 5 minutes, after a restart, a new
+  user's first sign-in, an upgrade, a change to `EnforcementEnabled`, or a failed
+  check (retried after 5, 10, 20… minutes, up to the interval). To change the 15 minutes, set `HookCheckIntervalMinutes` (an
+  integer, 5–1440) the way step 1 sets the other values.
+  It reads both values on every run, so changing them takes effect without
+  reinstalling.
 - Prepares `/Library/Application Support/obot/obot-sentry`, where the device
   identity shared by every user on the device is stored.
 
@@ -103,11 +109,12 @@ Everything below needs an administrator account.
 
    The adjacent `scan-logs` directory retains up to 14 days of the most recent scan attempts.
 
-   The hook-install daemon keeps no state file. It prints its convergence table
-   to the unified log on every hourly run:
+   The hook-install daemon records every hook it installs, repairs, or removes,
+   every failure, and a summary line per check in its run log, which only
+   administrators can read:
 
    ```sh
-   log show --last 2h --predicate 'process == "obot-sentry"'
+   sudo tail -n 50 /Library/Logs/obot/hook-install.log
    ```
 
 ## Standalone binary (Alternate)

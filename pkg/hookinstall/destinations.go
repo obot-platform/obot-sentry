@@ -24,7 +24,7 @@ type Destination struct {
 
 // ResolvePath turns a destination model into the concrete path to converge on this
 // machine. A machine-scoped destination is already absolute; a user-scoped one is
-// resolved against the active console user's home, which is why there is no
+// resolved against a user's home, which is why there is no
 // resolution without one.
 func (d Destination) ResolvePath(u *TargetUser) (string, error) {
 	switch d.Scope {
@@ -32,7 +32,7 @@ func (d Destination) ResolvePath(u *TargetUser) (string, error) {
 		return d.Abs, nil
 	case ScopeUser:
 		if u == nil || u.HomeDir == "" {
-			return "", fmt.Errorf("cannot resolve user-scoped destination %q without an active console user", d.Label)
+			return "", fmt.Errorf("cannot resolve user-scoped destination %q without a user", d.Label)
 		}
 		return filepath.Join(u.HomeDir, filepath.FromSlash(d.Rel)), nil
 	default:

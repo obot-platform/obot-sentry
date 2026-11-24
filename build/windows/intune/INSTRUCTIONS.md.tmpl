@@ -18,7 +18,7 @@ This install package contains:
    ```
 {{if .enforcementEnabled}}
    `ENFORCEMENT=1` writes `EnforcementEnabled` to the registry, which the hook
-   task reads at logon and hourly. Keep the property in the command —
+   task reads every 5 minutes. Keep the property in the command —
    supersedence reuses it for upgrades, and a command without it writes 0 and
    stops enforcing. Devices already installed keep the old command's value until
    the app upgrades; to turn enforcement on there now, push `EnforcementEnabled`
@@ -52,9 +52,19 @@ This install package contains:
   (`ScanIntervalMinutes` in the registry — change it there without
   reinstalling).
 - Registers a second machine-wide scheduled task (`Obot Sentry Hook Install`)
-  running as SYSTEM at logon and hourly. It converges the managed local-agent
-  hooks for the active console user, reading `EnforcementEnabled` from the
-  registry on every run so the toggle changes without repackaging the app.
+  running as SYSTEM at startup, at logon, and every 5 minutes. Every 15 minutes
+  it checks the managed local-agent hooks of every user profile on the device,
+  signed in or not, and restores any that are missing or changed; third-party
+  hooks are left alone. It checks sooner, within about 5 minutes, after a
+  restart, a new user's first sign-in, an upgrade, a change to
+  `EnforcementEnabled`, or a failed check (retried after 5, 10, 20… minutes, up to the
+  interval). To change the 15 minutes, set
+  `HookCheckIntervalMinutes` (5–1440) as a `REG_DWORD` under
+  `HKLM\SOFTWARE\Obot\obot-sentry`. A *Shut down* with Fast Startup on
+  resumes rather than restarts, so it is not treated as one; the next check
+  comes within the interval.
+  Both values are read from the registry on every run, so they change without
+  repackaging the app.
 
 ## Verify the install
 
@@ -87,12 +97,20 @@ This install package contains:
    This will produce the following output:
 
    - `LastRunTime` climbs on schedule — every 10 minutes for the scan task,
-     hourly for the hook task, and at each logon for both.
+     every 5 minutes for the hook task, and at each logon for both.
    - `LastTaskResult = 0` means the last run succeeded. Non-zero is usually a
      configuration problem — recheck the registry values from step 2. `267011`
      means the task has not run yet.
    - `NumberOfMissedRuns` above 0 means the device was asleep or off when a run
      was due; the next run catches up.
+
+   The hook task records every hook it installs, repairs, or removes, every
+   failure, and a summary line per check in its run log, which only
+   administrators can read (run this elevated):
+
+   ```powershell
+   Get-Content "$env:ProgramData\obot\hook-install\hook-install.log" -Tail 50
+   ```
 
 4. Ensure scans are landing:
 

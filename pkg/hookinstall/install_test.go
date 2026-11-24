@@ -44,11 +44,11 @@ func failIfCalledResolve(t *testing.T) func() (string, error) {
 	}
 }
 
-func failIfCalledResolveUser(t *testing.T) func() (*TargetUser, error) {
+func failIfCalledResolveUsers(t *testing.T) func() (UserList, error) {
 	t.Helper()
-	return func() (*TargetUser, error) {
+	return func() (UserList, error) {
 		t.Fatal("user resolution must not run after an earlier preflight failure")
-		return nil, nil
+		return UserList{}, nil
 	}
 }
 
@@ -60,10 +60,10 @@ func failIfCalledProvision(t *testing.T) func() (string, error) {
 	}
 }
 
-// stubUser returns a valid resolved user seam for success-path tests.
-func stubUser() func() (*TargetUser, error) {
-	return func() (*TargetUser, error) {
-		return &TargetUser{Username: "alice", HomeDir: "/Users/alice", UID: 501, GID: 20}, nil
+// stubUsers returns a valid resolved user seam for success-path tests.
+func stubUsers() func() (UserList, error) {
+	return func() (UserList, error) {
+		return UserList{Users: []*TargetUser{{Username: "alice", HomeDir: "/Users/alice", UID: 501, GID: 20}}}, nil
 	}
 }
 
@@ -73,7 +73,7 @@ func TestRunUnsupportedPlatformMakesNoChanges(t *testing.T) {
 		GOOS:              "linux",
 		Privilege:         failIfCalledPrivilege(t),
 		ResolveExe:        failIfCalledResolve(t),
-		ResolveUser:       failIfCalledResolveUser(t),
+		ResolveUsers:      failIfCalledResolveUsers(t),
 		ProvisionIdentity: failIfCalledProvision(t),
 		Out:               &out,
 	}
@@ -93,7 +93,7 @@ func TestRunPrivilegeFailureShortCircuits(t *testing.T) {
 		GOOS:              "darwin",
 		Privilege:         func() error { return wantErr },
 		ResolveExe:        failIfCalledResolve(t),
-		ResolveUser:       failIfCalledResolveUser(t),
+		ResolveUsers:      failIfCalledResolveUsers(t),
 		ProvisionIdentity: failIfCalledProvision(t),
 		Out:               &out,
 	}
@@ -113,7 +113,7 @@ func TestRunResolveExeFailure(t *testing.T) {
 		GOOS:              "windows",
 		Privilege:         func() error { return nil },
 		ResolveExe:        func() (string, error) { return "", wantErr },
-		ResolveUser:       failIfCalledResolveUser(t),
+		ResolveUsers:      failIfCalledResolveUsers(t),
 		ProvisionIdentity: failIfCalledProvision(t),
 		Out:               &out,
 	}
@@ -123,23 +123,35 @@ func TestRunResolveExeFailure(t *testing.T) {
 	}
 }
 
-func TestRunUserResolutionFailureShortCircuits(t *testing.T) {
-	wantErr := errors.New("no active console user")
+// TestRunUserResolutionFailureStillConvergesMachineHooks proves a failure to
+// list the machine's users leaves the per-user files alone but still converges
+// the machine-wide hooks, and reports the failure.
+func TestRunUserResolutionFailureStillConvergesMachineHooks(t *testing.T) {
+	wantErr := errors.New("directory service unavailable")
+	home := t.TempDir()
+	machineRoot := realTempDir(t)
 	var out bytes.Buffer
 	inst := &Installer{
-		GOOS:              "darwin",
-		Privilege:         func() error { return nil },
-		ResolveExe:        func() (string, error) { return macExe, nil },
-		ResolveUser:       func() (*TargetUser, error) { return nil, wantErr },
-		ProvisionIdentity: failIfCalledProvision(t),
-		Out:               &out,
+		GOOS:                "darwin",
+		Privilege:           func() error { return nil },
+		ResolveExe:          func() (string, error) { return macExe, nil },
+		ResolveUsers:        func() (UserList, error) { return UserList{}, wantErr },
+		ProvisionIdentity:   func() (string, error) { return "/id", nil },
+		ResolveDestinations: tempDestinations(machineRoot),
+		Out:                 &out,
 	}
 	err := inst.Run(context.Background())
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("expected user-resolution error, got %v", err)
 	}
-	if out.Len() != 0 {
-		t.Fatalf("expected no output on user-resolution failure, got %q", out.String())
+	if _, err := os.Stat(filepath.Join(machineRoot, "etc/codex/requirements.toml")); err != nil {
+		t.Fatalf("machine-wide Codex hooks were not installed: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".copilot")); !os.IsNotExist(err) {
+		t.Fatalf("a user file was written without a resolved user (err=%v)", err)
+	}
+	if !strings.Contains(out.String(), "could not be resolved") {
+		t.Fatalf("summary does not report the user-resolution failure:\n%s", out.String())
 	}
 }
 
@@ -150,7 +162,7 @@ func TestRunIdentityProvisionFailure(t *testing.T) {
 		GOOS:              "darwin",
 		Privilege:         func() error { return nil },
 		ResolveExe:        func() (string, error) { return macExe, nil },
-		ResolveUser:       stubUser(),
+		ResolveUsers:      stubUsers(),
 		ProvisionIdentity: func() (string, error) { return "", wantErr },
 		Out:               &out,
 	}
@@ -198,7 +210,7 @@ func TestRunConvergesAndIsIdempotent(t *testing.T) {
 			GOOS:                "darwin",
 			Privilege:           func() error { return nil },
 			ResolveExe:          func() (string, error) { return macExe, nil },
-			ResolveUser:         func() (*TargetUser, error) { return user, nil },
+			ResolveUsers:        func() (UserList, error) { return UserList{Users: []*TargetUser{user}}, nil },
 			ProvisionIdentity:   func() (string, error) { return "/Library/Application Support/obot/obot-sentry", nil },
 			ResolveDestinations: tempDestinations(machineRoot),
 			Out:                 out,
@@ -271,19 +283,21 @@ func TestRunConvergesAndIsIdempotent(t *testing.T) {
 	}
 }
 
-// TestRunAbortsOnMalformedConfigBeforeWriting proves a malformed existing
-// document fails preflight without writing any file.
-func TestRunAbortsOnMalformedConfigBeforeWriting(t *testing.T) {
+// TestRunMalformedConfigFailsOnlyThatDestination proves a malformed existing
+// document fails its own destination, leaves that file untouched, and does not
+// stop the other destinations from converging.
+func TestRunMalformedConfigFailsOnlyThatDestination(t *testing.T) {
 	home := t.TempDir()
 	machineRoot := realTempDir(t)
 	user := &TargetUser{Username: "alice", HomeDir: home, UID: os.Getuid(), GID: os.Getgid()}
 
-	// Seed a malformed Claude settings file.
-	claudePath := filepath.Join(home, ".claude", "settings.json")
-	if err := os.MkdirAll(filepath.Dir(claudePath), 0o700); err != nil {
+	// Seed a malformed Copilot hook file.
+	copilotPath := filepath.Join(home, ".copilot", "hooks", "obot-sentry.json")
+	if err := os.MkdirAll(filepath.Dir(copilotPath), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(claudePath, []byte(`{"hooks": `), 0o600); err != nil {
+	const malformed = `{"hooks": `
+	if err := os.WriteFile(copilotPath, []byte(malformed), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -292,20 +306,28 @@ func TestRunAbortsOnMalformedConfigBeforeWriting(t *testing.T) {
 		GOOS:                "darwin",
 		Privilege:           func() error { return nil },
 		ResolveExe:          func() (string, error) { return macExe, nil },
-		ResolveUser:         func() (*TargetUser, error) { return user, nil },
+		ResolveUsers:        func() (UserList, error) { return UserList{Users: []*TargetUser{user}}, nil },
 		ProvisionIdentity:   func() (string, error) { return "/id", nil },
 		ResolveDestinations: tempDestinations(machineRoot),
 		Out:                 &out,
 	}
 	if err := inst.Run(context.Background()); err == nil {
-		t.Fatal("expected malformed config to abort the run")
+		t.Fatal("expected the malformed config to fail the run")
 	}
-	// No machine file may have been written: preflight aborts before any commit.
-	if _, err := os.Stat(filepath.Join(machineRoot, "etc/codex/requirements.toml")); err == nil {
-		t.Fatal("Codex file was written despite a preflight abort")
+	if got, err := os.ReadFile(copilotPath); err != nil || string(got) != malformed {
+		t.Fatalf("malformed file was rewritten: %q (err=%v)", got, err)
 	}
-	if out.Len() != 0 {
-		t.Fatalf("expected no summary output on preflight abort, got:\n%s", out.String())
+	for _, f := range []string{
+		filepath.Join(machineRoot, "etc/codex/requirements.toml"),
+		filepath.Join(machineRoot, "Cursor/hooks.json"),
+		filepath.Join(home, "Library/Application Support/Code/User/settings.json"),
+	} {
+		if _, err := os.Stat(f); err != nil {
+			t.Fatalf("%s was not converged alongside the malformed file: %v", f, err)
+		}
+	}
+	if !strings.Contains(out.String(), string(StatusFailed)) {
+		t.Fatalf("summary does not report the failed destination:\n%s", out.String())
 	}
 }
 
@@ -325,7 +347,7 @@ func TestRunCancelledContextAbortsBeforeWriting(t *testing.T) {
 		GOOS:                "darwin",
 		Privilege:           func() error { return nil },
 		ResolveExe:          func() (string, error) { return macExe, nil },
-		ResolveUser:         func() (*TargetUser, error) { return user, nil },
+		ResolveUsers:        func() (UserList, error) { return UserList{Users: []*TargetUser{user}}, nil },
 		ProvisionIdentity:   func() (string, error) { return "/id", nil },
 		ResolveDestinations: tempDestinations(machineRoot),
 		Out:                 &out,
@@ -435,7 +457,7 @@ func TestCommitRefusesConcurrentConfigEdit(t *testing.T) {
 	if err := os.WriteFile(abs, []byte("{}\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	plan := Plan{GOOS: "darwin", Executable: macExe, User: user, Destinations: []Destination{dest}}
+	plan := Plan{GOOS: "darwin", Executable: macExe, Users: []*TargetUser{user}, Destinations: []Destination{dest}}
 	changes, err := buildChanges(t.Context(), plan)
 	if err != nil {
 		t.Fatal(err)
@@ -482,7 +504,7 @@ func TestRunMovesClaudeHooksOutOfUserSettings(t *testing.T) {
 			GOOS:                "darwin",
 			Privilege:           func() error { return nil },
 			ResolveExe:          func() (string, error) { return macExe, nil },
-			ResolveUser:         func() (*TargetUser, error) { return user, nil },
+			ResolveUsers:        func() (UserList, error) { return UserList{Users: []*TargetUser{user}}, nil },
 			ProvisionIdentity:   func() (string, error) { return "/id", nil },
 			ResolveDestinations: tempDestinations(machineRoot),
 			Enforce:             true,
@@ -574,7 +596,7 @@ func TestRunKeepsClaudeUserHooksWhenManagedInstallFails(t *testing.T) {
 	plan := Plan{
 		GOOS:       "darwin",
 		Executable: macExe,
-		User:       user,
+		Users:      []*TargetUser{user},
 		Enforce:    true,
 		Destinations: []Destination{
 			{Agent: localagent.ClaudeCode, Label: "Claude Code (user settings)", Scope: ScopeUser, Format: FormatJSON, Rel: ".claude/settings.json", Retired: true},
