@@ -141,6 +141,22 @@ type Plan struct {
 	Destinations []Destination
 	Enforce      bool
 	Uninstall    bool
+
+	// read reads one destination's config. converge sets it from readConfig
+	// on the calling goroutine, so a unit abandoned past its deadline, still
+	// running in the background, never reads the package variable.
+	read configReader
+}
+
+// configReader is the signature of readConfigFile.
+type configReader func(scope Scope, u *TargetUser, absPath string) ([]byte, bool, error)
+
+// reader returns the plan's config reader, or readConfigFile when none is set.
+func (p Plan) reader() configReader {
+	if p.read != nil {
+		return p.read
+	}
+	return readConfigFile
 }
 
 func (i *Installer) Run(ctx context.Context) error {
@@ -388,7 +404,9 @@ type plannedChange struct {
 }
 
 // readConfig is readConfigFile; tests replace it to simulate a read that stalls.
-var readConfig = readConfigFile
+// It is read only by converge, which copies it into the Plan before starting
+// any unit.
+var readConfig configReader = readConfigFile
 
 // unitTimeout bounds one unit of convergence — the machine-scoped destinations,
 // or one user's — from first read to last write. Reads are non-blocking and
@@ -406,6 +424,9 @@ var unitTimeout = 2 * time.Minute
 // slow, large, or malformed — can hold back machine policy, and each user is
 // planned and committed independently of the others.
 func converge(ctx context.Context, plan Plan) ([]Result, error) {
+	if plan.read == nil {
+		plan.read = readConfig
+	}
 	var machine, perUser []Destination
 	for _, d := range plan.Destinations {
 		if d.Scope == ScopeUser {
@@ -570,7 +591,7 @@ func planDestinations(ctx context.Context, plan Plan, dests []Destination, u *Ta
 		if err != nil {
 			return nil, err
 		}
-		existing, existed, err := readConfig(d.Scope, u, abs)
+		existing, existed, err := plan.reader()(d.Scope, u, abs)
 		if err != nil {
 			return nil, fmt.Errorf("%s (%s): %w", d.Label, abs, err)
 		}
@@ -630,7 +651,7 @@ func commitChangesWith(ctx context.Context, plan Plan, changes []plannedChange, 
 		if c.dest.Retired {
 			continue
 		}
-		results[i] = commitChange(ctx, c)
+		results[i] = commitChange(ctx, plan.reader(), c)
 		if results[i].Status == StatusFailed {
 			liveFailed[liveKey{c.dest.Agent, homeOf(c.user)}] = true
 		}
@@ -644,14 +665,14 @@ func commitChangesWith(ctx context.Context, plan Plan, changes []plannedChange, 
 			results[i] = failedResult(c, errors.New("hooks left in place because their replacement was not installed"))
 			continue
 		}
-		results[i] = commitChange(ctx, c)
+		results[i] = commitChange(ctx, plan.reader(), c)
 	}
 	return results
 }
 
 // commitChange writes one planned change, if it needs writing, and reports the
 // outcome.
-func commitChange(ctx context.Context, c plannedChange) Result {
+func commitChange(ctx context.Context, read configReader, c plannedChange) Result {
 	if c.err != nil {
 		return failedResult(c, c.err)
 	}
@@ -659,7 +680,7 @@ func commitChange(ctx context.Context, c plannedChange) Result {
 		return failedResult(c, err)
 	}
 	if c.write {
-		current, exists, err := readConfig(c.dest.Scope, c.user, c.absPath)
+		current, exists, err := read(c.dest.Scope, c.user, c.absPath)
 		if err != nil {
 			return failedResult(c, fmt.Errorf("re-reading before commit: %w", err))
 		}
