@@ -48,6 +48,16 @@ func secureRunDir(parent, dir string) error {
 
 	f, err := os.OpenFile(dir, os.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW, 0)
 	if err != nil {
+		// O_NOFOLLOW|O_DIRECTORY reports a symlink as ENOTDIR (or ELOOP), so
+		// name what is actually there rather than echo that error.
+		if li, lerr := os.Lstat(dir); lerr == nil {
+			if li.Mode()&os.ModeSymlink != 0 {
+				return fmt.Errorf("refusing run directory %q: it is a symbolic link", dir)
+			}
+			if !li.IsDir() {
+				return fmt.Errorf("refusing run directory %q: not a directory", dir)
+			}
+		}
 		return fmt.Errorf("opening run directory %q: %w", dir, err)
 	}
 	defer func() { _ = f.Close() }()

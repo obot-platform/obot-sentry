@@ -29,9 +29,10 @@ const (
 	// RunLogName is the hook-install log inside the run directory.
 	RunLogName = "hook-install.log"
 	// maxRunLogBytes caps the log before it rotates to RunLogName + ".1". Only
-	// changes and failures are logged, so 1 MiB holds months of normal runs;
-	// two generations bound the total.
-	maxRunLogBytes = 1 << 20
+	// changes and failures are logged, so 10 MiB holds years of normal runs
+	// and weeks of a failure that repeats on every five-minute poll; two
+	// generations bound the total.
+	maxRunLogBytes = 10 << 20
 )
 
 // DefaultRunDir resolves the run directory, creating it and restricting it to
