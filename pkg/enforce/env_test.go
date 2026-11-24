@@ -2,10 +2,15 @@ package enforce
 
 import (
 	"context"
+	"errors"
+	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/obot-platform/obot-sentry/pkg/localagent"
 )
 
 func TestLoadJSONResults(t *testing.T) {
@@ -135,5 +140,294 @@ func TestMachinePathIsAbsoluteInProduction(t *testing.T) {
 	}
 	if got := nativeEnv.machinePath(native); !filepath.IsAbs(got) {
 		t.Errorf("machinePath(%q) = %q, want an absolute path", native, got)
+	}
+}
+
+// TestNewEnvHomeOverride covers how the environment's home directory is
+// compared with the account's: as text, so any other spelling is an override,
+// including one that reaches the same directory through a symbolic link. The
+// environment's path is never opened; see samePath.
+func TestNewEnvHomeOverride(t *testing.T) {
+	account := t.TempDir()
+	other := t.TempDir()
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(account, link); err != nil {
+		// Without the link the path does not exist, and is an override all the same.
+		t.Logf("symlinks are not available: %v", err)
+	}
+	accountAt := func(dir string) func() (string, error) {
+		return func() (string, error) { return dir, nil }
+	}
+	fixed := func(dir string) func() (string, bool) {
+		return func() (string, bool) { return dir, true }
+	}
+	unset := func() (string, bool) { return "", false }
+	none := "no override"
+	// Cleaned as text, <account>/link/.. is the account's directory. Opened, it
+	// is the parent of wherever link points.
+	parent := string(filepath.Separator) + ".."
+
+	for name, tc := range map[string]struct {
+		environment func() (string, bool)
+		override    string
+	}{
+		"same directory":          {fixed(account), none},
+		"same directory, unclean": {fixed(account + string(filepath.Separator) + "."), none},
+		"trailing separator":      {fixed(account + string(filepath.Separator)), none},
+		"a parent element":        {fixed(filepath.Join(account, "link") + parent), filepath.Join(account, "link") + parent},
+		"link to the directory":   {fixed(link), link},
+		"unset":                   {unset, none},
+		"set but empty":           {fixed(""), ""},
+		"another directory":       {fixed(other), other},
+		"a directory inside it":   {fixed(filepath.Join(account, "sub")), filepath.Join(account, "sub")},
+		"a directory not there":   {fixed(filepath.Join(other, "missing")), filepath.Join(other, "missing")},
+		"a relative directory":    {fixed("relative-home"), "relative-home"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			env, err := newEnv(accountAt(account), tc.environment)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if env.Home != account {
+				t.Errorf("Home = %q, want the account's %q", env.Home, account)
+			}
+			got := none
+			if env.HomeOverride != nil {
+				got = *env.HomeOverride
+			}
+			if got != tc.override {
+				t.Errorf("HomeOverride = %q, want %q", got, tc.override)
+			}
+			if _, overridden := env.homeOverridden(); overridden != (tc.override != none) {
+				t.Errorf("homeOverridden = %v with HomeOverride %q", overridden, got)
+			}
+		})
+	}
+
+	if _, err := newEnv(accountAt("relative-home"), fixed(account)); err == nil || !strings.Contains(err.Error(), "not absolute") {
+		t.Errorf("newEnv with a relative account home: error = %v, want a rejection", err)
+	}
+	if _, err := newEnv(func() (string, error) { return "", errors.New("no account") }, fixed(account)); err == nil {
+		t.Error("newEnv with no account home succeeded")
+	}
+}
+
+// TestSamePathFoldsCaseOnlyOnWindows covers the one difference in spelling that
+// is not a different path: case, on Windows.
+func TestSamePathFoldsCaseOnlyOnWindows(t *testing.T) {
+	upper, lower := filepath.Join(hostRoot(t), "Users", "Me"), filepath.Join(hostRoot(t), "users", "me")
+	if !(Env{GOOS: "windows"}).samePath(upper, lower) {
+		t.Error("Windows paths differing only in case were not the same path")
+	}
+	// Unicode folding takes each of these for the ASCII or accented letter it
+	// resembles. A Windows file system does not, so they are other directories.
+	for _, pair := range [][2]string{
+		{"kate", "\u212aate"},    // KELVIN SIGN
+		{"users", "u\u017fers"},  // LATIN SMALL LETTER LONG S
+		{"\u00e5sa", "\u212bsa"}, // ANGSTROM SIGN
+		{"\u00e9mile", "\u00c9mile"},
+	} {
+		a, b := filepath.Join(hostRoot(t), pair[0]), filepath.Join(hostRoot(t), pair[1])
+		if !strings.EqualFold(pair[0], pair[1]) {
+			t.Errorf("%q and %q do not fold together, so this case tests nothing", pair[0], pair[1])
+		}
+		if (Env{GOOS: "windows"}).samePath(a, b) {
+			t.Errorf("%q and %q were the same path", a, b)
+		}
+	}
+	if (Env{GOOS: "darwin"}).samePath(upper, lower) {
+		t.Error("macOS paths differing in case were the same path")
+	}
+}
+
+// TestSamePathRefusesParentElements covers "..", which cleaning removes as text
+// and the kernel resolves only after following the element before it.
+func TestSamePathRefusesParentElements(t *testing.T) {
+	env := Env{GOOS: runtime.GOOS}
+	home := filepath.Join(hostRoot(t), "Users", "me")
+	sep := string(filepath.Separator)
+	for _, path := range []string{
+		home + sep + "link" + sep + "..",
+		home + sep + "link" + sep + ".." + sep,
+		home + sep + ".." + sep + "me",
+		home + "/link/..",
+	} {
+		if env.samePath(path, home) || env.samePath(home, path) {
+			t.Errorf("%q was the same path as %q", path, home)
+		}
+	}
+	// Dots inside a name are not a parent element, and "." changes nothing.
+	dotted := filepath.Join(hostRoot(t), "Users", "..me..")
+	for _, path := range []string{dotted + sep, dotted + sep + ".", dotted + sep + sep} {
+		if !env.samePath(path, dotted) {
+			t.Errorf("%q was not the same path as %q", path, dotted)
+		}
+	}
+}
+
+// TestHomeOverrideLeavesHomeConfigurationUnresolved covers a hook whose
+// environment names a home directory other than the account's. The agent may
+// have read either one, so nothing under the home directory is resolved, for
+// any agent. A Claude Code server from a source that is not read from the home
+// directory resolves as it does without an override, and so does an installed
+// plugin once CLAUDE_CONFIG_DIR takes Claude Code's configuration out of it. The
+// user and local scopes stay unresolved under CLAUDE_CONFIG_DIR, for its own
+// reason.
+func TestHomeOverrideLeavesHomeConfigurationUnresolved(t *testing.T) {
+	f := newFixture(t, "darwin")
+	project := f.mkdir(f.path("proj"))
+	const home = "https://home.example.com/sse"
+	install := f.mkdir(f.homePath(".claude", "plugins", "cache", "mkt", "tool", "1.0.0"))
+	f.write(filepath.Join(install, ".mcp.json"), `{"mcpServers":{"linear":{"type":"http","url":"`+home+`"}}}`)
+	f.pluginRegistry(f.homePath(".claude"), `{"version":2,"plugins":{"tool@mkt":[{"scope":"user","installPath":`+quote(install)+`}]}}`)
+	f.write(f.homePath(".claude.json"), `{"mcpServers":{"linear":{"type":"http","url":"`+home+`"}},`+
+		`"projects":{`+quote(project)+`:{"mcpServers":{"mine":{"type":"http","url":"`+home+`"}}}}}`)
+	f.write(f.homePath(".codex", "config.toml"), "[mcp_servers.linear]\nurl = \""+home+"\"\n")
+	f.write(f.homePath(".cursor", "mcp.json"), `{"mcpServers":{"linear":{"url":"`+home+`"}}}`)
+	f.write(f.homePath(".kiro", "settings", "mcp.json"), `{"mcpServers":{"linear":{"url":"`+home+`"}}}`)
+	underHome := map[string]ResolveRequest{
+		"claude-code user":   claudeCodeReq(claudeSourceUser, "linear", project),
+		"claude-code local":  claudeCodeReq(claudeSourceLocal, "mine", project),
+		"claude-code plugin": pluginReq("tool", "linear", project),
+		"codex":              codexReq("linear"),
+		"cursor":             cursorReq("linear", project),
+		"kiro":               {Agent: localagent.Kiro, ServerName: "linear", CWD: project},
+	}
+
+	const elsewhere = "https://elsewhere.example.com/mcp"
+	f.write(filepath.Join(project, ".mcp.json"), `{"mcpServers":{"proj":{"type":"http","url":"`+elsewhere+`"}}}`)
+	f.write(f.Env.managedMCPPath(), `{"mcpServers":{"ent":{"type":"http","url":"`+elsewhere+`"}}}`)
+	f.write(f.Env.claudeManagedPath(claudeManagedSettings),
+		`{"`+ClaudeDisableSideloadKey+`":true,"managedMcpServers":{"mgd":`+managedServer(elsewhere)+`}}`)
+	notUnderHome := map[string]ResolveRequest{
+		"claude-code project":    claudeCodeReq(claudeSourceProject, "proj", project),
+		"claude-code enterprise": claudeCodeReq(claudeSourceEnterprise, "ent", project),
+		"claude-code managed":    claudeCodeReq(claudeSourceManaged, "mgd", project),
+	}
+
+	for name, req := range underHome {
+		if res := Resolve(f.Env, req); res.Unresolved || res.Identity.URL != home {
+			t.Fatalf("%s: without an override, unresolved=%v (%s) url=%q\n%s", name, res.Unresolved, res.Reason, res.Identity.URL, resolveTrace(res))
+		}
+	}
+
+	decoy := f.path("decoy")
+	f.Env.HomeOverride = &decoy
+	for name, req := range underHome {
+		res := Resolve(f.Env, req)
+		if !res.Unresolved || !strings.Contains(res.Reason, "HOME set to "+strconv.Quote(decoy)) {
+			t.Errorf("%s: want unresolved for the HOME override, got unresolved=%v reason=%q", name, res.Unresolved, res.Reason)
+		}
+		if len(res.Trace) != 0 {
+			t.Errorf("%s: read configuration despite the override:\n%s", name, resolveTrace(res))
+		}
+	}
+	for name, req := range notUnderHome {
+		t.Run(name, func(t *testing.T) { assertURL(t, Resolve(f.Env, req), elsewhere) })
+	}
+	connector := Resolve(f.Env, claudeCodeReq(claudeSourceClaudeAI, "claude.ai Linear", project))
+	if connector.Unresolved || connector.Identity.Connector != "claude.ai Linear" {
+		t.Errorf("a claude.ai connector under the override: unresolved=%v (%s) connector=%q", connector.Unresolved, connector.Reason, connector.Identity.Connector)
+	}
+
+	// CLAUDE_CONFIG_DIR takes all of it out of the home directory. Plugins follow
+	// it; .claude.json is never read under it, so user and local servers are
+	// unresolved for the variable rather than for the HOME override.
+	const alt = "https://alt.example.com/sse"
+	configDir := f.path("alt-claude")
+	f.setenv(claudeConfigDirEnv, configDir)
+	altInstall := f.mkdir(filepath.Join(configDir, "plugins", "cache", "mkt", "tool", "1.0.0"))
+	f.write(filepath.Join(altInstall, ".mcp.json"), `{"mcpServers":{"linear":{"type":"http","url":"`+alt+`"}}}`)
+	f.write(filepath.Join(configDir, "plugins", claudePluginRegistry),
+		`{"version":2,"plugins":{"tool@mkt":[{"scope":"user","installPath":`+quote(altInstall)+`}]}}`)
+	f.write(filepath.Join(configDir, ".claude.json"), `{"mcpServers":{"linear":{"type":"http","url":"`+alt+`"}},`+
+		`"projects":{`+quote(project)+`:{"mcpServers":{"mine":{"type":"http","url":"`+alt+`"}}}}}`)
+	for name, req := range underHome {
+		switch {
+		case req.Agent != localagent.ClaudeCode:
+			assertUnresolved(t, Resolve(f.Env, req), "HOME set to")
+		case req.ServerSource == claudeSourceUser || req.ServerSource == claudeSourceLocal:
+			assertUnresolved(t, Resolve(f.Env, req), claudeConfigDirEnv+" is set")
+		default:
+			t.Run(name+" with CLAUDE_CONFIG_DIR", func(t *testing.T) { assertURL(t, Resolve(f.Env, req), alt) })
+		}
+	}
+
+	f.Env.GOOS = "windows"
+	if reason, _ := f.Env.homeOverridden(); !strings.Contains(reason, "USERPROFILE set to") {
+		t.Errorf("Windows reason = %q, want it to name USERPROFILE", reason)
+	}
+}
+
+// TestHomeOverrideOnEveryHookPath covers the override on the path each agent's
+// hook really takes, payload to decision request. Kiro's does not go through
+// resolve, so a check there alone would leave its hook reading the account's
+// ~/.kiro for a Kiro that read another.
+func TestHomeOverrideOnEveryHookPath(t *testing.T) {
+	f := newFixture(t, "darwin")
+	ws := f.mkdir(f.path("ws"))
+	const home = "https://home.example.com/sse"
+	f.write(f.homePath(".claude.json"), `{"mcpServers":{"linear":{"type":"sse","url":"`+home+`"}}}`)
+	f.write(f.homePath(".codex", "config.toml"), "[mcp_servers.linear]\nurl = \""+home+"\"\n")
+	f.write(f.homePath(".cursor", "mcp.json"), `{"mcpServers":{"linear":{"url":"`+home+`"}}}`)
+	f.write(f.homePath(".kiro", "settings", "mcp.json"), `{"mcpServers":{"linear":{"url":"`+home+`"}}}`)
+	preTool := func(toolName string) []byte {
+		return mustJSON(map[string]any{"session_id": "s1", "hook_event_name": "PreToolUse", "cwd": ws, "tool_name": toolName})
+	}
+	claudePreTool := func(toolName, server, source string) []byte {
+		return mustJSON(map[string]any{
+			"session_id": "s1", "hook_event_name": "PreToolUse", "cwd": ws, "tool_name": toolName,
+			"mcp_server": map[string]string{"name": server, "source": source},
+		})
+	}
+	hooks := []struct {
+		name    string
+		agent   localagent.Agent
+		event   Event
+		payload []byte
+	}{
+		{"claude-code", localagent.ClaudeCode, EventPreToolUse, claudePreTool("mcp__linear__search", "linear", claudeSourceUser)},
+		{"codex", localagent.Codex, EventPreToolUse, preTool("mcp__linear__search")},
+		{"cursor", localagent.Cursor, EventCursorBeforeMCPExecution, mustJSON(map[string]any{
+			"hook_event_name": "beforeMCPExecution", "tool_name": "search", "mcp_server_name": "linear", "workspace_roots": []string{ws},
+		})},
+		{"kiro", localagent.Kiro, EventPreToolUse, kiroPayload("mcp_linear_search", ws, nil)},
+		{"kiro tool_call", localagent.Kiro, EventPreToolUse, kiroPayload(kiroToolCall, ws, map[string]any{"tool_id": "linear::search"})},
+	}
+	run := func(t *testing.T, agent localagent.Agent, event Event, payload []byte) Call {
+		t.Helper()
+		call, err := normalizeCall(f.Env, agent, event, payload)
+		if err != nil {
+			t.Fatalf("normalizeCall: %v", err)
+		}
+		return call
+	}
+
+	for _, h := range hooks {
+		if call := run(t, h.agent, h.event, h.payload); call.Request.Unresolved || call.Request.Server.URL != home {
+			t.Fatalf("%s: without an override, unresolved=%v (%s) url=%q", h.name, call.Request.Unresolved, call.Request.UnresolvedReason, call.Request.Server.URL)
+		}
+	}
+
+	decoy := f.path("decoy")
+	f.Env.HomeOverride = &decoy
+	for _, h := range hooks {
+		call := run(t, h.agent, h.event, h.payload)
+		if !call.Request.Unresolved || !strings.Contains(call.Request.UnresolvedReason, "HOME set to") {
+			t.Errorf("%s: want unresolved for the HOME override, got unresolved=%v reason=%q", h.name, call.Request.Unresolved, call.Request.UnresolvedReason)
+		}
+		if call.Request.Server.URL != "" || len(call.Trace) != 0 {
+			t.Errorf("%s: read the home directory despite the override: url=%q trace=%v", h.name, call.Request.Server.URL, call.Trace)
+		}
+	}
+
+	// A built-in tool reads no configuration, and a built-in MCP server is known
+	// by its name and source whichever home directory was read.
+	if call := run(t, localagent.Kiro, EventPreToolUse, kiroPayload("execute_bash", ws, map[string]any{"command": "ls"})); call.Request.Unresolved {
+		t.Errorf("a Kiro built-in tool was unresolved under the override: %s", call.Request.UnresolvedReason)
+	}
+	builtin := run(t, localagent.ClaudeCode, EventPreToolUse, claudePreTool("mcp__claude-in-chrome__navigate", "claude-in-chrome", "dynamic"))
+	if builtin.Request.Unresolved || builtin.Request.ServerName != "claude-in-chrome" || builtin.Request.Server.URL != "" {
+		t.Errorf("a Claude Code built-in MCP server under the override: unresolved=%v (%s) name=%q", builtin.Request.Unresolved, builtin.Request.UnresolvedReason, builtin.Request.ServerName)
 	}
 }

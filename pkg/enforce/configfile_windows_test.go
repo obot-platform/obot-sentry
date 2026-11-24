@@ -3,6 +3,8 @@
 package enforce
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -33,9 +35,31 @@ func TestWindowsSpecialNamespaceAllowsOrdinaryUNCShare(t *testing.T) {
 	}
 }
 
-func TestNewEnvRejectsRelativeHome(t *testing.T) {
-	t.Setenv("USERPROFILE", "relative-home")
-	if _, err := NewEnv(); err == nil || !strings.Contains(err.Error(), "not absolute") {
-		t.Fatalf("NewEnv error = %v, want relative-home rejection", err)
+// TestNewEnvDoesNotTrustUserProfile covers the home directory the hook reads
+// user configuration from: the account's profile directory, whatever
+// USERPROFILE says. A USERPROFILE naming another directory is recorded as an
+// override rather than followed.
+func TestNewEnvDoesNotTrustUserProfile(t *testing.T) {
+	// Untouched, USERPROFILE and the account's profile directory are the same
+	// text, which is all that is compared. If they were spelled differently every
+	// MCP call on the machine would be reported as an override.
+	if env, err := NewEnv(); err != nil || env.HomeOverride != nil {
+		t.Fatalf("NewEnv in an unmodified environment: Home = %q, USERPROFILE = %q, err = %v; want no override",
+			env.Home, os.Getenv("USERPROFILE"), err)
+	}
+
+	decoy := t.TempDir()
+	for _, home := range []string{decoy, "relative-home"} {
+		t.Setenv("USERPROFILE", home)
+		env, err := NewEnv()
+		if err != nil {
+			t.Fatalf("NewEnv with USERPROFILE=%q: %v", home, err)
+		}
+		if !filepath.IsAbs(env.Home) || strings.EqualFold(env.Home, home) {
+			t.Errorf("Home = %q with USERPROFILE=%q, want the account's profile directory", env.Home, home)
+		}
+		if env.HomeOverride == nil || *env.HomeOverride != home {
+			t.Errorf("HomeOverride = %v, want %q", env.HomeOverride, home)
+		}
 	}
 }
