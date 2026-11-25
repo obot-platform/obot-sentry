@@ -207,12 +207,15 @@ Remove the hooks first, then Obot Sentry itself. Uninstalling the MSI
 unregisters both scheduled tasks but leaves hook configuration in place, so the
 order matters.
 
-1. Stop the hook task, then remove the Obot Sentry-managed hooks, preserving
-   third-party hooks. Stopping the task first matters: it checks the hooks
-   every few minutes and would otherwise reinstall them before step 2 runs.
+1. Disable the hook task and stop any run in progress, then remove the Obot
+   Sentry-managed hooks, preserving third-party hooks. Stopping the task first
+   matters: it checks the hooks every few minutes, and it or a run already in
+   progress would otherwise reinstall them before step 2 runs.
 
    ```powershell
    Disable-ScheduledTask -TaskName 'Obot Sentry Hook Install' -ErrorAction SilentlyContinue | Out-Null
+   Stop-ScheduledTask -TaskName 'Obot Sentry Hook Install' -ErrorAction SilentlyContinue
+   for ($i = 0; $i -lt 60 -and (Get-ScheduledTask -TaskName 'Obot Sentry Hook Install' -ErrorAction SilentlyContinue).State -eq 'Running'; $i++) { Start-Sleep -Milliseconds 500 }
    & "C:\Program Files\Obot\obot-sentry\obot-sentry.exe" hook-uninstall
    ```
 

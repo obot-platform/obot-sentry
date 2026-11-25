@@ -162,12 +162,15 @@ Remove the hooks first, then the agent. The MSI's uninstall unregisters both
 scheduled tasks but leaves hook configuration in place, so the order matters.
 
 1. While the agent is still installed, run this from an elevated remediation
-   script. It stops the hook task first; otherwise the task, which checks the
-   hooks every few minutes, would reinstall them before the uninstall
-   assignment below takes effect.
+   script. It disables the hook task and stops any run in progress first;
+   otherwise the task, which checks the hooks every few minutes, or a run
+   already in progress, would reinstall them before the uninstall assignment
+   below takes effect.
 
    ```powershell
    Disable-ScheduledTask -TaskName 'Obot Sentry Hook Install' -ErrorAction SilentlyContinue | Out-Null
+   Stop-ScheduledTask -TaskName 'Obot Sentry Hook Install' -ErrorAction SilentlyContinue
+   for ($i = 0; $i -lt 60 -and (Get-ScheduledTask -TaskName 'Obot Sentry Hook Install' -ErrorAction SilentlyContinue).State -eq 'Running'; $i++) { Start-Sleep -Milliseconds 500 }
    & "C:\Program Files\Obot\obot-sentry\obot-sentry.exe" hook-uninstall
    ```
 
