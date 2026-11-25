@@ -18,7 +18,7 @@
 #   sign      when INSTALLER_SIGN_P12 holds the signing p12 (a path or its
 #             base64 contents, as quill takes it). It must hold a Developer
 #             ID Installer identity and the intermediate that issued it,
-#             legacy-encoded - README.md has the recipe. MDMs refuse
+#             legacy-encoded. docs/releasing.md has the recipe. MDMs refuse
 #             unsigned pkgs.
 #   notarize  when signing ran and the QUILL_NOTARY_* App Store Connect key
 #             is present (the same secrets goreleaser's quill step uses).

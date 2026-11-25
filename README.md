@@ -1,485 +1,126 @@
-# Obot Sentry 
+# Obot Sentry
 
-`obot-sentry` is a command-line tool designed to be used by MDMs for device scanning and agent hook configuration.
-
-It enrolls each machine with an [Obot](https://github.com/obot-platform/obot) server as a single device shared by all of the machine's users, submits device scan manifests attributed per user, and provides managed local-agent audit hooks. Inventory collection (MCP servers, skills, plugins) is currently stubbed out — scans ship an empty manifest so the enrollment and submission flow works end to end while the scan engine lands separately.
+`obot-sentry` is a command-line tool that an MDM installs on each device. It enrolls the device with an [Obot](https://github.com/obot-platform/obot) server, reports each user's AI client configuration, and installs hooks that audit and enforce local agents' tool calls.
 
 ## How it works
 
-- **Machine-wide scheduler entries.** The MDM installer registers a scan task that the OS runs *as each signed-in user*: on Windows it uses a `BUILTIN\Users` group principal (logon + a 10-minute poll). Each run is a plain `obot-sentry scan --submit --quiet` in the user's own session, so attribution, paths, and permissions are native — no privileged fan-out and no MDM per-user scheduling. The poll is cheap: obot-sentry throttles real submissions to the MDM-configured `ScanIntervalMinutes` (default 60, clamped to 15–1440) against its per-user scan state, so admins retune the cadence from the MDM alone (`scan --submit --force` bypasses the throttle for a one-off manual submission). Users who aren't signed in aren't scanned; their inventory can't change while they're signed out, so nothing is missed beyond first-report latency for accounts that haven't signed in since install. The installer also registers an elevated hook job (a SYSTEM scheduled task on Windows, a root LaunchDaemon on macOS) that runs `obot-sentry hook-install --if-due` at startup (and at logon on Windows) and on a five-minute poll. `hook-install` converges machine policy plus the per-user files of every local account, signed in or not (on macOS, also a signed-in network account with no local record, as on a Mac bound to Active Directory without mobile accounts). Looking up accounts and checking their home folders is bounded by a deadline, so a home on an unreachable volume skips only that user. `--if-due` throttles the poll to the MDM-configured `HookIntervalMinutes` (default 15, clamped to 5–1440), except that a restart, a new or removed user profile, a changed enforcement setting, or an upgraded binary converges on the next poll. Each run appends the hooks it changed and any failures to `hook-install.log`. Each install run, scheduled or manual, records its inputs in `schedule.json`, because any of them can rewrite hook files; a failed run is marked there, so the next poll retries it. Both live in a folder only root (macOS: `/Library/Application Support/obot/obot-sentry-hook-install`) or SYSTEM and Administrators (Windows: `C:\Program Files\Obot\obot-sentry\hook-install`) can read or write, so a user cannot suppress repairs by editing the schedule state or blind the log; a missing or untrusted state file makes the run due. Neither platform uses the machine data directory for this, because any user can create entries in it (ProgramData on Windows, a mode-1777 folder on macOS). `hook-uninstall` clears the schedule state, so a reinstall converges immediately. Machine policy is converged before any user's files are read, and each user is read with non-blocking, size-capped opens (refusing FIFOs, extra hard links, and on macOS files not owned by that user), and the machine scope and each user are each converged under their own deadline, so no account's files can stall or abort convergence for the others.
-- **Enrollment.** Configuration (server URL + an `ode1-...` enrollment credential) is pushed by the MDM — via registry values on Windows, a managed-preferences profile on macOS. On the machine's first scan — by whichever user runs first — obot-sentry generates a shared Ed25519 identity key in the machine-scoped data dir (`%PROGRAMDATA%\obot\obot-sentry` on Windows, `/Library/Application Support/obot/obot-sentry` on macOS; both are prepared user-writable by the installer, with a per-user fallback when unavailable) and enrolls the public key via `POST /api/mdm/enroll` (trust-on-first-use). The device ID derives from the machine ID + key fingerprint, so all users present one device — and a lost key simply mints a fresh device ID instead of a TOFU conflict. Each user's first scan re-enrolls the same identity, which is an idempotent update server-side.
-- **Submission.** Every submission is authenticated with a short-lived self-signed JWT (`aud=obot/device`) verified server-side against the enrolled key; scans land via `POST /api/devices/scans`, attributed to the submitting user by the manifest's `username`. Local-agent audit logs land via `POST /api/local-agent-audit-logs`, with the server stamping authoritative device attribution from the JWT.
-- **Local-agent audit hooks.** Managed hook configuration invokes the hidden `obot-sentry audit submit` command for supported local agents. The hook parser normalizes terminal tool-call events, submits them fail-open, and writes only warnings to stderr when enrollment or submission is unavailable so agent execution is not blocked.
-- **Tool-call enforcement hooks.** With enforcement enabled in Obot, managed pre-tool hook configuration invokes the hidden `obot-sentry enforce` command for Claude Code, Codex, Cursor, and Kiro. It is the opposite of the audit hook in every important way: synchronous, fail-**closed**, and stdout is the hook protocol channel rather than something that must stay empty. See [Tool-call enforcement](#tool-call-enforcement).
-- **Audit spool.** Transient audit-log submission failures are stored in an encrypted per-user spool under the obot-sentry cache directory and replayed after a later successful live submit. Server-side client errors are discarded instead of retried.
-- **Scan state + logs.** Every scan run updates `scan.json` (last scan/submit times, status, last error) and appends a JSON record to `scan-logs/` — timestamp-sortable filenames, pruned by age and size — in obot-sentry's per-user cache dir (`%LOCALAPPDATA%\obot\obot-sentry` on Windows, `~/Library/Caches/obot/obot-sentry` on macOS). Support and MDM freshness checks read these; recording problems never fail a scan.
+The installer registers two scheduled jobs.
+
+**Scan.** A scan job runs as each signed-in user at logon and then every 10 minutes on Windows or every 15 minutes on macOS. Each run inventories that user's MCP servers, skills, and plugins and submits the result to Obot. Submissions are throttled to `ScanIntervalMinutes`, which defaults to 60. Users who are not signed in are not scanned.
+
+**Hooks.** A hook job runs as SYSTEM on Windows and as root on macOS. It runs `obot-sentry hook-install --if-due` at startup, at logon on Windows, and every 5 minutes. A run is due once `HookIntervalMinutes` has passed since the last one, which defaults to 15. A run is also due on the next poll after a restart, a new or removed user profile, a change to the enforcement setting, an upgrade, or a failed run. Each run restores missing or modified Obot Sentry hooks in the machine-wide agent files and in every local user's files, signed in or not, and leaves other hooks in place.
+
+Each hook run appends the hooks it changed and any failures to `hook-install.log`, and records its inputs in `schedule.json`. Both files live in a folder that only administrators can write:
+
+- macOS: `/Library/Application Support/obot/obot-sentry-hook-install`
+- Windows: `C:\Program Files\Obot\obot-sentry\hook-install`
+
+**Enrollment.** On the device's first scan, obot-sentry creates an Ed25519 key in the machine data folder and enrolls its public key with Obot. All users on the device share this key, so Obot sees one device with several users. The machine data folder is `%PROGRAMDATA%\obot\obot-sentry` on Windows and `/Library/Application Support/obot/obot-sentry` on macOS. Every scan and audit submission carries a short-lived JWT signed with the key.
+
+**Audit hooks.** After a tool call finishes, the audit hook submits a record of it to Obot. The audit hook never blocks the agent. A failed submission is saved in an encrypted per-user spool and sent again after a later submission succeeds.
+
+**Enforcement hooks.** When enforcement is enabled, a hook runs before each tool call and blocks it unless Obot allows it. See [Tool-call enforcement](#tool-call-enforcement).
+
+Each scan updates `scan.json` and writes a record to `scan-logs/` in the per-user cache folder. That folder is `%LOCALAPPDATA%\obot\obot-sentry` on Windows and `~/Library/Caches/obot/obot-sentry` on macOS.
 
 ## Commands
 
 ```
-obot-sentry scan              # build + print the manifest (add --submit to enroll + upload)
-                              #   --submit --force ignores the scan interval and submits now
-obot-sentry enroll            # explicit enrollment, for verifying a configuration
-obot-sentry hook-install      # install managed local-agent hooks (root/Administrator)
-                              #   --enforce also installs the tool-call enforcement hooks
-obot-sentry hook-uninstall    # remove all marker-owned hooks (root/Administrator)
+obot-sentry scan              # print the manifest; --submit enrolls and uploads it
+                              #   --submit --force ignores the scan interval
+obot-sentry enroll            # enroll explicitly, to check a configuration
+obot-sentry hook-install      # install the hooks (root or Administrator)
+                              #   --enforce also installs the enforcement hooks
+obot-sentry hook-uninstall    # remove every Obot Sentry hook (root or Administrator)
 obot-sentry version
 ```
 
-`obot-sentry audit submit` and `obot-sentry enforce` are hidden because they are intended for managed local-agent hook configurations, not direct operator use. Both authenticate as the enrolled device. `obot-sentry enforce resolve` is the one part of the enforcement command meant to be run by hand — see [Tool-call enforcement](#tool-call-enforcement).
+The agent hooks call the hidden commands `obot-sentry audit submit` and `obot-sentry enforce`. Only `obot-sentry enforce resolve` is meant to be run by hand. [docs/enforcement.md](docs/enforcement.md#diagnosing-a-block) describes it.
 
 ## Configuration
 
-Resolution order per key: flags > env > MDM store.
+A flag overrides an environment variable, and an environment variable overrides the MDM setting.
 
-| Key | Flag | Env | Windows registry / macOS managed prefs |
-|-----|------|-----|----------------------------------------|
+| Setting | Flag | Environment variable | MDM key |
+|---|---|---|---|
 | Server URL | `--server-url` | `OBOT_SENTRY_SERVER_URL` | `ServerURL` |
 | Enrollment key | `--enrollment-key` | `OBOT_SENTRY_ENROLLMENT_KEY` | `EnrollmentKey` |
-| Scan interval (minutes) | `--scan-interval-minutes` | `OBOT_SENTRY_SCAN_INTERVAL_MINUTES` | `ScanIntervalMinutes` |
-| Hook check interval (minutes) | `hook-install --hook-interval-minutes` | `OBOT_SENTRY_HOOK_INTERVAL_MINUTES` | `HookIntervalMinutes` |
-| Enforcement enabled | `hook-install --enforce` | `OBOT_SENTRY_ENFORCEMENT_ENABLED` | `EnforcementEnabled` |
+| Scan interval in minutes, 15 to 1440 | `--scan-interval-minutes` | `OBOT_SENTRY_SCAN_INTERVAL_MINUTES` | `ScanIntervalMinutes` |
+| Hook check interval in minutes, 5 to 1440 | `hook-install --hook-interval-minutes` | `OBOT_SENTRY_HOOK_INTERVAL_MINUTES` | `HookIntervalMinutes` |
+| Enforcement | `hook-install --enforce` | `OBOT_SENTRY_ENFORCEMENT_ENABLED` | `EnforcementEnabled` |
 
-`EnforcementEnabled` is a boolean and every store spells it differently, so all
-of these are accepted: a real plist boolean, `1`/`0` from a `REG_DWORD`,
-`true`/`false` from a `REG_SZ`, and `yes`/`no`/`on`/`off`. A value that is not
-recognized is treated as absent rather than as false, so a typo falls through to
-the next layer instead of quietly disabling the control. Absent everywhere means
-enforcement is off.
+The MDM settings are read from `HKLM\SOFTWARE\Obot\obot-sentry` on Windows. On macOS they are read from `/Library/Managed Preferences/ai.obot.obot-sentry.plist`, or from `/Library/Preferences/ai.obot.obot-sentry.plist` when the managed file is absent.
 
-On Windows the registry value is what turns enforcement on for a device that is
-already installed: the hook scheduled task registers a fixed `hook-install`
-argument list, so the MSI property (`ENFORCEMENT=1`) or a pushed `REG_DWORD` is
-the only way in.
-
-MDM stores: `HKLM\SOFTWARE\Obot\obot-sentry` on Windows; `/Library/Managed Preferences/ai.obot.obot-sentry.plist` (fallback `/Library/Preferences/...`) on macOS.
-
-`hook-install` writes the final MDM-owned executable path into every hook:
-`/usr/local/bin/obot-sentry` on macOS and
-`C:\Program Files\Obot\obot-sentry\obot-sentry.exe` on Windows. It fails before
-changing hook files if the package has not installed a usable executable at
-that location.
+`EnforcementEnabled` accepts a plist boolean, `1` or `0`, `true` or `false`, `yes` or `no`, and `on` or `off`. obot-sentry ignores any other value and falls through to the next layer, so a typo does not turn enforcement off. Enforcement is off when no layer sets it. On an installed Windows device, the registry value is the only way to turn enforcement on, because the scheduled task's arguments are fixed.
 
 ## Tool-call enforcement
 
-`hook-install --enforce` adds a **pre-tool** hook to Claude Code, Codex, Cursor,
-and Kiro, on top of the post-tool audit hooks. Before each tool call runs, the hook
-resolves what the call targets, asks obot for a verdict, and blocks the call
-unless the answer is an explicit allow.
+`hook-install --enforce` adds a hook that runs before each tool call in these agents:
 
-| Agent | File | Events added |
-|---|---|---|
-| Claude Code | `/Library/Application Support/ClaudeCode/managed-settings.json` (macOS), `C:\Program Files\ClaudeCode\managed-settings.json` | `PreToolUse` |
-| Codex | `/etc/codex/requirements.toml` (macOS), `%ProgramData%\OpenAI\Codex\requirements.toml` | `PreToolUse` |
-| Cursor | `/Library/Application Support/Cursor/hooks.json` (macOS), `%ProgramData%\Cursor\hooks.json` | `beforeMCPExecution`, `preToolUse` |
-| Kiro | `~/.kiro/hooks/obot-sentry.json` | `PreToolUse` |
+| Agent | macOS file | Windows file | Events |
+|---|---|---|---|
+| Claude Code | `/Library/Application Support/ClaudeCode/managed-settings.json` | `C:\Program Files\ClaudeCode\managed-settings.json` | `PreToolUse` |
+| Codex | `/etc/codex/requirements.toml` | `%ProgramData%\OpenAI\Codex\requirements.toml` | `PreToolUse` |
+| Cursor | `/Library/Application Support/Cursor/hooks.json` | `%ProgramData%\Cursor\hooks.json` | `beforeMCPExecution`, `preToolUse` |
+| Kiro | `~/.kiro/hooks/obot-sentry.json` | `%USERPROFILE%\.kiro\hooks\obot-sentry.json` | `PreToolUse` |
 
-> Visual Studio Code is not supported for enforcement.
+VS Code is not supported for enforcement.
 
-For Claude Code, `hook-install --enforce` also sets `"disableSideloadFlags": true`
-in the same managed settings file. Claude Code then refuses plugins loaded for a
-single session (`--plugin-dir`, `--plugin-dir-no-mcp`, `--plugin-url`,
-`CLAUDE_CODE_PLUGIN_DIRS`, and plugins an Agent SDK host passes at startup), as
-well as `--agents` and `--mcp-config`. Such a plugin reports the same server name
-as an installed plugin and replaces an installed plugin of the same name, so
-plugin MCP servers are resolved only while this setting is on. It replaces any
-value already there, including an explicit `false`.
+The hook works out which MCP server or tool the call targets, asks Obot for a verdict, and blocks the call unless Obot explicitly allows it. The hook also blocks the call when Obot is unreachable, takes longer than 5 seconds, or returns an answer the hook cannot read. It also blocks calls on a device that is not enrolled, so a device whose enrollment fails blocks every tool call in every enforced agent. When enforcement is turned off in Obot, the server allows every call.
 
-An audit-only run and an uninstall leave the setting in place, since the file
-does not record whether obot-sentry or an administrator set it. Claude Code
-therefore keeps refusing those flags after enforcement is turned off or
-obot-sentry is removed. To allow them again, delete `disableSideloadFlags` from
-Claude Code's managed settings file (`/Library/Application
-Support/ClaudeCode/managed-settings.json` on macOS,
-`C:\Program Files\ClaudeCode\managed-settings.json` on Windows).
+An allowed call still goes through the agent's own approval prompts. The hook only withholds a denial and never approves a call.
 
-### It fails closed
+An MCP server can be allowlisted by URL, by `npx` or `uvx` package, or by display name for a claude.ai connector. A server started from a local executable path has none of these, so its calls are always blocked. [docs/enforcement.md](docs/enforcement.md) covers how each agent names servers, which `npx` and `uvx` commands resolve to a package, and how to diagnose a block.
 
-Anything other than an explicit allow blocks the call: obot unreachable, slow
-(the whole check is budgeted at 5 seconds), or returning something unparseable; a
-device that is not enrolled or has no server configured; a payload the hook cannot
-read; an MCP server it cannot identify. **A device whose enrollment never
-completed blocks every tool call in every enforced agent until enrollment succeeds.**
-`hook-install` provisions the machine identity before writing any hook file, so
-the normal MDM path cannot land there — but a wiped identity directory or a
-revoked enrollment key can, and it will be loud.
+### Limits
 
-Turning enforcement off in obot stops the blocking immediately, for all devices: the
-server allows every call when enforcement is disabled, and logs nothing.
+Kiro's hook file is in the user's home folder, so the user can delete it. The hook job restores it within `HookIntervalMinutes`.
 
-### It never grants permission
+Kiro runs no hooks in a workspace the user has not trusted or in a window with no folder open. A folder trusted after Kiro starts runs no hooks until Kiro restarts ([kirodotdev/Kiro#11884](https://github.com/kirodotdev/Kiro/issues/11884)). The Kiro CLI runs hooks only on its v3 agent engine, `kiro-cli chat --v3` or `chat.agentEngine` set to `v3`. obot-sentry does not change the engine setting.
 
-A permitted call is answered by *withholding* the denial, not by approving the
-call — zero bytes for Claude Code, Codex, and Kiro, and Cursor's
-`{"permission":"allow"}`, which means "this hook does not object". Your agents' own approval prompts still
-apply to everything enforcement allows. The allowlist and an agent's permission
-model are separate controls and this deliberately does not collapse them.
+Claude Code reads only one managed settings source by default. If the device also receives Claude Code server-managed settings or an MDM policy, Claude Code ignores the managed settings file and its hooks. The MDM policy is the `com.anthropic.claudecode` preference domain on macOS and `HKLM\SOFTWARE\Policies\ClaudeCode` on Windows. `hook-install` does not detect this and still reports success. If you deploy either source, set `managedSourcesBehavior` to `merge` in the highest-ranked one.
 
-### What can and cannot be allowlisted
+With enforcement on, `hook-install` sets `"disableSideloadFlags": true` in Claude Code's managed settings file. Claude Code then refuses `--plugin-dir`, `--plugin-url`, `--agents`, `--mcp-config`, and the other ways to load a plugin for one session. Without this setting, a session plugin could pose as an installed plugin with the same name. `hook-install` and `hook-uninstall` never remove the setting, because the file does not record who set it. To allow those flags again, delete `disableSideloadFlags` from the managed settings file.
 
-An MCP server can be allowlisted by **URL**, by its **`npx`/`uvx` package**, or —
-for a claude.ai account connector — by **display name**.
+### Turning enforcement off
 
-A stdio server started from a **local executable path** (`/opt/homebrew/bin/thing`,
-`./node_modules/.bin/thing`) presents none of those: no URL, no registry package,
-nothing an allowlist entry can name. Such a call is reported as unidentified and
-**blocked by design**. If a decision log is full of unresolvable stdio servers,
-this is why, and the fix is to run those servers from a package or a URL rather
-than to look for an allowlist entry that can match them.
-
-Naming caveats that change what an allowlist entry has to say:
-
-- **Codex reports server names with punctuation folded to underscores.** A config
-  key of `probe-npx-stdio` arrives as `probe_npx_stdio`. The device matches it back
-  to the key and reports the key, so copy the name from the decision log rather
-  than from the tool name.
-- **Cursor display names may carry a scope prefix** (`user-probe-uvx-stdio`), and a
-  name declared in more than one Cursor scope is reported as unidentified — the
-  payload cannot say which one ran. Rename one of them.
-- **Kiro tool names are lowercased** (`mcp_<server>_<tool>`). The device matches
-  the server back to its configuration key, but the tool half stays lowercased
-  (`createissue`), so copy tool names from the decision log. A tool name that two
-  configured servers could both have produced (`mcp_github_enterprise_x` with
-  servers `github` and `github_enterprise`) is reported as unidentified.
-
-### `npx` / `uvx` package resolution
-
-The device resolves a stdio command to a package identity itself, strictly: it
-either produces an exact `(source, name, version)` or reports the call as
-unidentified. The command must be exactly `npx` or `uvx` (plus `.cmd`/`.exe` on
-Windows); any path separator, and any other runner, is unidentified.
-
-Flags that change *what code runs* are refused — `npx -c`, `--registry`,
-`--node-options`, `uvx --with`, `--index-url`, `--from git+…`, package extras —
-because the package name would no longer identify the code. Flags that cannot
-change identity are accepted: `-y`, `-q`, `--offline`, `npx -p/--package`,
-`uvx --from`, and `uvx -p/--python` (note `-p` means `--package` to npx and
-`--python` to uvx).
-
-The same rule applies to environment variables. An MCP entry is unidentified
-when its `env` redirects the runner or package source or injects code, including
-`PATH`, `NODE_OPTIONS`, `NPM_CONFIG_*`, `COREPACK_*`, `UV_*`, `PYTHONPATH`, and
-dynamic-loader variables. Sensitive variables that are inputs to the server,
-such as `GITHUB_TOKEN`, are accepted and never sent in the decision request.
-Identity-changing variables inherited by obot-sentry are refused as well. An
-ordinary inherited `PATH` is accepted, including one that finds `npx` or `uvx`
-under Homebrew or another user-local installation; runner ownership is not an
-allowlist dimension.
-
-Names are canonicalized the way each registry does, on the device and again when
-an allowlist entry is saved, so the two agree: PyPI by PEP 503
-(`Mcp_Server.Git` → `mcp-server-git`), npm by lowercasing with the scope
-preserved (`@Scope/Pkg` → `@scope/pkg`). Versions are reported verbatim, and an
-allowlist entry with no version matches any version.
-
-| Command | Resolves to |
-|---|---|
-| `npx -y @modelcontextprotocol/server-github` | npm `@modelcontextprotocol/server-github`, any version |
-| `npx -y linear-mcp@1.2.3` | npm `linear-mcp` 1.2.3 |
-| `npx -p some-pkg -y other` | npm `some-pkg` (`-p` wins, as in npx) |
-| `uvx mcp-server-git` | pypi `mcp-server-git` |
-| `uvx awslabs.core-mcp-server@latest` | pypi `awslabs-core-mcp-server` `latest` |
-| `uvx --from 'pkg==1.4.0' entry` | pypi `pkg` 1.4.0 |
-| `uvx -p 3.11 mcp-server-git` | pypi `mcp-server-git` (a Python pin, not a package) |
-| `npx -c 'foo && bar'` | unidentified — runs an arbitrary command |
-| `npx --registry https://x/ pkg` | unidentified — redirects where the code comes from |
-| `uvx --with pandas pkg` | unidentified — brings in more than the named package |
-| `uvx --from git+https://…` | unidentified — not a registry package |
-| `uvx --from 'pkg[all]' entry` | unidentified — extras |
-| `/opt/homebrew/bin/uvx pkg` | unidentified — a path, not a bare runner |
-| `uv tool run pkg`, `node server.js`, `docker run …` | unidentified — unsupported runner |
-
-### Diagnosing a block
-
-`enforce resolve` prints every configuration source the hook would consult, in
-order, and what it concluded — from the same resolver the hook uses, so a trace
-that says FOUND is evidence about production behavior. It exits non-zero when the
-server cannot be identified.
-
-```
-$ obot-sentry enforce resolve --agent claude-code --server linear --server-source project
-1  /Users/me/proj/.mcp.json  mcpServers["linear"]  FOUND
-server name: linear
-resolved: https://mcp.linear.app/mcp
-```
-
-For Claude Code the server comes from the hook payload's `mcp_server` field,
-which names the server's configuration key and the scope Claude Code loaded it
-from, so pass both from the payload: `--server` is `mcp_server.name` and
-`--server-source` is `mcp_server.source`. Only that scope is read, and the key is
-matched exactly:
-
-| `source` | Read from |
-|---|---|
-| `user` | `mcpServers` in `.claude.json` |
-| `local` | the project's entry in `.claude.json` (keyed by the git root, or a linked worktree's main checkout) |
-| `project` | every `.mcp.json` from the session's launch directory upward, a deeper file winning |
-| `plugin` | the installed plugins in `plugins/installed_plugins.json` |
-| `enterprise` | `managed-mcp.json` |
-| `managed` | `managedMcpServers` in the managed settings files |
-| `claudeai` | nothing: the claude.ai connector's display name is its identity |
-
-If `~/.claude/.config.json` exists, Claude Code reads `user` and `local` servers
-from it instead of `.claude.json`, and so does the hook.
-
-Servers from `--mcp-config`, the Agent SDK, or an agent definition (`dynamic`,
-`sdk` and `agent`) are left unresolved, since the hook cannot read their
-definitions, apart from Claude Code's built-in servers, which are reported by
-name. So is an MCP call whose payload has no `mcp_server`. Claude
-Code first sends `mcp_server` in 2.1.274, so MCP calls from earlier releases are
-denied.
-
-Plugin servers are resolved only while the managed settings set
-`disableSideloadFlags` (see above); otherwise a plugin loaded for the session
-alone could pass for an installed one, and they are left unresolved. Every
-installation of the plugin counts, whatever its scope: Claude Code loads a
-plugin installed for one project in any session whose settings enable it, so a
-project's committed settings can switch on another project's installation.
-Installations that define the server differently leave it unresolved.
-
-A plugin's servers come from its `.mcp.json` and from the `mcpServers` of its
-`.claude-plugin/plugin.json`. A plugin that ships no `plugin.json` takes its
-marketplace entry as its manifest instead, so the entry's `mcpServers` in the
-marketplace's `marketplace.json` are read too, from the copy Claude Code keeps
-under `plugins/marketplaces`, and they override the plugin's `.mcp.json`. A
-plugin whose `mcpServers` names something the hook does not read, such as an
-`.mcpb` bundle, is left unresolved, as is one whose marketplace entry declares a
-server Claude Code would reject.
-
-`local` and `project` servers are read for the directory the session
-was started or resumed in, which Claude Code gives every hook as
-`CLAUDE_PROJECT_DIR`; a session keeps that configuration after changing
-directories, and a resumed session loads it from wherever it was resumed. Pass
-`--project-dir` to reproduce a hook call; without it, the current directory
-stands in. A hook run without `CLAUDE_PROJECT_DIR` leaves those servers
-unresolved. Claude Code's files are parsed as strict JSON, as Claude Code parses
-them, so a file with comments or trailing commas is skipped. A file Claude Code
-may have loaded but the hook cannot decode, such as one nested more than 10000
-levels deep or a `.mcp.json` that isn't an object, leaves the server unresolved
-rather than letting another file answer for it. A plugin from a
-marketplace added from a local folder or catalog file is read from that folder,
-which is where Claude Code loads it.
-
-An unidentified server prints the reason on the last line and exits 1:
-
-```
-server name: local-binary
-unresolved: stdio command "/opt/homebrew/bin/some-server" is a path, not a bare package runner
-```
-
-### Tamper resistance, stated plainly
-
-The Claude Code, Codex, and Cursor hook files are machine-scoped and
-administrator-owned. The Kiro hook file is **user-scoped**
-(`~/.kiro/hooks/obot-sentry.json`), so the user whose calls are being enforced
-can delete it. The scheduled `hook-install` job re-converges it within
-`HookIntervalMinutes` (default 15), so the bypass window is bounded by that
-interval rather than permanent.
-
-Claude Code's hooks are installed in its managed settings file, which Claude
-Code reads from a fixed path. On Windows that path is always on drive `C:`,
-even on a machine whose Program Files folder has been moved, so `hook-install`
-writes there too. Starting Claude Code with a different
-`CLAUDE_CONFIG_DIR` therefore does not skip them, and they keep running when an
-administrator sets `allowManagedHooksOnly`. When the session sets that variable,
-plugin MCP servers are resolved against `$CLAUDE_CONFIG_DIR/plugins`, which is
-where Claude Code loads them from. User and local MCP servers are blocked in
-such a session, with a reason that says so: Claude Code reads them from the
-`.claude.json` of the directory it was started with, its settings can change the
-variable for its hooks afterwards, and the hook cannot tell the two apart.
-Project and managed servers and claude.ai connectors are unaffected. The
-variable has to hold an absolute path: Claude Code resolves a relative one
-against the directory it was started from, which the hook cannot determine, so
-MCP calls from such a session are blocked with a reason that says so.
-
-Claude Code uses only one managed settings source by default. If the machine
-also receives server-managed settings or an MDM policy (the
-`com.anthropic.claudecode` preference domain on macOS,
-`HKLM\SOFTWARE\Policies\ClaudeCode` on Windows), Claude Code ignores the
-managed settings file, hooks included. `hook-install` does not check for this:
-it always writes the hooks to the managed settings file and reports success. If
-your organization uses either of those sources, set `managedSourcesBehavior` to
-`merge` in the highest-ranked one you deploy, so that Claude Code applies the
-file as well. Otherwise Obot Sentry's hooks do not run in Claude Code.
-
-Releases before this one installed Claude Code's hooks in
-`~/.claude/settings.json`. `hook-install` removes those entries when it installs
-the managed ones. Obot Sentry never installs Claude Code hooks in the user's
-settings.
-
-Kiro runs no hooks in a workspace the user hasn't trusted, or in a window with
-no folder open, so calls made there are neither enforced nor audited. A folder
-trusted after Kiro starts stays unhooked until Kiro restarts
-([kirodotdev/Kiro#11884](https://github.com/kirodotdev/Kiro/issues/11884)). The
-Kiro CLI runs these hooks only on its v3 agent engine (`kiro-cli chat --v3`, or
-`chat.agentEngine` set to `v3`). Its default v2 engine ignores `~/.kiro/hooks`,
-so CLI sessions on v2 are neither enforced nor audited. obot-sentry does not
-change the engine setting.
-
-### Turning it off
-
-Set `EnforcementEnabled` to false (or pass `--enforce=false`) and the next
-`hook-install` converges the audit hooks and removes every Obot Sentry-managed
-enforcement hook. Third-party pre-tool hooks are left untouched. A plain
-`hook-install` still follows the configured enforcement value, so explicitly set
-`EnforcementEnabled` false (or use `--enforce=false`) when disabling it.
+Set `EnforcementEnabled` to false, or run `hook-install --enforce=false`. The next hook run removes the enforcement hooks and keeps the audit hooks. A plain `hook-install` reads the configured value, so set it to false explicitly.
 
 ## Removing the hooks
 
-Run the following before removing the binary:
+Before you remove the binary, run this as root, or from an elevated PowerShell on Windows:
 
 ```sh
 sudo obot-sentry hook-uninstall
 ```
 
-On Windows, run the equivalent command in an elevated PowerShell. The command
-removes all hook entries whose command contains `--managed-by obot-sentry` from
-Claude Code, Codex, VS Code, Cursor, and Kiro while preserving third-party
-hooks. It targets machine-wide files and every local user's files, so one run
-covers a shared machine. Stop the scheduled hook task or
-uninstall the package afterward so a later convergence does not reinstall them.
+`hook-uninstall` removes every hook whose command contains `--managed-by obot-sentry` from the machine-wide files and from every local user's files. It leaves other hooks in place. Stop the scheduled hook job or uninstall the package afterward, or the next hook run installs the hooks again. Restart the agents to unload the hooks. Each configuration's `INSTRUCTIONS.md` under `build/` has the per-OS steps.
 
-Every entry Obot Sentry writes carries the `--managed-by obot-sentry` marker
-— the same signal `hook-install` uses to recognize and replace its own entries
-on each run — so it is also how you identify what to delete. The managed files
-are:
+Obot Sentry writes to these files:
 
 | Agent | macOS | Windows |
 |---|---|---|
 | Claude Code | `/Library/Application Support/ClaudeCode/managed-settings.json` | `C:\Program Files\ClaudeCode\managed-settings.json` |
-| Claude Code (user settings, earlier releases) | `~/.claude/settings.json` | `%USERPROFILE%\.claude\settings.json` |
+| Claude Code, releases before managed settings | `~/.claude/settings.json` | `%USERPROFILE%\.claude\settings.json` |
 | Codex | `/etc/codex/requirements.toml` | `%ProgramData%\OpenAI\Codex\requirements.toml` |
-| Copilot (VS Code) hook | `~/.copilot/hooks/obot-sentry.json` | `%USERPROFILE%\.copilot\hooks\obot-sentry.json` |
-| Cursor | `/Library/Application Support/Cursor/hooks.json` | `%ProgramData%\Cursor\hooks.json` |
+| VS Code Copilot hook | `~/.copilot/hooks/obot-sentry.json` | `%USERPROFILE%\.copilot\hooks\obot-sentry.json` |
 | VS Code settings | `~/Library/Application Support/Code/User/settings.json` | `%APPDATA%\Code\User\settings.json` |
+| Cursor | `/Library/Application Support/Cursor/hooks.json` | `%ProgramData%\Cursor\hooks.json` |
 | Kiro | `~/.kiro/hooks/obot-sentry.json` | `%USERPROFILE%\.kiro\hooks\obot-sentry.json` |
 
-The uninstall command intentionally changes only marker-owned hooks. It does not
-delete files, remove Codex's unmarked `[features]` pins, or remove the unmarked
-`chat.hookFilesLocations` values in VS Code settings because their previous
-values cannot be recovered safely. Remove those supporting settings manually if
-you no longer want them. Restart the agents afterward to drop the hooks. Per-OS
-commands are in the `INSTRUCTIONS.md` for each configuration under `build/`.
+`hook-uninstall` does not delete files. It also leaves three settings that carry no marker, because their earlier values cannot be recovered: Codex's `[features]` pins, VS Code's `chat.hookFilesLocations` values, and Claude Code's `disableSideloadFlags`. Remove them by hand if you no longer want them.
 
 ## MDM packaging
 
-Everything MDM-related lives in `build/`, one directory per OS with the
-MDM channels nested under the OS they deliver to:
+`build/` holds the installers and the per-channel instructions:
 
-```
-build/
-  manifest.json          # authored: schemaVersion, fields, configurations (${VERSION} tokens)
-  mdm-assets.sh          # completes + sanity-checks the manifest, stages dist/mdm-assets/
-  windows/               # the Windows installer (MSI, WiX v4)
-    msi.ps1  obot-sentry.wxs  scan-task.ps1  hook-task.ps1  obot-sentry.ico
-    intune/              # Intune channel: .intunewin wrap + instructions
-      intunewin.ps1  INSTRUCTIONS.md.tmpl
-    manual/              # manual channel: instructions for the MSI + exe
-      INSTRUCTIONS.md.tmpl
-  macos/                 # the macOS installer (pkg) + the assets every channel shares
-    pkg.sh  distribution.xml  postinstall  uninstall.sh
-    ai.obot.obot-sentry.scan.plist          # LaunchAgent: per-user scan
-    ai.obot.obot-sentry.hook-install.plist  # LaunchDaemon: root hook convergence
-    ai.obot.obot-sentry.mobileconfig.tmpl   # deployment configuration (MDM channels)
-    ai.obot.obot-sentry.pppc.mobileconfig   # Full Disk Access grant (MDM channels)
-    intune/              # Intune channel: instructions
-      INSTRUCTIONS.md.tmpl
-    jamf/                # Jamf Pro channel: instructions
-      INSTRUCTIONS.md.tmpl
-    manual/              # manual channel: instructions for the pkg + bare binary
-      INSTRUCTIONS.md.tmpl
-```
+- `build/windows/`: the MSI, built with WiX v4, and the Intune and manual channels.
+- `build/macos/`: the pkg, the LaunchAgent and LaunchDaemon, the configuration and Full Disk Access profiles, and the Intune, Jamf Pro, and manual channels.
+- `build/manifest.json`: the fields Obot's setup form asks for and the configurations it offers for download.
 
-The installers are tenant-agnostic; per-tenant configuration (server URL
-+ an enrollment key created in obot) is applied at deploy time — as MSI
-properties on Windows, as a managed-preferences profile on macOS — so one
-installer serves every tenant. The macOS MDM channel and the DIY channel
-ship the *same* `dist/obot-sentry-<version>.pkg`; only the configuration
-surface around it differs. The Windows chain runs
-**on Windows**: [obot-sentry.wxs](build/windows/obot-sentry.wxs) via
-[WiX Toolset v4](https://docs.firegiant.com/wix/) (`dotnet tool install
---global wix`), wrapped by Microsoft's
-[Win32 Content Prep Tool](https://github.com/microsoft/Microsoft-Win32-Content-Prep-Tool):
+The installers carry no tenant settings. The admin supplies the server URL and enrollment key at deploy time, as MSI properties on Windows or a configuration profile on macOS.
 
-```
-build\windows\msi.ps1 -Version 1.2.3 -Exe bin\obot-sentry.exe  # dist\obot-sentry.msi (version inside, name stable)
-build\windows\intune\intunewin.ps1                         # dist\obot-sentry.intunewin
-build/mdm-assets.sh 1.2.3                                  # dist/mdm-assets/ (any OS)
-```
-
-The macOS chain runs **on macOS**: `pkgbuild`, `productbuild`, and
-`productsign` ship with the OS and `notarytool` with Xcode, so
-[pkg.sh](build/macos/pkg.sh) needs no extra tooling. It takes the universal
-binary only, and signing and notarization gate independently on credentials
-being present, so a plain local run still produces an installable (unsigned)
-pkg for smoke tests:
-
-```
-build/macos/pkg.sh 1.2.3 bin/obot-sentry   # dist/obot-sentry-1.2.3.pkg (versioned name: Jamf keys packages by filename)
-```
-
-Signing reads `INSTALLER_SIGN_P12` (the p12 path or its base64 contents)
-and `INSTALLER_SIGN_PASSWORD`, importing the identity into a throwaway
-keychain for `productsign`. The p12 must carry a Developer ID **Installer**
-certificate — the only kind MDMs accept, and a separate certificate from the
-Application one quill signs the binary with — and must be legacy-encoded,
-because `security import` verifies SHA-1 MACs only and reports anything else
-as a wrong password. It must also bundle the intermediate that issued the
-leaf: `productsign` embeds only intermediates it finds in the keychain, and
-macOS ships the G1 Developer ID intermediate but not G2. Mint one from the
-certificate and key Apple issued, fetching the intermediate its issuer line
-names:
-
-```
-openssl x509 -inform DER -in developerID_installer.cer -out installer-cert.pem
-openssl x509 -in installer-cert.pem -noout -issuer   # which intermediate to fetch
-curl -sSfL https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer |
-  openssl x509 -inform DER -out DeveloperIDG2CA.pem
-openssl pkcs12 -export -legacy -macalg sha1 -inkey privatekey.key \
-  -in installer-cert.pem -certfile DeveloperIDG2CA.pem -out installer.p12
-```
-
-CI (`build.yaml`) runs the same chain — a Linux job builds the binaries
-with GoReleaser (`.goreleaser.yaml`): the Windows exe plus the macOS
-universal (amd64+arm64) binary, signed and notarized with
-[quill](https://github.com/anchore/quill) without a macOS runner; a
-Windows runner packages the MSI and a macOS runner the pkg — and
-`make mdm` dispatches that workflow on your fork and downloads the
-assembled `dist/mdm-assets`.
-
-`mdm-assets.sh` produces the tree obot consumes: the platform installers
-and instruction templates plus one `manifest.json`. The manifest is the
-whole contract: `fields` is a JSON Schema obot renders the admin form from and
-validates values against, and `configurations` lists the downloadable
-(platform, OS) units — display names, descriptions, setup instructions,
-and asset files included — so obot's wizard carries no platform
-knowledge of its own. Obot renders the `*.tmpl` assets and serves each
-unit as a zip. The enrollment key is never rendered — templates carry a
-`REPLACE_WITH_ENROLLMENT_KEY` placeholder the admin fills in the MDM.
-
-CI assembles the assets on every PR/push and publishes them as the
-`mdm-assets` workflow artifact; releases add a tarball with a
-cosign-signed checksums file. The Windows installers ship unsigned:
-Intune installs them silently in SYSTEM context, so nothing gates on
-Authenticode there. The macOS universal binary is Developer ID-signed
-and notarized via quill when the `QUILL_*` secrets are available (the
-same secrets obot's release workflow uses); PRs and forks fall back to
-a dry run with an ad-hoc signature.
-Obot reads the assembled tree via `OBOT_SERVER_MDM_ASSET_SOURCE`, which
-takes a local directory, a tar archive, or an HTTP(S) tarball URL — so
-pointing it at `dist/mdm-assets` serves a local build.
-
-| Platform | installer | scheduling | tenant config |
-|---|---|---|---|
-| Intune (Windows) | `.msi` wrapped as `.intunewin` | per-user scan task (logon + 10-min poll, submissions throttled to `ScanIntervalMinutes`) plus elevated SYSTEM hook-install task (startup + logon + 5-min poll, convergence throttled to `HookIntervalMinutes`) | MSI properties → `HKLM\SOFTWARE\Obot\obot-sentry` |
-| Intune, Jamf Pro (macOS) | `.pkg` | per-user scan LaunchAgent (login + 15-min poll matching the `ScanIntervalMinutes` floor, submissions throttled to `ScanIntervalMinutes`) plus root hook-install LaunchDaemon (load + 5-min poll, convergence throttled to `HookIntervalMinutes`) | configuration profile → `/Library/Managed Preferences/ai.obot.obot-sentry.plist` |
-| Manual (Windows) | `.msi`, or the bare exe | as above for the MSI | MSI properties, or `OBOT_SENTRY_*` environment variables |
-| Manual (macOS) | `.pkg`, or the bare universal binary | as above for the pkg | `sudo defaults write /Library/Preferences/ai.obot.obot-sentry`, or `OBOT_SENTRY_*` environment variables |
-
-The macOS pkg is identical across all three channels — the MDM channels add a
-configuration profile and a PPPC (Full Disk Access) profile, which macOS only
-honors from a user-approved MDM, so the DIY channel grants that access by hand
-instead.
+CI builds the full asset tree on every push and publishes it as the `mdm-assets` workflow artifact. Obot reads the tree from `OBOT_SERVER_MDM_ASSET_SOURCE`, which accepts a local folder, a tar archive, or an HTTP(S) tarball URL.
 
 ## Development
 
@@ -489,99 +130,10 @@ make test
 make validate-go-code
 ```
 
-Local end-to-end against a dev server:
+To scan against a local Obot server:
 
 ```
-OBOT_SENTRY_SERVER_URL=http://localhost:8080 OBOT_SENTRY_ENROLLMENT_KEY=ode1-... bin/obot-sentry scan --submit
+OBOT_SENTRY_SERVER_URL=http://localhost:8080 OBOT_SENTRY_ENROLLMENT_KEY=ode1-... bin/obot-sentry scan --submit --force
 ```
 
-Repeat submissions inside the scan interval are throttled; add `--force` to
-submit every time.
-
-## Testing, releasing, and rolling out
-
-A change reaches devices in three steps: build MDM assets from your branch and
-test them against a local obot, tag a release, then bump the default asset
-source in obot so new obot releases serve it.
-
-### 1. Test a change with real MDM assets
-
-Push your change to a scratch branch on this repo (not your fork) and build the
-full asset tree there:
-
-```
-git switch -c "$(git branch --show-current)-mdm"
-git push upstream HEAD
-MDM_REMOTE=upstream make mdm VERSION=0.1.8   # dispatches build.yaml, downloads dist/mdm-assets
-```
-
-The `-mdm` suffix keeps the push off `main` even if you start there. Switch
-back to your branch afterward and delete the scratch branch from this repo when
-you're done (`git push upstream --delete <branch>-mdm`).
-
-Only this repo holds the signing secrets, and the macOS MDM channels need
-them: Intune and Jamf accept only a Developer ID-signed pkg, and the PPPC
-profile grants Full Disk Access only to a binary signed by our team. A plain
-`make mdm` builds on your fork (`origin`) and skips signing, as PR builds do,
-so its `mdm-assets` (and every PR's `mdm-assets` workflow artifact) are only
-good for the Windows channels and the manual macOS channel.
-
-Pass a `VERSION` above whatever is installed on your test machine. Without one
-the build is versioned `0.0.<run number>`, and the MSI refuses to downgrade a
-machine that already runs a release.
-
-Point a local obot at the result with an absolute path:
-
-```
-OBOT_SERVER_MDM_ASSET_SOURCE=$PWD/dist/mdm-assets
-```
-
-obot imports the source at startup whenever its value changes. Rebuilding into
-the same directory does not change the value, so after a rebuild use **Refresh**
-on obot's Inventory page (or `POST /api/mdm/asset-source/refresh`) to re-import
-it. Then download a configuration from the Inventory wizard, install it on a
-test machine, and check that the device enrolls and submits.
-
-### 2. Release
-
-Releases are cut from `main` by pushing a `v<x.y.z>` tag to this repo:
-
-```
-git checkout main && git pull upstream main
-git tag v0.1.8
-git push upstream v0.1.8
-```
-
-`release.yml` runs the full `build.yaml` pipeline with that version and the
-signing secrets, then creates a GitHub release carrying `mdm-assets.tar.gz` and
-its `checksums.txt`. The version must be numeric `x.y.z`: prerelease tags such
-as `v0.1.8-rc1` are skipped entirely, because the MSI's `ProductVersion` can't
-carry a suffix. The tarball's URL is what obot consumes:
-
-```
-https://github.com/obot-platform/obot-sentry/releases/download/v0.1.8/mdm-assets.tar.gz
-```
-
-Before rolling it out, point a local obot at that URL
-(`OBOT_SERVER_MDM_ASSET_SOURCE=<url>`) and repeat the smoke test from step 1
-against the release build.
-
-### 3. Roll it out in obot
-
-obot defaults `OBOT_SERVER_MDM_ASSET_SOURCE` to a pinned release URL, so a new
-obot-sentry release reaches deployments only after obot bumps that default. In
-[obot](https://github.com/obot-platform/obot), open a PR (titled
-`chore: bump obot-sentry to v0.1.8` by convention) that changes the version in
-both places the default is spelled out:
-
-- `pkg/services/config.go`: the `default:` tag on `MDMAssetSource`
-- `docs/docs/configuration/server-configuration.md`: the default column for
-  `OBOT_SERVER_MDM_ASSET_SOURCE`
-
-Once the bump is in an obot release, upgraded servers see the new
-source at startup and import it, and the Inventory wizard serves the new
-installers. Already-deployed devices pick up the new version when admins push
-the new installer through their MDM. Deployments that set
-`OBOT_SERVER_MDM_ASSET_SOURCE` explicitly (for example via the Helm chart's
-`config.OBOT_SERVER_MDM_ASSET_SOURCE`) keep their own value and must update it
-themselves.
+[docs/releasing.md](docs/releasing.md) covers building signed MDM assets, cutting a release, and rolling it out in Obot.
