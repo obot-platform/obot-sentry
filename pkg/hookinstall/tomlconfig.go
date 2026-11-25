@@ -35,10 +35,69 @@ func parseCodexTOML(data []byte) (codexTOMLDoc, error) {
 	if len(bytes.TrimSpace(data)) == 0 {
 		return m, nil
 	}
+	if len(data) > maxTOMLBytes {
+		return nil, fmt.Errorf("refusing Codex requirements.toml larger than %d bytes", maxTOMLBytes)
+	}
+	if err := checkTOMLDepth(data, maxTOMLDepth); err != nil {
+		return nil, err
+	}
 	if _, err := toml.Decode(string(data), &m); err != nil {
 		return nil, fmt.Errorf("parsing Codex requirements.toml: %w", err)
 	}
 	return m, nil
+}
+
+// BurntSushi/toml recurses once per nesting level, so a deep document overflows
+// the stack (a fatal error), and its cost for nested inline tables grows with
+// the square of the depth: 8 KB of `a = {a={a=...` allocates about 470 MB. On
+// Windows the file's directory can be created by any user before SYSTEM first
+// writes it. Real requirements.toml files are a few KB, nested a few levels.
+const (
+	maxTOMLBytes = 256 << 10
+	maxTOMLDepth = 16
+)
+
+// checkTOMLDepth refuses a document whose array and inline-table nesting is
+// deeper than max, skipping comments and all four TOML string forms.
+func checkTOMLDepth(data []byte, max int) error {
+	depth := 0
+	for i := 0; i < len(data); i++ {
+		switch c := data[i]; c {
+		case '#':
+			for i++; i < len(data) && data[i] != '\n'; i++ {
+			}
+		case '"', '\'':
+			multi := i+2 < len(data) && data[i+1] == c && data[i+2] == c
+			if multi {
+				i += 3
+			} else {
+				i++
+			}
+			for ; i < len(data); i++ {
+				if c == '"' && data[i] == '\\' {
+					i++
+					continue
+				}
+				if data[i] != c {
+					continue
+				}
+				if !multi {
+					break
+				}
+				if i+2 < len(data) && data[i+1] == c && data[i+2] == c {
+					i += 2
+					break
+				}
+			}
+		case '[', '{':
+			if depth++; depth > max {
+				return fmt.Errorf("refusing Codex requirements.toml nested deeper than %d levels", max)
+			}
+		case ']', '}':
+			depth--
+		}
+	}
+	return nil
 }
 
 // encodeCodexTOML re-encodes the document. BurntSushi's encoder sorts keys and is

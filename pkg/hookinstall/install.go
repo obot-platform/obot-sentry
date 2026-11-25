@@ -10,6 +10,7 @@ import (
 	"maps"
 	"os"
 	"runtime"
+	"runtime/debug"
 	"slices"
 	"strings"
 	"text/tabwriter"
@@ -215,13 +216,25 @@ func (i *Installer) run(ctx context.Context, goos string, out io.Writer, log *sl
 	// A failed listing must not hold back machine policy: converge it with no
 	// users, then still fail the run so it is retried and not recorded.
 	users, listErr := resolveUsers()
+	// incomplete is any failure to work out which users to converge. The run
+	// still converges what it can, then fails so it is retried.
+	var incomplete error
 	if listErr != nil {
 		users = UserSet{}
 		log.Error("listing users failed; converging machine-wide hooks only", "err", logErr(listErr))
 		_, _ = fmt.Fprintf(out, "warning: listing users failed; converging machine-wide hooks only: %v\n", listErr)
-		defer func() {
-			err = errors.Join(fmt.Errorf("listing users: %w", listErr), err)
-		}()
+		incomplete = fmt.Errorf("listing users: %w", listErr)
+	}
+	for _, s := range users.Skipped {
+		// An ordinary skip (no home, home not owned) is expected; a panic
+		// while resolving the user is a bug and must not count as success.
+		var pe *panicError
+		if errors.As(s.Err, &pe) {
+			incomplete = errors.Join(incomplete, fmt.Errorf("resolving user %s: %w", s.Name, s.Err))
+		}
+	}
+	if incomplete != nil {
+		defer func() { err = errors.Join(incomplete, err) }()
 	}
 
 	if i.Uninstall && runDir != "" {
@@ -258,7 +271,7 @@ func (i *Installer) run(ctx context.Context, goos string, out io.Writer, log *sl
 		}
 		defer func() {
 			var saveErr error
-			if err == nil && listErr == nil {
+			if err == nil && incomplete == nil {
 				saveErr = saveScheduleState(runDir, inputs, startedAt)
 			} else {
 				saveErr = saveFailedRunState(runDir, prior, inputs)
@@ -273,6 +286,7 @@ func (i *Installer) run(ctx context.Context, goos string, out io.Writer, log *sl
 	log.Info("hook convergence started", "enforce", i.Enforce, "users", userNames(users.Users), "skipped_users", len(users.Skipped))
 	for _, s := range users.Skipped {
 		log.Warn("skipping user", "user", s.Name, "err", logErr(s.Err))
+		logPanicStack(log, s.Err)
 	}
 
 	var exe string
@@ -373,6 +387,7 @@ func logResults(log *slog.Logger, results []Result, startedAt time.Time) {
 		case StatusFailed:
 			failed++
 			log.Error("hook destination failed", append(attrs, "err", logErr(r.Err))...)
+			logPanicStack(log, r.Err)
 		default:
 			changed++
 			log.Info("hook destination changed", append(attrs,
@@ -483,7 +498,7 @@ func runUnit(ctx context.Context, unitPlan Plan, u *TargetUser, priorFailed map[
 		// after this one; report it as this unit's error instead.
 		defer func() {
 			if r := recover(); r != nil {
-				done <- outcome{err: fmt.Errorf("internal error: %v", r)}
+				done <- outcome{err: recovered(r)}
 			}
 		}()
 		changes, err := buildChanges(unitCtx, unitPlan)
@@ -843,4 +858,23 @@ func logErr(err error) string {
 		return s
 	}
 	return strings.ToValidUTF8(s[:maxLoggedErrBytes], "") + fmt.Sprintf("… (%d bytes truncated)", len(s)-maxLoggedErrBytes)
+}
+
+// panicError is a panic recovered in a goroutine. Its message is shown with
+// the result; the stack is logged separately (see logPanicStack) so a bug that
+// is caught still leaves enough to diagnose it.
+type panicError struct {
+	value any
+	stack []byte
+}
+
+func (e *panicError) Error() string { return fmt.Sprintf("internal error: %v", e.value) }
+
+func recovered(r any) error { return &panicError{value: r, stack: debug.Stack()} }
+
+func logPanicStack(log *slog.Logger, err error) {
+	var pe *panicError
+	if errors.As(err, &pe) {
+		log.Error("internal error stack", "stack", string(pe.stack))
+	}
 }

@@ -40,7 +40,7 @@ func resolveCandidates(cands []userCandidate, timeout time.Duration) UserSet {
 		go func() {
 			defer func() {
 				if r := recover(); r != nil {
-					ch <- resolved{nil, fmt.Errorf("internal error: %v", r)}
+					ch <- resolved{nil, recovered(r)}
 				}
 			}()
 			u, err := c.resolve()

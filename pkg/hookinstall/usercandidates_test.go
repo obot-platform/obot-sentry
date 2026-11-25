@@ -39,3 +39,17 @@ func TestResolveCandidatesBoundsAStalledHome(t *testing.T) {
 		t.Fatalf("skipped = %+v, want the stalled (timeout) and broken accounts only", set.Skipped)
 	}
 }
+
+func TestResolveCandidatesRecoversAPanic(t *testing.T) {
+	set := resolveCandidates([]userCandidate{
+		{Name: "carol", resolve: func() (*TargetUser, error) { panic("boom") }},
+		{Name: "dave", resolve: func() (*TargetUser, error) { return &TargetUser{Username: "dave"}, nil }},
+	}, time.Minute)
+	if len(set.Users) != 1 || set.Users[0].Username != "dave" {
+		t.Fatalf("users = %+v, want dave", set.Users)
+	}
+	var pe *panicError
+	if len(set.Skipped) != 1 || !errors.As(set.Skipped[0].Err, &pe) || len(pe.stack) == 0 {
+		t.Fatalf("skipped = %+v, want carol with a recovered panic and its stack", set.Skipped)
+	}
+}

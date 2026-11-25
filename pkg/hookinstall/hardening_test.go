@@ -151,3 +151,98 @@ func TestRunMarksItselfFailedWhileInProgress(t *testing.T) {
 		t.Fatalf("state after a successful run = %+v, want a fresh success", after)
 	}
 }
+
+func TestCheckTOMLDepth(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		doc  string
+		ok   bool
+	}{
+		{"real shape", "[features]\nhooks = true\n\n[[hooks.PostToolUse]]\nhooks = [{ type = \"command\", command = \"x\" }]\n", true},
+		{"brackets in basic and literal strings", "a = \"[[[[[[[[[[[[[[[[[[[[\"\nb = '{{{{{{{{{{{{{{{{{{{{'\nc = \"\\\"[[[[[[[[[[[[[[[[[[\"\n", true},
+		{"brackets in multi-line strings", "a = \"\"\"\n[[[[[[[[[[[[[[[[[[[[\n\"\"\"\nb = '''\n{{{{{{{{{{{{{{{{{{{{\n'''\n", true},
+		{"brackets in comments", "# [[[[[[[[[[[[[[[[[[[[[[[[\na = 1\n", true},
+		{"at the limit", "a = " + strings.Repeat("[", maxTOMLDepth) + strings.Repeat("]", maxTOMLDepth), true},
+		{"arrays past the limit", "a = " + strings.Repeat("[", maxTOMLDepth+1), false},
+		{"inline tables past the limit", "a = " + strings.Repeat("{a=", maxTOMLDepth+1), false},
+	} {
+		if err := checkTOMLDepth([]byte(tt.doc), maxTOMLDepth); (err == nil) != tt.ok {
+			t.Errorf("%s: err = %v, want ok=%v", tt.name, err, tt.ok)
+		}
+	}
+}
+
+// TestRunRefusesDeeplyNestedCodexTOML plants nested inline tables in the
+// machine-wide Codex file, which without the check exhaust memory (about 470 MB
+// for 8 KB, growing with the square of the depth) or overflow the stack. The
+// run must fail cleanly instead, and quickly.
+func TestRunRefusesDeeplyNestedCodexTOML(t *testing.T) {
+	machineRoot := realTempDir(t)
+	codex := filepath.Join(machineRoot, "etc", "codex", "requirements.toml")
+	if err := os.MkdirAll(filepath.Dir(codex), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(codex, []byte("a = "+strings.Repeat("{a=", 20_000)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	inst := &Installer{
+		GOOS:                "darwin",
+		Privilege:           func() error { return nil },
+		ResolveExe:          func() (string, error) { return macExe, nil },
+		ResolveUsers:        func() (UserSet, error) { return UserSet{}, nil },
+		ProvisionIdentity:   func() (string, error) { return "/id", nil },
+		ResolveDestinations: tempDestinations(machineRoot),
+		Out:                 &out,
+	}
+	start := time.Now()
+	err := inst.Run(t.Context())
+	if err == nil || !strings.Contains(err.Error(), "nested deeper than") {
+		t.Fatalf("err = %v, want the TOML depth refusal", err)
+	}
+	if elapsed := time.Since(start); elapsed > 10*time.Second {
+		t.Fatalf("refusing the file took %s", elapsed)
+	}
+	if _, statErr := os.Stat(filepath.Join(machineRoot, "Cursor/hooks.json")); statErr == nil {
+		t.Fatal("a machine-scope preflight failure still wrote files")
+	}
+}
+
+// TestRunFailsWhenResolvingAUserPanicked proves a user skipped because of a
+// recovered panic fails the run, so it is retried rather than recorded as a
+// success.
+func TestRunFailsWhenResolvingAUserPanicked(t *testing.T) {
+	machineRoot := realTempDir(t)
+	runDir := t.TempDir()
+	now := time.Date(2026, 11, 25, 12, 0, 0, 0, time.UTC)
+	if err := saveScheduleState(runDir, newScheduleInputs(false, nil), now.Add(-20*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	inst := &Installer{
+		GOOS:       "darwin",
+		Privilege:  func() error { return nil },
+		ResolveExe: func() (string, error) { return macExe, nil },
+		ResolveUsers: func() (UserSet, error) {
+			return UserSet{Skipped: []SkippedUser{{Name: "carol", Err: recovered("boom")}}}, nil
+		},
+		ProvisionIdentity:   func() (string, error) { return "/id", nil },
+		ResolveDestinations: tempDestinations(machineRoot),
+		RunDir:              func() (string, error) { return runDir, nil },
+		Now:                 func() time.Time { return now },
+		Out:                 &bytes.Buffer{},
+	}
+	err := inst.Run(t.Context())
+	if err == nil || !strings.Contains(err.Error(), "resolving user carol") {
+		t.Fatalf("err = %v, want the run failed for carol's internal error", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(machineRoot, "Cursor/hooks.json")); statErr != nil {
+		t.Fatalf("machine policy should still converge: %v", statErr)
+	}
+	if st, _ := loadScheduleState(runDir); st == nil || !st.Failed {
+		t.Fatalf("state = %+v, want the run recorded as failed", st)
+	}
+	logData, _ := os.ReadFile(filepath.Join(runDir, RunLogName))
+	if !strings.Contains(string(logData), "internal error stack") {
+		t.Fatalf("the panic's stack was not logged:\n%s", logData)
+	}
+}

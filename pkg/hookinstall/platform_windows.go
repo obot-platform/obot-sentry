@@ -128,8 +128,13 @@ func nameAccounts(users []*TargetUser, timeout time.Duration) {
 			continue
 		}
 		pending++
+		fallback := u.Username
 		go func() {
-			defer func() { _ = recover() }()
+			defer func() {
+				if recover() != nil {
+					done <- named{i, fallback}
+				}
+			}()
 			done <- named{i, accountName(sid)}
 		}()
 	}
