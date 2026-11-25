@@ -52,6 +52,12 @@ func parseCodexTOML(data []byte) (codexTOMLDoc, error) {
 // the square of the depth: 8 KB of `a = {a={a=...` allocates about 470 MB. On
 // Windows the file's directory can be created by any user before SYSTEM first
 // writes it. Real requirements.toml files are a few KB, nested a few levels.
+//
+// These limits stop the stack overflow and bound bracket nesting, but not
+// every way the decoder's memory grows with input: long dotted keys or table
+// headers (a.a.a...) nest without brackets. Refusing machine files that a
+// non-administrator could have written is the complete fix, tracked
+// separately with the rest of the user-creatable ProgramData directories.
 const (
 	maxTOMLBytes = 256 << 10
 	maxTOMLDepth = 16
@@ -85,7 +91,13 @@ func checkTOMLDepth(data []byte, max int) error {
 					break
 				}
 				if i+2 < len(data) && data[i+1] == c && data[i+2] == c {
+					// TOML allows one or two more quotes just before the
+					// closing triple ("""x"""" is the string x"), so the
+					// delimiter is the last three of a run of up to five.
 					i += 2
+					for k := 0; k < 2 && i+1 < len(data) && data[i+1] == c; k++ {
+						i++
+					}
 					break
 				}
 			}

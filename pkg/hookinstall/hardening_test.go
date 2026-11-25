@@ -162,6 +162,10 @@ func TestCheckTOMLDepth(t *testing.T) {
 		{"brackets in basic and literal strings", "a = \"[[[[[[[[[[[[[[[[[[[[\"\nb = '{{{{{{{{{{{{{{{{{{{{'\nc = \"\\\"[[[[[[[[[[[[[[[[[[\"\n", true},
 		{"brackets in multi-line strings", "a = \"\"\"\n[[[[[[[[[[[[[[[[[[[[\n\"\"\"\nb = '''\n{{{{{{{{{{{{{{{{{{{{\n'''\n", true},
 		{"brackets in comments", "# [[[[[[[[[[[[[[[[[[[[[[[[\na = 1\n", true},
+		{"quotes before a multi-line closer", "note = \"\"\"He said \"hi\"\"\"\"\nargs = [\"--allow=" + strings.Repeat("[", 20) + "x" + strings.Repeat("]", 20) + "\"]\n", true},
+		{"literal quotes before a multi-line closer", "note = '''it''''\nargs = ['" + strings.Repeat("{", 20) + "']\n", true},
+		{"nesting hidden behind a 4-quote closer", "x = \"\"\"q\"\"\"\"\na = " + strings.Repeat("{a=", maxTOMLDepth+1), false},
+		{"nesting hidden behind a 5-quote closer", "x = '''q'''''\na = " + strings.Repeat("[", maxTOMLDepth+1), false},
 		{"at the limit", "a = " + strings.Repeat("[", maxTOMLDepth) + strings.Repeat("]", maxTOMLDepth), true},
 		{"arrays past the limit", "a = " + strings.Repeat("[", maxTOMLDepth+1), false},
 		{"inline tables past the limit", "a = " + strings.Repeat("{a=", maxTOMLDepth+1), false},
@@ -244,5 +248,85 @@ func TestRunFailsWhenResolvingAUserPanicked(t *testing.T) {
 	logData, _ := os.ReadFile(filepath.Join(runDir, RunLogName))
 	if !strings.Contains(string(logData), "internal error stack") {
 		t.Fatalf("the panic's stack was not logged:\n%s", logData)
+	}
+}
+
+func panicLogInstaller(t *testing.T, machineRoot, runDir string, users UserSet) *Installer {
+	t.Helper()
+	return &Installer{
+		GOOS:                "darwin",
+		Privilege:           func() error { return nil },
+		ResolveExe:          func() (string, error) { return macExe, nil },
+		ResolveUsers:        func() (UserSet, error) { return users, nil },
+		ProvisionIdentity:   func() (string, error) { return "/id", nil },
+		ResolveDestinations: tempDestinations(machineRoot),
+		RunDir:              func() (string, error) { return runDir, nil },
+		Out:                 &bytes.Buffer{},
+	}
+}
+
+func stackLines(t *testing.T, runDir string) int {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(runDir, RunLogName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.Count(string(data), "internal error stack")
+}
+
+// A resolver panic on a poll that is not due still fails the run; its stack
+// must reach the log even though nothing converges.
+func TestNotDuePollLogsResolverPanicStack(t *testing.T) {
+	runDir := t.TempDir()
+	now := time.Date(2026, 11, 25, 12, 0, 0, 0, time.UTC)
+	if err := saveScheduleState(runDir, newScheduleInputs(false, nil), now.Add(-time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	inst := panicLogInstaller(t, realTempDir(t), runDir, UserSet{Skipped: []SkippedUser{{Name: "carol", Err: recovered("boom")}}})
+	inst.IfDue, inst.Interval = true, 15*time.Minute
+	inst.Now = func() time.Time { return now }
+	if err := inst.Run(t.Context()); err == nil {
+		t.Fatal("want the resolver panic reported")
+	}
+	if n := stackLines(t, runDir); n != 1 {
+		t.Fatalf("logged %d stacks, want 1", n)
+	}
+}
+
+func TestMachineUnitPanicStackIsLogged(t *testing.T) {
+	machineRoot, runDir := realTempDir(t), t.TempDir()
+	orig := readConfig
+	readConfig = func(scope Scope, u *TargetUser, absPath string) ([]byte, bool, error) {
+		if scope == ScopeMachine {
+			panic("machine boom")
+		}
+		return orig(scope, u, absPath)
+	}
+	t.Cleanup(func() { readConfig = orig })
+	if err := panicLogInstaller(t, machineRoot, runDir, UserSet{}).Run(t.Context()); err == nil || !strings.Contains(err.Error(), "machine boom") {
+		t.Fatalf("err = %v, want the machine panic", err)
+	}
+	if n := stackLines(t, runDir); n != 1 {
+		t.Fatalf("logged %d stacks, want 1", n)
+	}
+}
+
+func TestUserUnitPanicStackIsLoggedOnce(t *testing.T) {
+	machineRoot, runDir := realTempDir(t), t.TempDir()
+	home := t.TempDir()
+	orig := readConfig
+	readConfig = func(scope Scope, u *TargetUser, absPath string) ([]byte, bool, error) {
+		if strings.HasPrefix(absPath, home) {
+			panic("user boom")
+		}
+		return orig(scope, u, absPath)
+	}
+	t.Cleanup(func() { readConfig = orig })
+	user := &TargetUser{Username: "alice", HomeDir: home, UID: os.Getuid(), GID: os.Getgid()}
+	if err := panicLogInstaller(t, machineRoot, runDir, UserSet{Users: []*TargetUser{user}}).Run(t.Context()); err == nil {
+		t.Fatal("want the user unit's panic to fail the run")
+	}
+	if n := stackLines(t, runDir); n != 1 {
+		t.Fatalf("logged %d stacks for one panic across several rows, want 1", n)
 	}
 }

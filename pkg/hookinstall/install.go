@@ -185,6 +185,7 @@ func (i *Installer) Run(ctx context.Context) error {
 	err := i.run(ctx, goos, out, log, runDir, startedAt)
 	if err != nil {
 		log.Error("hook convergence failed", "err", logErr(err))
+		logPanicStacks(log, err, nil)
 	}
 	return err
 }
@@ -286,7 +287,6 @@ func (i *Installer) run(ctx context.Context, goos string, out io.Writer, log *sl
 	log.Info("hook convergence started", "enforce", i.Enforce, "users", userNames(users.Users), "skipped_users", len(users.Skipped))
 	for _, s := range users.Skipped {
 		log.Warn("skipping user", "user", s.Name, "err", logErr(s.Err))
-		logPanicStack(log, s.Err)
 	}
 
 	var exe string
@@ -376,6 +376,9 @@ func (i *Installer) bootTime() time.Time {
 // only counted, to keep steady-state runs to a few lines.
 func logResults(log *slog.Logger, results []Result, startedAt time.Time) {
 	var changed, unchanged, failed int
+	// A panic in a user's unit fails every row of that unit with the same
+	// error; log its stack once.
+	seen := map[*panicError]bool{}
 	for _, r := range results {
 		attrs := []any{"agent", r.Label, "path", r.Path}
 		if r.User != "" {
@@ -387,7 +390,7 @@ func logResults(log *slog.Logger, results []Result, startedAt time.Time) {
 		case StatusFailed:
 			failed++
 			log.Error("hook destination failed", append(attrs, "err", logErr(r.Err))...)
-			logPanicStack(log, r.Err)
+			logPanicStacks(log, r.Err, seen)
 		default:
 			changed++
 			log.Info("hook destination changed", append(attrs,
@@ -861,7 +864,7 @@ func logErr(err error) string {
 }
 
 // panicError is a panic recovered in a goroutine. Its message is shown with
-// the result; the stack is logged separately (see logPanicStack) so a bug that
+// the result; the stack is logged separately (see logPanicStacks) so a bug that
 // is caught still leaves enough to diagnose it.
 type panicError struct {
 	value any
@@ -872,9 +875,29 @@ func (e *panicError) Error() string { return fmt.Sprintf("internal error: %v", e
 
 func recovered(r any) error { return &panicError{value: r, stack: debug.Stack()} }
 
-func logPanicStack(log *slog.Logger, err error) {
-	var pe *panicError
-	if errors.As(err, &pe) {
-		log.Error("internal error stack", "stack", string(pe.stack))
+// logPanicStacks logs the stack of every recovered panic in err, including
+// inside joined errors, skipping any already in seen (nil means none).
+// Run logs those in its returned error, which covers a panic in the machine
+// unit or while resolving users; logResults covers those in user units.
+func logPanicStacks(log *slog.Logger, err error, seen map[*panicError]bool) {
+	if err == nil {
+		return
+	}
+	if pe, ok := err.(*panicError); ok {
+		if seen == nil || !seen[pe] {
+			log.Error("internal error stack", "stack", string(pe.stack))
+			if seen != nil {
+				seen[pe] = true
+			}
+		}
+		return
+	}
+	switch u := err.(type) {
+	case interface{ Unwrap() []error }:
+		for _, e := range u.Unwrap() {
+			logPanicStacks(log, e, seen)
+		}
+	case interface{ Unwrap() error }:
+		logPanicStacks(log, u.Unwrap(), seen)
 	}
 }
