@@ -91,11 +91,13 @@ func checkTOMLDepth(data []byte, max int) error {
 					break
 				}
 				if i+2 < len(data) && data[i+1] == c && data[i+2] == c {
-					// TOML allows one or two more quotes just before the
-					// closing triple ("""x"""" is the string x"), so the
-					// delimiter is the last three of a run of up to five.
+					// TOML allows extra quotes just before the closing triple
+					// ("""x"""" is the string x"), and BurntSushi/toml closes
+					// at the end of the whole run in every case it accepts
+					// (after an escaped backslash it accepts a run of six:
+					// """\\"""""" is \"""), so consume the run.
 					i += 2
-					for k := 0; k < 2 && i+1 < len(data) && data[i+1] == c; k++ {
+					for i+1 < len(data) && data[i+1] == c {
 						i++
 					}
 					break

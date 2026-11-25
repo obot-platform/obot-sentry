@@ -166,6 +166,8 @@ func TestCheckTOMLDepth(t *testing.T) {
 		{"literal quotes before a multi-line closer", "note = '''it''''\nargs = ['" + strings.Repeat("{", 20) + "']\n", true},
 		{"nesting hidden behind a 4-quote closer", "x = \"\"\"q\"\"\"\"\na = " + strings.Repeat("{a=", maxTOMLDepth+1), false},
 		{"nesting hidden behind a 5-quote closer", "x = '''q'''''\na = " + strings.Repeat("[", maxTOMLDepth+1), false},
+		{"nesting hidden behind an escaped backslash and six quotes", "x = \"\"\"" + `\\` + "\"\"\"\"\"\"\na = " + strings.Repeat("[", maxTOMLDepth+1) + "1" + strings.Repeat("]", maxTOMLDepth+1) + "\n", false},
+		{"valid file after an escaped backslash and six quotes", "x = \"\"\"" + `\\` + "\"\"\"\"\"\"\nb =\"x\"\nc = \"" + strings.Repeat("[", maxTOMLDepth+1) + "\"\n", true},
 		{"at the limit", "a = " + strings.Repeat("[", maxTOMLDepth) + strings.Repeat("]", maxTOMLDepth), true},
 		{"arrays past the limit", "a = " + strings.Repeat("[", maxTOMLDepth+1), false},
 		{"inline tables past the limit", "a = " + strings.Repeat("{a=", maxTOMLDepth+1), false},
