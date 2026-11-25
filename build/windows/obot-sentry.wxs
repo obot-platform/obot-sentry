@@ -34,6 +34,8 @@
     <Property Id="ENROLLMENT_KEY" Secure="yes" />
     <Property Id="SCAN_INTERVAL_MINUTES" Secure="yes" />
     <Property Id="ENFORCEMENT" Value="0" Secure="yes" />
+    <!-- ENROLLMENT_CHECK=0 skips the install-time enrollment check (see CheckEnrollment). -->
+    <Property Id="ENROLLMENT_CHECK" Value="1" Secure="yes" />
 
     <Launch Condition="SERVER_URL OR REMOVE~=&quot;ALL&quot;"
             Message="The SERVER_URL property is required (obot server base URL). Install with the completed command from INSTRUCTIONS.md." />
@@ -70,6 +72,10 @@
           </Component>
           <Component Id="HookTaskScript" Guid="0B10F9BF-1F85-4611-9B6D-F14ABF4F1F67">
             <File Id="HookTaskScriptFile" Name="hook-task.ps1" Source="hook-task.ps1" KeyPath="yes" />
+          </Component>
+          <!-- Registers/removes the event log source (see RegisterEventSource below). -->
+          <Component Id="EventLogSourceScript" Guid="3F0E6C2B-8E0A-4C55-9B1E-6A2D7C4F9E21">
+            <File Id="EventLogSourceScriptFile" Name="eventlog-source.ps1" Source="eventlog-source.ps1" KeyPath="yes" />
           </Component>
           <Component Id="DeploymentRegistry" Guid="65842A7E-C5E0-4329-BD81-B106EB197F6F">
             <RegistryKey Root="HKLM" Key="SOFTWARE\Obot\obot-sentry">
@@ -109,6 +115,7 @@
       <ComponentRef Id="TaskScript" />
       <ComponentRef Id="HookTaskScript" />
       <ComponentRef Id="DeploymentRegistry" />
+      <ComponentRef Id="EventLogSourceScript" />
       <ComponentRef Id="MachineDataDir" />
     </Feature>
 
@@ -132,9 +139,37 @@
       true uninstall — the NOT UPGRADINGPRODUCTCODE guard keeps the outgoing
       product's removal during a major upgrade from deleting tasks the new one
       just wrote.
+
+      RegisterEventSource registers the 'Obot Sentry' event log source on every
+      install and upgrade, so devices upgraded from a version without it gain it
+      too. It's a custom action rather than a tracked registry component on
+      purpose: rollback doesn't undo custom actions, so the source survives a
+      failed first install and the event explaining that failure still renders.
+
+      CheckEnrollment runs obot-sentry's enroll command in install-check mode
+      as SYSTEM, once the configuration is in the registry and before the tasks
+      are registered.
+      It fails (exit 3, rolling back the install) only when the server rejects
+      the enrollment: a bad key would otherwise leave a device that can never
+      enroll and, with enforcement on, blocks every tool call. Any other failure,
+      such as an unreachable server during provisioning, lets the install finish
+      and the scheduled scan enrolls later. It runs only on a first install:
+      upgrades skip it because enrolled devices no longer need the key, and the
+      install command an MDM reuses for upgrades may carry one that has since
+      expired. ENROLLMENT_CHECK=0 skips it, for building a reusable image that
+      shouldn't enroll itself.
     -->
     <CustomAction Id="SetPowerShellPath" Property="POWERSHELL"
                   Value="[System64Folder]WindowsPowerShell\v1.0\powershell.exe" />
+    <CustomAction Id="RegisterEventSource" Property="POWERSHELL"
+                  ExeCommand="-ExecutionPolicy Bypass -NonInteractive -NoProfile -File &quot;[INSTALLDIR]eventlog-source.ps1&quot; -Mode install"
+                  Execute="deferred" Impersonate="no" Return="ignore" />
+    <CustomAction Id="UnregisterEventSource" Property="POWERSHELL"
+                  ExeCommand="-ExecutionPolicy Bypass -NonInteractive -NoProfile -File &quot;[INSTALLDIR]eventlog-source.ps1&quot; -Mode uninstall"
+                  Execute="deferred" Impersonate="no" Return="ignore" />
+    <CustomAction Id="CheckEnrollment" FileRef="ObotSentryExe"
+                  ExeCommand="enroll --install-check --timeout 60"
+                  Execute="deferred" Impersonate="no" Return="check" />
     <CustomAction Id="InstallScanTask" Property="POWERSHELL"
                   ExeCommand="-ExecutionPolicy Bypass -NonInteractive -NoProfile -File &quot;[INSTALLDIR]scan-task.ps1&quot; -Mode install -ExePath &quot;[INSTALLDIR]obot-sentryw.exe&quot;"
                   Execute="deferred" Impersonate="no" Return="check" />
@@ -150,10 +185,14 @@
 
     <InstallExecuteSequence>
       <Custom Action="SetPowerShellPath" After="CostFinalize" />
-      <Custom Action="InstallScanTask" After="InstallFiles" Condition="NOT (REMOVE~=&quot;ALL&quot;)" />
+      <Custom Action="RegisterEventSource" After="WriteRegistryValues" Condition="NOT (REMOVE~=&quot;ALL&quot;)" />
+      <Custom Action="CheckEnrollment" After="RegisterEventSource"
+              Condition="ENROLLMENT_CHECK &lt;&gt; &quot;0&quot; AND NOT Installed AND NOT WIX_UPGRADE_DETECTED AND NOT (REMOVE~=&quot;ALL&quot;)" />
+      <Custom Action="InstallScanTask" After="CheckEnrollment" Condition="NOT (REMOVE~=&quot;ALL&quot;)" />
       <Custom Action="InstallHookTask" After="InstallScanTask" Condition="NOT (REMOVE~=&quot;ALL&quot;)" />
       <Custom Action="UninstallScanTask" After="InstallInitialize" Condition="REMOVE~=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
       <Custom Action="UninstallHookTask" After="UninstallScanTask" Condition="REMOVE~=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
+      <Custom Action="UnregisterEventSource" After="UninstallHookTask" Condition="REMOVE~=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
     </InstallExecuteSequence>
   </Package>
 </Wix>

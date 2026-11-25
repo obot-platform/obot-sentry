@@ -16,6 +16,15 @@ This install package contains:
    ```
    msiexec /i "obot-sentry.msi" /qn SERVER_URL="{{.serverURL}}" ENROLLMENT_KEY="REPLACE_WITH_ENROLLMENT_KEY" SCAN_INTERVAL_MINUTES="{{.scanIntervalMinutes}}"{{if .enforcementEnabled}} ENFORCEMENT=1{{end}}
    ```
+
+   A first install also enrolls the device. If the server rejects the
+   enrollment, because the key is invalid, expired, or deleted or the
+   license's device limit is reached, the install fails with exit code `1603`
+   and leaves nothing behind, and Intune reports the app as failed on that
+   device. If the server can't be reached yet, such as during Autopilot before
+   the network is up, the install still succeeds and the device enrolls on its
+   first scan. Upgrades skip the check, so an expired key in the install
+   command doesn't block devices that are already enrolled.
 {{if .enforcementEnabled}}
    `ENFORCEMENT=1` writes `EnforcementEnabled` to the registry, which the hook
    task reads at logon and hourly. Keep the property in the command —
@@ -66,7 +75,8 @@ This install package contains:
 
    This prints the installed version. An error means the agent never installed.
 
-   If the agent was never installed, check the contents of
+   If the agent was never installed, check the event log for the reason the
+   installer stopped (see step 4), then the contents of
    `C:\ProgramData\Microsoft\IntuneManagementExtension\Logs\IntuneManagementExtension.log`
    to debug further.
 
@@ -88,15 +98,33 @@ This install package contains:
 
    - `LastRunTime` climbs on schedule — every 10 minutes for the scan task,
      hourly for the hook task, and at each logon for both.
-   - `LastTaskResult = 0` means the last run succeeded. Non-zero is usually a
-     configuration problem — recheck the registry values from step 2. `267011`
-     means the task has not run yet.
+   - `LastTaskResult = 0` means the last run succeeded. `2` means the
+     configuration is missing — recheck the registry values from step 2. `3`
+     means the server rejected the device's enrollment, so update the install
+     command with a current enrollment key. `267011` means the task has not run
+     yet.
    - `NumberOfMissedRuns` above 0 means the device was asleep or off when a run
      was due; the next run catches up.
 
 4. Ensure scans are landing:
 
-   To get the results of the latest scan attempt, run the following command:
+   Enrollment and scan failures from every user on the device are recorded in
+   the Application event log under the `Obot Sentry` source:
+
+   ```powershell
+   Get-WinEvent -FilterHashtable @{ LogName = 'Application'; ProviderName = 'Obot Sentry' } -MaxEvents 20 | Format-List TimeCreated, Id, Message
+   ```
+
+   | Event ID | Meaning |
+   | --- | --- |
+   | 100 | The installer enrolled the device. |
+   | 101 | The server rejected the enrollment, so the installer stopped. |
+   | 102 | The installer couldn't reach the server; scans enroll the device later. |
+   | 110 | A user's scans started failing, or failed for a new reason. |
+   | 111 | A user's scans are submitting again after failing. |
+
+   To get the results of the latest scan attempt for the signed-in user, run
+   the following command:
 
    ```powershell
    Get-Content "$env:LOCALAPPDATA\obot\obot-sentry\scan.json"

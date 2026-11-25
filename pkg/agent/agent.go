@@ -6,8 +6,10 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"time"
 
 	"github.com/obot-platform/obot/apiclient/types"
@@ -66,7 +68,7 @@ func (a *Agent) EnsureEnrolled(ctx context.Context) (*identity.Identity, state.S
 
 	device, err := a.Client.Enroll(ctx, a.Config.EnrollmentKey, id)
 	if err != nil {
-		return nil, st, fmt.Errorf("enrolling device: %w", err)
+		return nil, st, enrollError(err)
 	}
 
 	now := time.Now().UTC()
@@ -79,6 +81,30 @@ func (a *Agent) EnsureEnrolled(ctx context.Context) (*identity.Identity, state.S
 		return nil, st, err
 	}
 	return id, st, nil
+}
+
+// enrollError wraps a failed enrollment request with the likely cause of the server's refusal, when the status
+// code points at one.
+// The original error stays wrapped, so client.IsRejected and the HTTP status remain available to callers.
+func enrollError(err error) error {
+	httpErr, ok := errors.AsType[*types.ErrHTTP](err)
+	switch {
+	case !ok:
+		return fmt.Errorf("enrolling device: %w", err)
+	case httpErr.Code == http.StatusUnauthorized:
+		// The server answers a malformed, wrong, expired, or deleted key with the same bare 401,
+		// so name every cause it could be.
+		return fmt.Errorf("enrolling device: the enrollment key was rejected because it is invalid, expired, or deleted: %w", err)
+	case httpErr.Code == http.StatusForbidden:
+		// The server's own device-limit message is written for end users ("contact your administrator"),
+		// but whoever reads this is usually that administrator.
+		return fmt.Errorf("enrolling device: the server refused enrollment, usually because the license's device limit is reached: %w", err)
+	case httpErr.Code == http.StatusNotFound:
+		// Every Obot server serves the enrollment endpoint, so a 404 means the URL points somewhere else.
+		return fmt.Errorf("enrolling device: the server has no device enrollment endpoint, so check that the server URL points at Obot: %w", err)
+	default:
+		return fmt.Errorf("enrolling device: %w", err)
+	}
 }
 
 // SubmitScan submits the manifest as id. If the server rejects the
