@@ -232,22 +232,30 @@ func (i *Installer) run(ctx context.Context, goos string, out io.Writer, log *sl
 		}
 	}
 
+	inputs := newScheduleInputs(i.Enforce, users.Users)
+	inputs.HomesUnknown = listErr != nil
+	prior := i.loadScheduleState(runDir, log)
 	if i.IfDue {
-		inputs := newScheduleInputs(i.Enforce, users.Users)
-		inputs.HomesUnknown = listErr != nil
-		decision := i.due(runDir, inputs, startedAt, log)
+		decision := decideDue(prior, inputs, i.Interval, startedAt, i.bootTime())
 		if !decision.Due {
 			_, _ = fmt.Fprintf(out, "obot-sentry %s: not due (%s); skipping\n", i.commandName(), decision.Reason)
 			return nil
 		}
 		log.Info("hook convergence due", "reason", decision.Reason)
-		// Record only a run that fully converged, so a failed run is retried on
-		// the next poll rather than after a whole interval.
+	}
+	if runDir != "" && !i.Uninstall {
+		// Every install run that gets this far, scheduled or manual, records
+		// its outcome: any of them can rewrite files with its inputs, so the
+		// next poll has to compare against them. A failed run is marked so
+		// that the next poll retries it.
 		defer func() {
-			if err != nil || listErr != nil || runDir == "" {
-				return
+			var saveErr error
+			if err == nil && listErr == nil {
+				saveErr = saveScheduleState(runDir, inputs, startedAt)
+			} else {
+				saveErr = saveFailedRunState(runDir, prior, inputs)
 			}
-			if saveErr := saveScheduleState(runDir, inputs, startedAt); saveErr != nil {
+			if saveErr != nil {
 				log.Warn("recording schedule state failed", "err", logErr(saveErr))
 				_, _ = fmt.Fprintf(out, "warning: recording schedule state: %v\n", saveErr)
 			}
@@ -317,24 +325,29 @@ func (i *Installer) run(ctx context.Context, goos string, out io.Writer, log *sl
 	return nil
 }
 
-// due reports whether a scheduled run should converge. Without a run directory
-// there is no state, so every poll is due.
-func (i *Installer) due(runDir string, inputs scheduleInputs, now time.Time, log *slog.Logger) dueDecision {
-	var state *scheduleState
-	if runDir != "" {
-		var err error
-		state, err = loadScheduleState(runDir)
-		if err != nil {
-			log.Warn("ignoring schedule state", "err", logErr(err))
-		}
+// loadScheduleState returns the recorded state, or nil when there is no run
+// directory or the state is absent or untrusted, which makes a poll due.
+func (i *Installer) loadScheduleState(runDir string, log *slog.Logger) *scheduleState {
+	if runDir == "" {
+		return nil
 	}
-	var boot time.Time
-	if i.BootTime != nil {
-		if t, err := i.BootTime(); err == nil {
-			boot = t
-		}
+	state, err := loadScheduleState(runDir)
+	if err != nil {
+		log.Warn("ignoring schedule state", "err", logErr(err))
 	}
-	return decideDue(state, inputs, i.Interval, now, boot)
+	return state
+}
+
+// bootTime returns the system boot time, or zero when it is unknown.
+func (i *Installer) bootTime() time.Time {
+	if i.BootTime == nil {
+		return time.Time{}
+	}
+	t, err := i.BootTime()
+	if err != nil {
+		return time.Time{}
+	}
+	return t
 }
 
 // logResults logs each destination that changed or failed; unchanged ones are

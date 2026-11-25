@@ -24,13 +24,21 @@ const scheduleStateName = "schedule.json"
 // otherwise defer convergence by a whole poll period.
 const dueSlack = time.Minute
 
-// scheduleState records the last successful run and its inputs; a change to
-// any input makes the next poll due.
+// scheduleState records the inputs of the last install run and when the last
+// successful one started; a change to any input makes the next poll due.
+//
+// A failed run can still have rewritten files with its inputs (machine policy
+// converges before any user's files), so it records those inputs too, keeps
+// the last success's LastRunAt, and sets Failed, which makes every poll due
+// until a run succeeds. Comparing against the last success instead would let a
+// poll skip a change that the failed run already half-applied, such as
+// enforcement turned back on after a failed run turned it off.
 type scheduleState struct {
 	LastRunAt time.Time `json:"lastRunAt"`
 	Version   string    `json:"version"`
 	Enforce   bool      `json:"enforce"`
 	Homes     []string  `json:"homes"` // sorted
+	Failed    bool      `json:"failed,omitempty"`
 }
 
 type scheduleInputs struct {
@@ -72,6 +80,8 @@ func decideDue(state *scheduleState, inputs scheduleInputs, interval time.Durati
 		return dueDecision{true, "enforcement setting changed"}
 	case !inputs.HomesUnknown && !slices.Equal(state.Homes, inputs.Homes):
 		return dueDecision{true, "user profiles changed"}
+	case state.Failed:
+		return dueDecision{true, "previous run failed"}
 	case now.Sub(state.LastRunAt)+dueSlack >= interval:
 		return dueDecision{true, "interval elapsed"}
 	default:
@@ -98,12 +108,36 @@ func loadScheduleState(dir string) (*scheduleState, error) {
 }
 
 func saveScheduleState(dir string, inputs scheduleInputs, startedAt time.Time) error {
-	data, err := json.MarshalIndent(scheduleState{
+	return writeScheduleState(dir, scheduleState{
 		LastRunAt: startedAt.UTC(),
 		Version:   inputs.Version,
 		Enforce:   inputs.Enforce,
 		Homes:     inputs.Homes,
-	}, "", "  ")
+	})
+}
+
+// saveFailedRunState records a failed run's inputs on top of prior, the state
+// it started from. With no prior state there is nothing to record: an absent
+// state already makes the next poll due.
+func saveFailedRunState(dir string, prior *scheduleState, inputs scheduleInputs) error {
+	if prior == nil {
+		return nil
+	}
+	homes := inputs.Homes
+	if inputs.HomesUnknown {
+		homes = prior.Homes
+	}
+	return writeScheduleState(dir, scheduleState{
+		LastRunAt: prior.LastRunAt,
+		Version:   inputs.Version,
+		Enforce:   inputs.Enforce,
+		Homes:     homes,
+		Failed:    true,
+	})
+}
+
+func writeScheduleState(dir string, st scheduleState) error {
+	data, err := json.MarshalIndent(st, "", "  ")
 	if err != nil {
 		return err
 	}

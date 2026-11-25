@@ -75,6 +75,8 @@ func TestDecideDue(t *testing.T) {
 		{name: "new user profile", state: state(5 * time.Minute), inputs: scheduleInputs{Enforce: true, Homes: []string{"/Users/alice", "/Users/bob", "/Users/carol"}}, boot: boot, want: true},
 		{name: "listing failed mid-interval", state: state(5 * time.Minute), inputs: scheduleInputs{Enforce: true, HomesUnknown: true}, boot: boot, want: false},
 		{name: "listing failed after the interval", state: state(20 * time.Minute), inputs: scheduleInputs{Enforce: true, HomesUnknown: true}, boot: boot, want: true, reason: "interval elapsed"},
+		{name: "previous run failed", state: &scheduleState{LastRunAt: now.Add(-5 * time.Minute), Enforce: true, Homes: inputs.Homes, Failed: true}, inputs: inputs, boot: boot, want: true, reason: "previous run failed"},
+		{name: "input change after a failed run names the change", state: &scheduleState{LastRunAt: now.Add(-5 * time.Minute), Enforce: false, Homes: inputs.Homes, Failed: true}, inputs: inputs, boot: boot, want: true, reason: "enforcement setting changed"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			got := decideDue(tt.state, tt.inputs, interval, now, tt.boot)
@@ -372,7 +374,193 @@ func TestRunIfDueListingFailureIsNotAProfileChange(t *testing.T) {
 	if !strings.Contains(string(logData), `reason="interval elapsed"`) || strings.Contains(string(logData), "user profiles changed") {
 		t.Fatalf("log should give the interval, not a profile change, as the reason:\n%s", logData)
 	}
-	if st, _ := loadScheduleState(runDir); st == nil || !st.LastRunAt.Equal(now.Add(-20*time.Minute)) {
-		t.Fatalf("a run whose listing failed recorded state: %+v", st)
+	if st, _ := loadScheduleState(runDir); st == nil || !st.LastRunAt.Equal(now.Add(-20*time.Minute)) || !st.Failed || !slices.Equal(st.Homes, inputs.Homes) {
+		t.Fatalf("a run whose listing failed should keep the last success's time and homes and be marked failed: %+v", st)
+	}
+}
+
+// enforcementHooks counts obot-sentry enforce commands in the machine-scoped
+// Claude Code file of a tempDestinations tree.
+func enforcementHooks(t *testing.T, machineRoot string) int {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(machineRoot, "ClaudeCode/managed-settings.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.Count(string(data), "obot-sentry enforce")
+}
+
+// TestRunIfDueComparesAgainstAFailedRunsInputs: a failed run still rewrites
+// machine policy with its inputs. If the next poll compared against the last
+// successful run instead, turning enforcement back on mid-interval would be
+// "not due" and the enforcement hooks the failed run removed would stay gone.
+func TestRunIfDueComparesAgainstAFailedRunsInputs(t *testing.T) {
+	machineRoot := realTempDir(t)
+	runDir := t.TempDir()
+	listErr := errors.New("dscl failed")
+	now := time.Date(2026, 11, 25, 12, 0, 0, 0, time.UTC)
+
+	newInstaller := func(enforce bool, listing error) *Installer {
+		return &Installer{
+			GOOS:                "darwin",
+			Privilege:           func() error { return nil },
+			ResolveExe:          func() (string, error) { return macExe, nil },
+			ResolveUsers:        func() (UserSet, error) { return UserSet{}, listing },
+			ProvisionIdentity:   func() (string, error) { return "/id", nil },
+			ResolveDestinations: tempDestinations(machineRoot),
+			RunDir:              func() (string, error) { return runDir, nil },
+			Enforce:             enforce,
+			IfDue:               true,
+			Interval:            15 * time.Minute,
+			Now:                 func() time.Time { return now },
+			BootTime:            func() (time.Time, error) { return now.Add(-time.Hour), nil },
+			Out:                 &bytes.Buffer{},
+		}
+	}
+
+	if err := newInstaller(true, nil).Run(t.Context()); err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	if n := enforcementHooks(t, machineRoot); n == 0 {
+		t.Fatal("first run installed no enforcement hooks")
+	}
+	succeededAt := now
+
+	// Enforcement is turned off, and that run fails after converging machine
+	// policy without the enforcement hooks.
+	now = now.Add(time.Minute)
+	if err := newInstaller(false, listErr).Run(t.Context()); !errors.Is(err, listErr) {
+		t.Fatalf("failing run err = %v, want the listing error", err)
+	}
+	if n := enforcementHooks(t, machineRoot); n != 0 {
+		t.Fatalf("the failing run left %d enforcement hooks; the scenario needs it to remove them", n)
+	}
+	st, _ := loadScheduleState(runDir)
+	if st == nil || !st.Failed || st.Enforce || !st.LastRunAt.Equal(succeededAt) {
+		t.Fatalf("failed run state = %+v, want its inputs (enforce=false), failed, and the last success's time", st)
+	}
+
+	// Enforcement is turned back on mid-interval: due, and the hooks return.
+	now = now.Add(time.Minute)
+	if err := newInstaller(true, nil).Run(t.Context()); err != nil {
+		t.Fatalf("re-enable run: %v", err)
+	}
+	if n := enforcementHooks(t, machineRoot); n == 0 {
+		t.Fatal("re-enabling enforcement mid-interval did not restore the enforcement hooks")
+	}
+	if st, _ := loadScheduleState(runDir); st == nil || st.Failed || !st.Enforce || !st.LastRunAt.Equal(now) {
+		t.Fatalf("successful run state = %+v, want enforce=true, not failed, recorded now", st)
+	}
+}
+
+// TestRunIfDueRetriesAFailedRunMidInterval: a failure marks the state, so the
+// next poll retries even when no input changed and the interval has not
+// elapsed.
+func TestRunIfDueRetriesAFailedRunMidInterval(t *testing.T) {
+	machineRoot := realTempDir(t)
+	runDir := t.TempDir()
+	now := time.Date(2026, 11, 25, 12, 0, 0, 0, time.UTC)
+	exeErr := errors.New("executable mid-upgrade")
+	newInstaller := func(resolveExe func() (string, error)) (*Installer, *bytes.Buffer) {
+		var out bytes.Buffer
+		return &Installer{
+			GOOS:                "darwin",
+			Privilege:           func() error { return nil },
+			ResolveExe:          resolveExe,
+			ResolveUsers:        func() (UserSet, error) { return UserSet{}, nil },
+			ProvisionIdentity:   func() (string, error) { return "/id", nil },
+			ResolveDestinations: tempDestinations(machineRoot),
+			RunDir:              func() (string, error) { return runDir, nil },
+			IfDue:               true,
+			Interval:            15 * time.Minute,
+			Now:                 func() time.Time { return now },
+			BootTime:            func() (time.Time, error) { return now.Add(-time.Hour), nil },
+			Out:                 &out,
+		}, &out
+	}
+
+	inst, _ := newInstaller(func() (string, error) { return macExe, nil })
+	if err := inst.Run(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(machineRoot, "Cursor/hooks.json")); err != nil {
+		t.Fatal(err)
+	}
+
+	// An input change makes this poll due, and the run fails.
+	if err := saveScheduleState(runDir, scheduleInputs{Version: "v0.0.0-old"}, now); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(time.Minute)
+	inst, _ = newInstaller(func() (string, error) { return "", exeErr })
+	if err := inst.Run(t.Context()); !errors.Is(err, exeErr) {
+		t.Fatalf("err = %v, want %v", err, exeErr)
+	}
+
+	now = now.Add(5 * time.Minute)
+	inst, out := newInstaller(func() (string, error) { return macExe, nil })
+	if err := inst.Run(t.Context()); err != nil {
+		t.Fatalf("retry: %v\n%s", err, out.String())
+	}
+	if strings.Contains(out.String(), "not due") {
+		t.Fatalf("the poll after a failed run was not due:\n%s", out.String())
+	}
+	if _, err := os.Stat(filepath.Join(machineRoot, "Cursor/hooks.json")); err != nil {
+		t.Fatalf("the retry did not converge: %v", err)
+	}
+	logData, err := os.ReadFile(filepath.Join(runDir, RunLogName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(logData), `reason="previous run failed"`) {
+		t.Fatalf("log should give the failed run as the reason:\n%s", logData)
+	}
+}
+
+// TestManualRunRecordsItsInputs: a plain hook-install rewrites the same files
+// as a scheduled run, so the next poll must compare against what it wrote. A
+// manual --enforce=false followed by a poll with enforcement on is due.
+func TestManualRunRecordsItsInputs(t *testing.T) {
+	machineRoot := realTempDir(t)
+	runDir := t.TempDir()
+	now := time.Date(2026, 11, 25, 12, 0, 0, 0, time.UTC)
+	newInstaller := func(enforce, ifDue bool) (*Installer, *bytes.Buffer) {
+		var out bytes.Buffer
+		return &Installer{
+			GOOS:                "darwin",
+			Privilege:           func() error { return nil },
+			ResolveExe:          func() (string, error) { return macExe, nil },
+			ResolveUsers:        func() (UserSet, error) { return UserSet{}, nil },
+			ProvisionIdentity:   func() (string, error) { return "/id", nil },
+			ResolveDestinations: tempDestinations(machineRoot),
+			RunDir:              func() (string, error) { return runDir, nil },
+			Enforce:             enforce,
+			IfDue:               ifDue,
+			Interval:            15 * time.Minute,
+			Now:                 func() time.Time { return now },
+			BootTime:            func() (time.Time, error) { return now.Add(-time.Hour), nil },
+			Out:                 &out,
+		}, &out
+	}
+
+	inst, _ := newInstaller(true, true)
+	if err := inst.Run(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(time.Minute)
+	inst, _ = newInstaller(false, false)
+	if err := inst.Run(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if st, _ := loadScheduleState(runDir); st == nil || st.Enforce || !st.LastRunAt.Equal(now) {
+		t.Fatalf("manual run state = %+v, want enforce=false recorded now", st)
+	}
+	now = now.Add(time.Minute)
+	inst, out := newInstaller(true, true)
+	if err := inst.Run(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out.String(), "not due") || enforcementHooks(t, machineRoot) == 0 {
+		t.Fatalf("enforcement on after a manual --enforce=false was not converged:\n%s", out.String())
 	}
 }
