@@ -101,7 +101,6 @@ Obot Sentry writes to these files:
 | Agent | macOS | Windows |
 |---|---|---|
 | Claude Code | `/Library/Application Support/ClaudeCode/managed-settings.json` | `C:\Program Files\ClaudeCode\managed-settings.json` |
-| Claude Code, releases before managed settings | `~/.claude/settings.json` | `%USERPROFILE%\.claude\settings.json` |
 | Codex | `/etc/codex/requirements.toml` | `%ProgramData%\OpenAI\Codex\requirements.toml` |
 | VS Code Copilot hook | `~/.copilot/hooks/obot-sentry.json` | `%USERPROFILE%\.copilot\hooks\obot-sentry.json` |
 | VS Code settings | `~/Library/Application Support/Code/User/settings.json` | `%APPDATA%\Code\User\settings.json` |
