@@ -33,6 +33,7 @@
     <Property Id="SERVER_URL" Secure="yes" />
     <Property Id="ENROLLMENT_KEY" Secure="yes" />
     <Property Id="SCAN_INTERVAL_MINUTES" Secure="yes" />
+    <Property Id="HOOK_INTERVAL_MINUTES" Secure="yes" />
     <Property Id="ENFORCEMENT" Value="0" Secure="yes" />
 
     <Launch Condition="SERVER_URL OR REMOVE~=&quot;ALL&quot;"
@@ -82,6 +83,16 @@
               <RegistryValue Name="EnforcementEnabled" Type="integer" Value="[ENFORCEMENT]" />
             </RegistryKey>
           </Component>
+          <!-- Written only when HOOK_INTERVAL_MINUTES is set, so an upgrade
+               without it keeps whatever value is in the registry. Without
+               Permanent, a major upgrade's removal of the old product would
+               delete the value; hook-task.ps1 -Mode uninstall deletes it on a
+               true uninstall. -->
+          <Component Id="HookIntervalRegistry" Guid="D69C23B3-46E8-4884-9D6E-F502755451E6" Condition="HOOK_INTERVAL_MINUTES" Permanent="yes">
+            <RegistryKey Root="HKLM" Key="SOFTWARE\Obot\obot-sentry">
+              <RegistryValue Name="HookIntervalMinutes" Type="string" Value="[HOOK_INTERVAL_MINUTES]" KeyPath="yes" />
+            </RegistryKey>
+          </Component>
         </Directory>
       </Directory>
     </StandardDirectory>
@@ -109,6 +120,7 @@
       <ComponentRef Id="TaskScript" />
       <ComponentRef Id="HookTaskScript" />
       <ComponentRef Id="DeploymentRegistry" />
+      <ComponentRef Id="HookIntervalRegistry" />
       <ComponentRef Id="MachineDataDir" />
     </Feature>
 

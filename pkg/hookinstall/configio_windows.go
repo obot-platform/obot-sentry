@@ -10,10 +10,30 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// chownToUser is a no-op on Windows: new files inherit their DACL from the parent.
-func chownToUser(_ *os.Root, _ *TargetUser, _ []string) error {
+// openNonblock is unneeded: NTFS has no FIFOs.
+const openNonblock = 0
+
+// checkOpenedConfig refuses hard links, so a user cannot get SYSTEM to read a
+// file they cannot and write its contents back into one they own.
+func checkOpenedConfig(scope Scope, u *TargetUser, _ os.FileInfo, absPath string, f *os.File) error {
+	if scope != ScopeUser || u == nil {
+		return nil
+	}
+	var info windows.ByHandleFileInformation
+	if err := windows.GetFileInformationByHandle(windows.Handle(f.Fd()), &info); err != nil {
+		return fmt.Errorf("reading file information for %q: %w", absPath, err)
+	}
+	if info.NumberOfLinks != 1 {
+		return fmt.Errorf("refusing user config %q with %d hard links", absPath, info.NumberOfLinks)
+	}
 	return nil
 }
+
+// fchownToUser and chownCreatedDir are no-ops: new files and directories
+// inherit the profile's DACL, which grants the user full control.
+func fchownToUser(*os.File, *TargetUser) error { return nil }
+
+func chownCreatedDir(*os.Root, string, *TargetUser) error { return nil }
 
 // secureMachineConfigDir protects the directory that controls deletion and
 // replacement of a machine hook. The inheritable entries also ensure that the

@@ -51,8 +51,13 @@ upload the file as-is, and assign it to the same targets.
   (`ScanIntervalMinutes` in the configuration profile — change it there
   without reinstalling).
 - Installs a LaunchDaemon (`ai.obot.obot-sentry.hook-install`) that runs as
-  root at load and hourly. It converges the managed local-agent audit hooks for
-  the signed-in user, so hooks are re-checked for drift every hour.
+  root at load and polls every 5 minutes. It checks the managed local-agent
+  hooks — machine policy plus the files of every local user, signed in or not —
+  and restores any that are missing or modified, at most every
+  {{if .hookIntervalMinutes}}{{.hookIntervalMinutes}}{{else}}15{{end}} minutes
+  (`HookIntervalMinutes` in the configuration profile, default 15), and
+  immediately after a restart, a new user's first login, an upgrade, or a
+  change to `EnforcementEnabled`.
 - Prepares `/Library/Application Support/obot/obot-sentry`, where the device
   identity shared by every user on the device is stored.
 
@@ -125,12 +130,15 @@ upload the file as-is, and assign it to the same targets.
    logs="/Users/$(stat -f %Su /dev/console)/Library/Caches/obot/obot-sentry/scan-logs"; sudo cat "$logs/$(sudo ls "$logs" | tail -1)"
    ```
 
-   The hook-install daemon keeps no state file. It prints its convergence table to
-   the unified log on every hourly run:
+   The hook-install daemon logs every hook it restores or changes, and every
+   failure, to a log file. A run that finds everything in place logs only a
+   few summary lines (why it ran, when it started, and when it finished):
 
    ```sh
-   log show --last 2h --predicate 'process == "obot-sentry"'
+   sudo tail -n 50 "/Library/Application Support/obot/obot-sentry-hook-install/hook-install.log"
    ```
+
+   The adjacent `schedule.json` records when the hooks were last checked.
 {{if .enforcementEnabled}}
 ## Tool-call enforcement
 

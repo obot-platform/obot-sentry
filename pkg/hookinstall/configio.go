@@ -1,8 +1,10 @@
 package hookinstall
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -108,10 +110,15 @@ func statConfigFile(root *os.Root, rel, absPath string) (bool, error) {
 	return true, nil
 }
 
-// readConfigFile reads the config at absPath through its root, reporting false
-// when the file or its root is absent.
-func readConfigFile(scope Scope, home, absPath string) ([]byte, bool, error) {
-	root, rel, err := openConfigRoot(scope, home, absPath)
+// maxConfigBytes keeps a user from exhausting the privileged process's memory
+// with a huge file in place of a hook file; real agent settings are kilobytes.
+const maxConfigBytes = 4 << 20
+
+// readConfigFile reports false when the file or its root is absent. u is nil
+// for a machine-scoped path. Checks are made on the opened descriptor, not the
+// path, so a file swapped in after the path check cannot slip through.
+func readConfigFile(scope Scope, u *TargetUser, absPath string) ([]byte, bool, error) {
+	root, rel, err := openConfigRoot(scope, homeOf(u), absPath)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return nil, false, nil
@@ -123,22 +130,41 @@ func readConfigFile(scope Scope, home, absPath string) ([]byte, bool, error) {
 	if ok, err := statConfigFile(root, rel, absPath); err != nil || !ok {
 		return nil, false, err
 	}
-	data, err := root.ReadFile(rel)
+	f, err := root.OpenFile(rel, os.O_RDONLY|openNonblock, 0)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	defer func() { _ = f.Close() }()
+	info, err := f.Stat()
 	if err != nil {
 		return nil, false, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, false, fmt.Errorf("refusing to use non-regular config %q", absPath)
+	}
+	if err := checkOpenedConfig(scope, u, info, absPath, f); err != nil {
+		return nil, false, err
+	}
+	data, err := io.ReadAll(io.LimitReader(f, maxConfigBytes+1))
+	if err != nil {
+		return nil, false, err
+	}
+	if len(data) > maxConfigBytes {
+		return nil, false, fmt.Errorf("refusing config %q larger than %d bytes", absPath, maxConfigBytes)
 	}
 	return data, true, nil
 }
 
 // commitConfigFile creates any missing parents, replaces absPath atomically, and
 // stamps per-user ownership. The destination is re-checked even though preflight
-// already read it, so a link planted since then is refused.
-func commitConfigFile(scope Scope, u *TargetUser, absPath string, data []byte) error {
-	home := ""
-	if u != nil {
-		home = u.HomeDir
-	}
-	root, rel, err := openConfigRoot(scope, home, absPath)
+// already read it, so a link planted since then is refused. Ownership changes
+// go through descriptors, never paths, so nothing the user swaps in at a path
+// can be handed to them.
+func commitConfigFile(ctx context.Context, scope Scope, u *TargetUser, absPath string, data []byte) error {
+	root, rel, err := openConfigRoot(scope, homeOf(u), absPath)
 	if err != nil {
 		return err
 	}
@@ -149,9 +175,8 @@ func commitConfigFile(scope Scope, u *TargetUser, absPath string, data []byte) e
 	}
 
 	dirPerm, filePerm := configModes(scope)
-	dirs := dirChain(filepath.Dir(rel))
-	if len(dirs) > 0 {
-		if err := root.MkdirAll(dirs[len(dirs)-1], dirPerm); err != nil {
+	for _, d := range dirChain(filepath.Dir(rel)) {
+		if err := makeConfigDir(root, scope, u, d, dirPerm); err != nil {
 			return fmt.Errorf("creating config directory for %q: %w", absPath, err)
 		}
 	}
@@ -168,20 +193,41 @@ func commitConfigFile(scope Scope, u *TargetUser, absPath string, data []byte) e
 			return err
 		}
 	}
-	if err := writeAtomic(root, rel, absPath, data, filePerm); err != nil {
+	var owner *TargetUser
+	if scope == ScopeUser {
+		owner = u
+	}
+	if err := writeAtomic(ctx, root, rel, absPath, data, filePerm, owner); err != nil {
 		return err
 	}
 	if scope == ScopeMachine {
 		return secureMachineConfig(absPath)
 	}
-	if u == nil {
-		return nil
-	}
-	return chownToUser(root, u, append(dirs, rel))
+	return nil
 }
 
-// dirChain expands "a/b/c" into ["a", "a/b", "a/b/c"]: the last element is the
-// directory to create, the whole chain is what gets re-owned.
+// makeConfigDir removes a directory it could not hand to the user, so a failed
+// run never leaves a root-owned directory in a home that later runs, finding it
+// present, would not re-own.
+func makeConfigDir(root *os.Root, scope Scope, u *TargetUser, d string, perm os.FileMode) error {
+	err := root.Mkdir(d, perm)
+	if errors.Is(err, fs.ErrExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if scope != ScopeUser || u == nil {
+		return nil
+	}
+	if err := chownCreatedDir(root, d, u); err != nil {
+		_ = root.Remove(d)
+		return err
+	}
+	return nil
+}
+
+// dirChain expands "a/b/c" into ["a", "a/b", "a/b/c"].
 func dirChain(dir string) []string {
 	if dir == "." || dir == "" || dir == string(filepath.Separator) {
 		return nil
@@ -201,7 +247,7 @@ func dirChain(dir string) []string {
 
 // writeAtomic replaces rel under root with data. absPath is the same file as
 // the user knows it, and is the only path its errors name.
-func writeAtomic(root *os.Root, rel, absPath string, data []byte, perm os.FileMode) error {
+func writeAtomic(ctx context.Context, root *os.Root, rel, absPath string, data []byte, perm os.FileMode, owner *TargetUser) error {
 	// The pid keeps concurrent installers off each other's in-flight write; the
 	// rename is atomic, so whichever commits last wins with identical content.
 	tmp := filepath.Join(filepath.Dir(rel), fmt.Sprintf(".%s.%d.obot-sentry-tmp", filepath.Base(rel), os.Getpid()))
@@ -215,9 +261,15 @@ func writeAtomic(root *os.Root, rel, absPath string, data []byte, perm os.FileMo
 	if err != nil {
 		return fmt.Errorf("creating temporary file for %q: %w", absPath, withoutRootPath(err))
 	}
-	if err := writeAndClose(f, data, perm); err != nil {
+	if err := writeAndClose(f, data, perm, owner); err != nil {
 		_ = root.Remove(tmp)
 		return fmt.Errorf("writing temporary file for %q: %w", absPath, withoutRootPath(err))
+	}
+	// The write and sync can stall past a unit's deadline; an abandoned unit
+	// must not publish.
+	if err := ctx.Err(); err != nil {
+		_ = root.Remove(tmp)
+		return err
 	}
 	if err := root.Rename(tmp, rel); err != nil {
 		_ = root.Remove(tmp)
@@ -243,10 +295,10 @@ func withoutRootPath(err error) error {
 	return err
 }
 
-// writeAndClose writes data, forces perm past the process umask, and flushes so
-// the rename can only publish complete content. Both the chmod and the sync are
-// on the descriptor, so neither is exposed to a path race.
-func writeAndClose(f *os.File, data []byte, perm os.FileMode) (err error) {
+// writeAndClose forces perm past the process umask, and syncs so the rename can
+// only publish complete content. Everything is on the descriptor, so none of
+// it is exposed to a path race.
+func writeAndClose(f *os.File, data []byte, perm os.FileMode, owner *TargetUser) (err error) {
 	defer func() {
 		if cerr := f.Close(); err == nil {
 			err = cerr
@@ -257,6 +309,11 @@ func writeAndClose(f *os.File, data []byte, perm os.FileMode) (err error) {
 	}
 	if err := f.Chmod(perm); err != nil {
 		return err
+	}
+	if owner != nil {
+		if err := fchownToUser(f, owner); err != nil {
+			return err
+		}
 	}
 	return f.Sync()
 }

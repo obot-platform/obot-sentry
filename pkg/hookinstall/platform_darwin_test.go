@@ -3,11 +3,14 @@
 package hookinstall
 
 import (
+	"errors"
 	"os"
 	"os/user"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestValidateExecutableOwnerRequiresRoot(t *testing.T) {
@@ -101,5 +104,81 @@ func TestTargetUserFromAccountRequiresRealHome(t *testing.T) {
 		Username: "alice", Uid: "501", Gid: "20", HomeDir: "/nonexistent/alice",
 	}); err == nil {
 		t.Error("a missing home directory should be rejected")
+	}
+}
+
+func TestDarwinUsersSkipsInvalidAccountsAndSortsByUID(t *testing.T) {
+	aliceHome, bobHome, sharedHome := t.TempDir(), t.TempDir(), t.TempDir()
+	accounts := map[string]*user.User{
+		"502": {Uid: "502", Gid: "20", Username: "bob", HomeDir: bobHome},
+		"501": {Uid: "501", Gid: "20", Username: "alice", HomeDir: aliceHome},
+		"503": {Uid: "503", Gid: "20", Username: "gone", HomeDir: filepath.Join(bobHome, "missing")},
+		"505": {Uid: "505", Gid: "20", Username: "shared", HomeDir: sharedHome},
+	}
+	lookup := func(uid string) (*user.User, error) {
+		if u, ok := accounts[uid]; ok {
+			return u, nil
+		}
+		return nil, user.UnknownUserIdError(0)
+	}
+	ownedBy := func(home string, uid int) error {
+		if home == sharedHome {
+			return errors.New("home owned by another account")
+		}
+		return nil
+	}
+	cands := darwinCandidates([]dsclAccount{
+		{Name: "bob", UID: "502"},
+		{Name: "alice", UID: "501"},
+		{Name: "gone", UID: "503"},
+		{Name: "ghost", UID: "504"},
+		{Name: "shared", UID: "505"},
+	}, nil, lookup, ownedBy)
+	set := resolveCandidates(cands, time.Minute)
+	sort.Slice(set.Users, func(i, j int) bool { return set.Users[i].UID < set.Users[j].UID })
+
+	if len(set.Users) != 2 || set.Users[0].Username != "alice" || set.Users[1].Username != "bob" {
+		t.Fatalf("users = %+v, want alice then bob", set.Users)
+	}
+	// "gone" has never logged in, so has no home and is dropped silently.
+	if len(set.Skipped) != 2 || set.Skipped[0].Name != "ghost" || set.Skipped[1].Name != "shared" {
+		t.Fatalf("skipped = %+v, want ghost and shared", set.Skipped)
+	}
+}
+
+func TestHomeOwnedBy(t *testing.T) {
+	home := t.TempDir()
+	if err := homeOwnedBy(home, os.Getuid()); err != nil {
+		t.Fatalf("a home owned by the account was rejected: %v", err)
+	}
+	if err := homeOwnedBy(home, os.Getuid()+1); err == nil {
+		t.Fatal("a home owned by another uid was accepted")
+	}
+}
+
+// TestDarwinCandidatesAddSignedInNetworkAccount covers a directory-bound Mac: a
+// network account at the console has no record in the local node, so it is
+// added from the console owner, while a console user already in the local list
+// is not added twice.
+func TestDarwinCandidatesAddSignedInNetworkAccount(t *testing.T) {
+	localHome, networkHome := t.TempDir(), t.TempDir()
+	accounts := map[string]*user.User{
+		"501":  {Uid: "501", Gid: "20", Username: "local", HomeDir: localHome},
+		"1234": {Uid: "1234", Gid: "20", Username: "net", HomeDir: networkHome},
+	}
+	lookup := func(uid string) (*user.User, error) {
+		if u, ok := accounts[uid]; ok {
+			return u, nil
+		}
+		return nil, user.UnknownUserIdError(0)
+	}
+	cands := darwinCandidates([]dsclAccount{{Name: "local", UID: "501"}}, []string{"1234", "501", "1234"}, lookup,
+		func(string, int) error { return nil })
+	if len(cands) != 2 {
+		t.Fatalf("got %d candidates, want the local account plus the network console user once", len(cands))
+	}
+	set := resolveCandidates(cands, time.Minute)
+	if len(set.Users) != 2 || set.Users[1].Username != "net" || set.Users[1].HomeDir != networkHome {
+		t.Fatalf("users = %+v, want local and the network account", set.Users)
 	}
 }

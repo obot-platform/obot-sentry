@@ -6,8 +6,10 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/obot-platform/obot-sentry/pkg/localagent"
 )
@@ -44,11 +46,11 @@ func failIfCalledResolve(t *testing.T) func() (string, error) {
 	}
 }
 
-func failIfCalledResolveUser(t *testing.T) func() (*TargetUser, error) {
+func failIfCalledResolveUser(t *testing.T) func() (UserSet, error) {
 	t.Helper()
-	return func() (*TargetUser, error) {
+	return func() (UserSet, error) {
 		t.Fatal("user resolution must not run after an earlier preflight failure")
-		return nil, nil
+		return UserSet{}, nil
 	}
 }
 
@@ -61,9 +63,9 @@ func failIfCalledProvision(t *testing.T) func() (string, error) {
 }
 
 // stubUser returns a valid resolved user seam for success-path tests.
-func stubUser() func() (*TargetUser, error) {
-	return func() (*TargetUser, error) {
-		return &TargetUser{Username: "alice", HomeDir: "/Users/alice", UID: 501, GID: 20}, nil
+func stubUser() func() (UserSet, error) {
+	return func() (UserSet, error) {
+		return UserSet{Users: []*TargetUser{{Username: "alice", HomeDir: "/Users/alice", UID: 501, GID: 20}}}, nil
 	}
 }
 
@@ -73,7 +75,7 @@ func TestRunUnsupportedPlatformMakesNoChanges(t *testing.T) {
 		GOOS:              "linux",
 		Privilege:         failIfCalledPrivilege(t),
 		ResolveExe:        failIfCalledResolve(t),
-		ResolveUser:       failIfCalledResolveUser(t),
+		ResolveUsers:      failIfCalledResolveUser(t),
 		ProvisionIdentity: failIfCalledProvision(t),
 		Out:               &out,
 	}
@@ -93,7 +95,7 @@ func TestRunPrivilegeFailureShortCircuits(t *testing.T) {
 		GOOS:              "darwin",
 		Privilege:         func() error { return wantErr },
 		ResolveExe:        failIfCalledResolve(t),
-		ResolveUser:       failIfCalledResolveUser(t),
+		ResolveUsers:      failIfCalledResolveUser(t),
 		ProvisionIdentity: failIfCalledProvision(t),
 		Out:               &out,
 	}
@@ -113,7 +115,7 @@ func TestRunResolveExeFailure(t *testing.T) {
 		GOOS:              "windows",
 		Privilege:         func() error { return nil },
 		ResolveExe:        func() (string, error) { return "", wantErr },
-		ResolveUser:       failIfCalledResolveUser(t),
+		ResolveUsers:      stubUser(),
 		ProvisionIdentity: failIfCalledProvision(t),
 		Out:               &out,
 	}
@@ -123,23 +125,32 @@ func TestRunResolveExeFailure(t *testing.T) {
 	}
 }
 
-func TestRunUserResolutionFailureShortCircuits(t *testing.T) {
-	wantErr := errors.New("no active console user")
+func TestRunUserListingFailureStillConvergesMachinePolicy(t *testing.T) {
+	wantErr := errors.New("dscl failed")
+	machineRoot := realTempDir(t)
+	runDir := t.TempDir()
 	var out bytes.Buffer
 	inst := &Installer{
-		GOOS:              "darwin",
-		Privilege:         func() error { return nil },
-		ResolveExe:        func() (string, error) { return macExe, nil },
-		ResolveUser:       func() (*TargetUser, error) { return nil, wantErr },
-		ProvisionIdentity: failIfCalledProvision(t),
-		Out:               &out,
+		GOOS:                "darwin",
+		Privilege:           func() error { return nil },
+		ResolveExe:          func() (string, error) { return macExe, nil },
+		ResolveUsers:        func() (UserSet, error) { return UserSet{}, wantErr },
+		ProvisionIdentity:   func() (string, error) { return "/id", nil },
+		ResolveDestinations: tempDestinations(machineRoot),
+		RunDir:              func() (string, error) { return runDir, nil },
+		IfDue:               true,
+		Interval:            15 * time.Minute,
+		Out:                 &out,
 	}
 	err := inst.Run(context.Background())
 	if !errors.Is(err, wantErr) {
-		t.Fatalf("expected user-resolution error, got %v", err)
+		t.Fatalf("expected the listing error, got %v", err)
 	}
-	if out.Len() != 0 {
-		t.Fatalf("expected no output on user-resolution failure, got %q", out.String())
+	if _, statErr := os.Stat(filepath.Join(machineRoot, "Cursor/hooks.json")); statErr != nil {
+		t.Fatalf("machine policy not converged after a listing failure: %v\n%s", statErr, out.String())
+	}
+	if st, _ := loadScheduleState(runDir); st != nil {
+		t.Fatalf("a run whose user listing failed recorded state: %+v", st)
 	}
 }
 
@@ -150,7 +161,7 @@ func TestRunIdentityProvisionFailure(t *testing.T) {
 		GOOS:              "darwin",
 		Privilege:         func() error { return nil },
 		ResolveExe:        func() (string, error) { return macExe, nil },
-		ResolveUser:       stubUser(),
+		ResolveUsers:      stubUser(),
 		ProvisionIdentity: func() (string, error) { return "", wantErr },
 		Out:               &out,
 	}
@@ -198,7 +209,7 @@ func TestRunConvergesAndIsIdempotent(t *testing.T) {
 			GOOS:                "darwin",
 			Privilege:           func() error { return nil },
 			ResolveExe:          func() (string, error) { return macExe, nil },
-			ResolveUser:         func() (*TargetUser, error) { return user, nil },
+			ResolveUsers:        func() (UserSet, error) { return UserSet{Users: []*TargetUser{user}}, nil },
 			ProvisionIdentity:   func() (string, error) { return "/Library/Application Support/obot/obot-sentry", nil },
 			ResolveDestinations: tempDestinations(machineRoot),
 			Out:                 out,
@@ -271,15 +282,51 @@ func TestRunConvergesAndIsIdempotent(t *testing.T) {
 	}
 }
 
-// TestRunAbortsOnMalformedConfigBeforeWriting proves a malformed existing
-// document fails preflight without writing any file.
-func TestRunAbortsOnMalformedConfigBeforeWriting(t *testing.T) {
+func TestRunAbortsOnMalformedMachineConfigBeforeWriting(t *testing.T) {
 	home := t.TempDir()
 	machineRoot := realTempDir(t)
 	user := &TargetUser{Username: "alice", HomeDir: home, UID: os.Getuid(), GID: os.Getgid()}
 
-	// Seed a malformed Claude settings file.
-	claudePath := filepath.Join(home, ".claude", "settings.json")
+	cursorPath := filepath.Join(machineRoot, "Cursor", "hooks.json")
+	if err := os.MkdirAll(filepath.Dir(cursorPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cursorPath, []byte(`{"hooks": `), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var out bytes.Buffer
+	inst := &Installer{
+		GOOS:                "darwin",
+		Privilege:           func() error { return nil },
+		ResolveExe:          func() (string, error) { return macExe, nil },
+		ResolveUsers:        func() (UserSet, error) { return UserSet{Users: []*TargetUser{user}}, nil },
+		ProvisionIdentity:   func() (string, error) { return "/id", nil },
+		ResolveDestinations: tempDestinations(machineRoot),
+		Out:                 &out,
+	}
+	if err := inst.Run(context.Background()); err == nil {
+		t.Fatal("expected malformed machine config to abort the run")
+	}
+	if _, err := os.Stat(filepath.Join(machineRoot, "etc/codex/requirements.toml")); err == nil {
+		t.Fatal("Codex file was written despite a preflight abort")
+	}
+	if _, err := os.Stat(filepath.Join(home, ".copilot/hooks/obot-sentry.json")); err == nil {
+		t.Fatal("a user file was written despite a preflight abort")
+	}
+	if out.Len() != 0 {
+		t.Fatalf("expected no summary output on preflight abort, got:\n%s", out.String())
+	}
+}
+
+func TestRunFailsOnlyTheMalformedUserDestination(t *testing.T) {
+	aliceHome, bobHome := t.TempDir(), t.TempDir()
+	machineRoot := realTempDir(t)
+	alice := &TargetUser{Username: "alice", HomeDir: aliceHome, UID: os.Getuid(), GID: os.Getgid()}
+	bob := &TargetUser{Username: "bob", HomeDir: bobHome, UID: os.Getuid(), GID: os.Getgid()}
+
+	// Seed a malformed (retired) Claude settings file for alice only.
+	claudePath := filepath.Join(aliceHome, ".claude", "settings.json")
 	if err := os.MkdirAll(filepath.Dir(claudePath), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -292,20 +339,41 @@ func TestRunAbortsOnMalformedConfigBeforeWriting(t *testing.T) {
 		GOOS:                "darwin",
 		Privilege:           func() error { return nil },
 		ResolveExe:          func() (string, error) { return macExe, nil },
-		ResolveUser:         func() (*TargetUser, error) { return user, nil },
+		ResolveUsers:        func() (UserSet, error) { return UserSet{Users: []*TargetUser{alice, bob}}, nil },
 		ProvisionIdentity:   func() (string, error) { return "/id", nil },
 		ResolveDestinations: tempDestinations(machineRoot),
 		Out:                 &out,
 	}
 	if err := inst.Run(context.Background()); err == nil {
-		t.Fatal("expected malformed config to abort the run")
+		t.Fatal("expected the malformed user config to fail the run")
 	}
-	// No machine file may have been written: preflight aborts before any commit.
-	if _, err := os.Stat(filepath.Join(machineRoot, "etc/codex/requirements.toml")); err == nil {
-		t.Fatal("Codex file was written despite a preflight abort")
+	for _, path := range []string{
+		filepath.Join(machineRoot, "etc/codex/requirements.toml"),
+		filepath.Join(bobHome, ".copilot/hooks/obot-sentry.json"),
+		filepath.Join(bobHome, "Library/Application Support/Code/User/settings.json"),
+	} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("%s was not converged despite only alice's config being malformed: %v", path, err)
+		}
 	}
-	if out.Len() != 0 {
-		t.Fatalf("expected no summary output on preflight abort, got:\n%s", out.String())
+	// Alice's other hooks still converge; only her malformed file fails.
+	if _, err := os.Stat(filepath.Join(aliceHome, ".copilot/hooks/obot-sentry.json")); err != nil {
+		t.Fatalf("alice's other hooks were held back by one malformed file: %v\n%s", err, out.String())
+	}
+	if got, _ := os.ReadFile(claudePath); string(got) != `{"hooks": ` {
+		t.Fatalf("alice's malformed file was modified: %q", got)
+	}
+	failedRows := 0
+	for line := range strings.SplitSeq(out.String(), "\n") {
+		if strings.Contains(line, " failed ") {
+			failedRows++
+			if !strings.Contains(line, "Claude Code (user settings)") || !strings.Contains(line, "alice") {
+				t.Fatalf("unexpected failed row: %s", line)
+			}
+		}
+	}
+	if failedRows != 1 {
+		t.Fatalf("want exactly alice's malformed destination failed, got %d failed rows:\n%s", failedRows, out.String())
 	}
 }
 
@@ -325,7 +393,7 @@ func TestRunCancelledContextAbortsBeforeWriting(t *testing.T) {
 		GOOS:                "darwin",
 		Privilege:           func() error { return nil },
 		ResolveExe:          func() (string, error) { return macExe, nil },
-		ResolveUser:         func() (*TargetUser, error) { return user, nil },
+		ResolveUsers:        func() (UserSet, error) { return UserSet{Users: []*TargetUser{user}}, nil },
 		ProvisionIdentity:   func() (string, error) { return "/id", nil },
 		ResolveDestinations: tempDestinations(machineRoot),
 		Out:                 &out,
@@ -435,7 +503,7 @@ func TestCommitRefusesConcurrentConfigEdit(t *testing.T) {
 	if err := os.WriteFile(abs, []byte("{}\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	plan := Plan{GOOS: "darwin", Executable: macExe, User: user, Destinations: []Destination{dest}}
+	plan := Plan{GOOS: "darwin", Executable: macExe, Users: []*TargetUser{user}, Destinations: []Destination{dest}}
 	changes, err := buildChanges(t.Context(), plan)
 	if err != nil {
 		t.Fatal(err)
@@ -482,7 +550,7 @@ func TestRunMovesClaudeHooksOutOfUserSettings(t *testing.T) {
 			GOOS:                "darwin",
 			Privilege:           func() error { return nil },
 			ResolveExe:          func() (string, error) { return macExe, nil },
-			ResolveUser:         func() (*TargetUser, error) { return user, nil },
+			ResolveUsers:        func() (UserSet, error) { return UserSet{Users: []*TargetUser{user}}, nil },
 			ProvisionIdentity:   func() (string, error) { return "/id", nil },
 			ResolveDestinations: tempDestinations(machineRoot),
 			Enforce:             true,
@@ -574,7 +642,7 @@ func TestRunKeepsClaudeUserHooksWhenManagedInstallFails(t *testing.T) {
 	plan := Plan{
 		GOOS:       "darwin",
 		Executable: macExe,
-		User:       user,
+		Users:      []*TargetUser{user},
 		Enforce:    true,
 		Destinations: []Destination{
 			{Agent: localagent.ClaudeCode, Label: "Claude Code (user settings)", Scope: ScopeUser, Format: FormatJSON, Rel: ".claude/settings.json", Retired: true},
@@ -603,8 +671,10 @@ func TestRunKeepsClaudeUserHooksWhenManagedInstallFails(t *testing.T) {
 			t.Fatalf("%s: result = %+v, want a failure that removed nothing", r.Label, r)
 		}
 	}
-	if !strings.Contains(results[0].Err.Error(), "left in place") {
-		t.Fatalf("retired destination error = %v", results[0].Err)
+	// Results list machine destinations first, whatever the declared order.
+	retired := results[slices.IndexFunc(results, func(r Result) bool { return r.Label == "Claude Code (user settings)" })]
+	if !strings.Contains(retired.Err.Error(), "left in place") {
+		t.Fatalf("retired destination error = %v", retired.Err)
 	}
 	if got, err := os.ReadFile(userFile); err != nil || !bytes.Equal(got, old.data) {
 		t.Fatalf("user settings hooks were removed without a replacement: err=%v\n%s", err, got)

@@ -160,3 +160,33 @@ func TestMerge_EnforcementEnabled(t *testing.T) {
 		})
 	}
 }
+
+func TestHookInterval(t *testing.T) {
+	for _, tt := range []struct {
+		minutes int
+		want    time.Duration
+	}{
+		{0, 15 * time.Minute},
+		{1, 5 * time.Minute},
+		{30, 30 * time.Minute},
+		{100000, 1440 * time.Minute},
+	} {
+		if got := (Config{HookIntervalMinutes: tt.minutes}).HookInterval(); got != tt.want {
+			t.Errorf("HookInterval(%d) = %v, want %v", tt.minutes, got, tt.want)
+		}
+	}
+
+	cfg, err := FromSource(mapSource{KeyHookIntervalMinutes: " 45 "})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.HookIntervalMinutes != 45 {
+		t.Fatalf("HookIntervalMinutes = %d, want 45", cfg.HookIntervalMinutes)
+	}
+	if got := (Config{}).Merge(cfg).HookIntervalMinutes; got != 45 {
+		t.Fatalf("MDM HookIntervalMinutes should fill the gap, got %d", got)
+	}
+	if got := (Config{HookIntervalMinutes: 10}).Merge(cfg).HookIntervalMinutes; got != 10 {
+		t.Fatalf("flag HookIntervalMinutes should win, got %d", got)
+	}
+}

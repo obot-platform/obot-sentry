@@ -1,8 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
 	Deployment configuration for Obot Sentry, delivered as managed
-	preferences. Obot renders the server URL, scan interval, and enforcement
-	toggle into this profile; the admin replaces REPLACE_WITH_ENROLLMENT_KEY
+	preferences. Obot renders the server URL, scan interval, hook check
+	interval (omitted when unset, so obot-sentry's 15-minute default applies),
+	and enforcement toggle into this profile; the admin replaces REPLACE_WITH_ENROLLMENT_KEY
 	before uploading it, so the enrollment key never passes through obot's
 	rendering.
 
@@ -52,7 +53,9 @@
 								<key>EnrollmentKey</key>
 								<string>REPLACE_WITH_ENROLLMENT_KEY</string>
 								<key>ScanIntervalMinutes</key>
-								<integer>{{.scanIntervalMinutes}}</integer>
+								<integer>{{.scanIntervalMinutes}}</integer>{{if .hookIntervalMinutes}}
+								<key>HookIntervalMinutes</key>
+								<integer>{{.hookIntervalMinutes}}</integer>{{end}}
 								<key>EnforcementEnabled</key>
 								<{{if .enforcementEnabled}}true{{else}}false{{end}}/>
 							</dict>

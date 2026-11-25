@@ -17,6 +17,9 @@ Everything below needs an administrator account.
    sudo defaults write /Library/Preferences/ai.obot.obot-sentry ServerURL -string "{{.serverURL}}"
    sudo defaults write /Library/Preferences/ai.obot.obot-sentry EnrollmentKey -string "REPLACE_WITH_ENROLLMENT_KEY"
    sudo defaults write /Library/Preferences/ai.obot.obot-sentry ScanIntervalMinutes -int {{.scanIntervalMinutes}}
+{{- if .hookIntervalMinutes}}
+   sudo defaults write /Library/Preferences/ai.obot.obot-sentry HookIntervalMinutes -int {{.hookIntervalMinutes}}
+{{- end}}
    sudo defaults write /Library/Preferences/ai.obot.obot-sentry EnforcementEnabled -bool {{if .enforcementEnabled}}true{{else}}false{{end}}
    ```
 
@@ -48,9 +51,14 @@ Everything below needs an administrator account.
   run submits a scan at most every {{.scanIntervalMinutes}} minutes — change
   `ScanIntervalMinutes` in step 1 without reinstalling.
 - Installs a LaunchDaemon (`ai.obot.obot-sentry.hook-install`) that runs as root
-  at load and hourly, converging the managed local-agent audit hooks for the
-  signed-in user. It reads `EnforcementEnabled` from step 1 on every run, so
-  turning enforcement on or off there takes effect without reinstalling.
+  at load and polls every 5 minutes. It checks the managed local-agent hooks —
+  machine policy plus the files of every local user, signed in or not — and
+  restores any that are missing or modified, at most every
+  {{if .hookIntervalMinutes}}{{.hookIntervalMinutes}}{{else}}15{{end}} minutes
+  (`HookIntervalMinutes`, default 15), and immediately after a restart, a new
+  user's first login, an upgrade, or a change to `EnforcementEnabled`. It reads
+  both settings from step 1 on every run, so changing them there takes effect
+  without reinstalling.
 - Prepares `/Library/Application Support/obot/obot-sentry`, where the device
   identity shared by every user on the device is stored.
 
@@ -103,12 +111,15 @@ Everything below needs an administrator account.
 
    The adjacent `scan-logs` directory retains up to 14 days of the most recent scan attempts.
 
-   The hook-install daemon keeps no state file. It prints its convergence table
-   to the unified log on every hourly run:
+   The hook-install daemon logs every hook it restores or changes, and every
+   failure, to a log file. A run that finds everything in place logs only a
+   few summary lines (why it ran, when it started, and when it finished):
 
    ```sh
-   log show --last 2h --predicate 'process == "obot-sentry"'
+   sudo tail -n 50 "/Library/Application Support/obot/obot-sentry-hook-install/hook-install.log"
    ```
+
+   The adjacent `schedule.json` records when the hooks were last checked.
 
 ## Standalone binary (Alternate)
 
@@ -153,6 +164,9 @@ install.
 ```sh
 sudo obot-sentry hook-install{{if .enforcementEnabled}} --enforce{{end}}
 ```
+
+This installs machine policy and the hooks of every local user. Without the
+LaunchDaemon, nothing re-checks them afterward; rerun it to restore drifted hooks.
 {{if .enforcementEnabled}}
 ## Tool-call enforcement
 

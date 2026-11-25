@@ -22,6 +22,14 @@
         "default": 60,
         "title": "Scan interval (minutes)",
         "description": "How often each signed-in user's device submits a scan."
+      },
+      "hookIntervalMinutes": {
+        "type": "integer",
+        "minimum": 5,
+        "maximum": 1440,
+        "default": 15,
+        "title": "Hook check interval (minutes)",
+        "description": "How often each device verifies its managed agent hooks and repairs any that are missing or modified."
       }
     }
   },

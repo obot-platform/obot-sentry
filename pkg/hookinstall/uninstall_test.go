@@ -223,7 +223,7 @@ func TestRunUninstallEndToEnd(t *testing.T) {
 			GOOS:                "darwin",
 			Privilege:           func() error { return nil },
 			ResolveExe:          func() (string, error) { return macExe, nil },
-			ResolveUser:         func() (*TargetUser, error) { return user, nil },
+			ResolveUsers:        func() (UserSet, error) { return UserSet{Users: []*TargetUser{user}}, nil },
 			ProvisionIdentity:   func() (string, error) { return "/id", nil },
 			ResolveDestinations: tempDestinations(machineRoot),
 			Enforce:             true,
@@ -297,8 +297,8 @@ func TestRunUninstallDoesNotCreateMissingFiles(t *testing.T) {
 	inst := &Installer{
 		GOOS:      "darwin",
 		Privilege: func() error { return nil },
-		ResolveUser: func() (*TargetUser, error) {
-			return &TargetUser{Username: "alice", HomeDir: home, UID: os.Getuid(), GID: os.Getgid()}, nil
+		ResolveUsers: func() (UserSet, error) {
+			return UserSet{Users: []*TargetUser{{Username: "alice", HomeDir: home, UID: os.Getuid(), GID: os.Getgid()}}}, nil
 		},
 		ResolveDestinations: tempDestinations(machineRoot),
 		Uninstall:           true,
@@ -336,7 +336,7 @@ func TestRunUninstallMalformedConfigAbortsBeforeWriting(t *testing.T) {
 	inst := &Installer{
 		GOOS:                "darwin",
 		Privilege:           func() error { return nil },
-		ResolveUser:         func() (*TargetUser, error) { return user, nil },
+		ResolveUsers:        func() (UserSet, error) { return UserSet{Users: []*TargetUser{user}}, nil },
 		ResolveDestinations: tempDestinations(machineRoot),
 		Uninstall:           true,
 		Out:                 &bytes.Buffer{},
@@ -376,7 +376,7 @@ func TestUninstallRemovesFromEachClaudeDestinationIndependently(t *testing.T) {
 
 	plan := Plan{
 		GOOS:      "darwin",
-		User:      user,
+		Users:     []*TargetUser{user},
 		Uninstall: true,
 		Destinations: []Destination{
 			{Agent: localagent.ClaudeCode, Label: "Claude Code", Scope: ScopeMachine, Format: FormatJSON, Abs: managedFile},

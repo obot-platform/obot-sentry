@@ -3,16 +3,16 @@
 package hookinstall
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"os/user"
+	"sort"
 	"strconv"
 	"syscall"
+	"time"
 )
-
-// minDarwinUserUID is the lowest uid macOS assigns to a real local account.
-// Apple reserves everything below 500 for system use.
-const minDarwinUserUID = 500
 
 // checkPrivilege requires an effective UID of 0 on macOS. Machine policy and
 // per-user files under other accounts' homes both require root; anything less
@@ -24,52 +24,95 @@ func checkPrivilege() error {
 	return nil
 }
 
-// resolveTargetUser resolves the active console user on macOS. It prefers the
-// account named by SUDO_UID (the interactive sudo command case), then falls
-// back to the owner of /dev/console (the MDM/root case where a user is logged
-// in at the GUI).
-func resolveTargetUser() (*TargetUser, error) {
-	if u := targetUserFromSudo(); u != nil {
-		return u, nil
+// dsclTimeout keeps a wedged opendirectoryd from hanging the run; dscl
+// normally answers from the local node instantly.
+const dsclTimeout = 30 * time.Second
+
+// resolveTargetUsers lists the local node's accounts (`dscl .`), plus the
+// signed-in console user and SUDO_UID when they are not among them: on a Mac
+// bound to Active Directory without mobile accounts, or to LDAP/Open
+// Directory, a network account has no local record but does have a local
+// home. user.LookupId searches every directory node, so it resolves those
+// too. Each home comes from the account database, never the environment.
+func resolveTargetUsers() (UserSet, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), dsclTimeout)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "/usr/bin/dscl", ".", "-list", "/Users", "UniqueID").Output()
+	if err != nil {
+		return UserSet{}, fmt.Errorf("listing local accounts with dscl: %w", err)
 	}
-	return targetUserFromConsole()
+	cands := darwinCandidates(parseDsclUserList(out), signedInUIDs(), user.LookupId, homeOwnedBy)
+	set := resolveCandidates(cands, userResolveTimeout)
+	sort.Slice(set.Users, func(i, j int) bool { return set.Users[i].UID < set.Users[j].UID })
+	return set, nil
 }
 
-func targetUserFromSudo() *TargetUser {
-	uidStr := os.Getenv("SUDO_UID")
-	if uidStr == "" {
-		return nil
+// signedInUIDs is the owner of /dev/console (root when no one is signed in)
+// and SUDO_UID for an interactive `sudo obot-sentry hook-install`.
+func signedInUIDs() []string {
+	var uids []string
+	if info, err := os.Stat("/dev/console"); err == nil {
+		if st, ok := info.Sys().(*syscall.Stat_t); ok && st.Uid != 0 {
+			uids = append(uids, strconv.FormatUint(uint64(st.Uid), 10))
+		}
 	}
-	u, err := user.LookupId(uidStr)
+	if uid := os.Getenv("SUDO_UID"); uid != "" {
+		uids = append(uids, uid)
+	}
+	return uids
+}
+
+func darwinCandidates(accounts []dsclAccount, extraUIDs []string, lookup func(uid string) (*user.User, error), ownedBy func(home string, uid int) error) []userCandidate {
+	seen := map[string]bool{}
+	var cands []userCandidate
+	add := func(name, uid string) {
+		if seen[uid] {
+			return
+		}
+		seen[uid] = true
+		cands = append(cands, userCandidate{Name: name, resolve: func() (*TargetUser, error) {
+			return darwinUser(uid, lookup, ownedBy)
+		}})
+	}
+	for _, a := range accounts {
+		add(a.Name, a.UID)
+	}
+	for _, uid := range extraUIDs {
+		add("uid "+uid, uid)
+	}
+	return cands
+}
+
+func darwinUser(uid string, lookup func(uid string) (*user.User, error), ownedBy func(home string, uid int) error) (*TargetUser, error) {
+	u, err := lookup(uid)
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("looking up uid %s: %v", uid, err)
 	}
 	tu, err := targetUserFromAccount(u)
 	if err != nil {
-		return nil
+		return nil, err
 	}
-	return tu
+	if err := ownedBy(tu.HomeDir, tu.UID); err != nil {
+		return nil, err
+	}
+	return tu, nil
 }
 
-// targetUserFromConsole resolves the owner of /dev/console — the user logged in
-// at the graphical session. A root-owned console means no user is logged in.
-func targetUserFromConsole() (*TargetUser, error) {
-	info, err := os.Stat("/dev/console")
+// homeOwnedBy rejects homes the account does not own, such as /Users/Shared or
+// /var/empty, which are not that user's to have root create directories in.
+func homeOwnedBy(home string, uid int) error {
+	info, err := os.Lstat(home)
 	if err != nil {
-		return nil, fmt.Errorf("no active console user: %w", err)
+		return err
 	}
 	st, ok := info.Sys().(*syscall.Stat_t)
-	if !ok {
-		return nil, fmt.Errorf("cannot read /dev/console ownership")
+	if !ok || st == nil {
+		return fmt.Errorf("cannot read ownership of home %q", home)
 	}
-	if st.Uid == 0 {
-		return nil, fmt.Errorf("no active console user (no one is logged in); rerun after a user logs in")
+	if int(st.Uid) != uid {
+		return fmt.Errorf("home %q is owned by uid %d, not the account's uid %d", home, st.Uid, uid)
 	}
-	u, err := user.LookupId(strconv.FormatUint(uint64(st.Uid), 10))
-	if err != nil {
-		return nil, fmt.Errorf("looking up console user (uid %d): %w", st.Uid, err)
-	}
-	return targetUserFromAccount(u)
+	return nil
 }
 
 // targetUserFromAccount validates an account-database entry and builds a
@@ -81,7 +124,7 @@ func targetUserFromAccount(u *user.User) (*TargetUser, error) {
 		return nil, fmt.Errorf("user %q has non-numeric uid %q", u.Username, u.Uid)
 	}
 	if uid < minDarwinUserUID {
-		return nil, fmt.Errorf("resolved user %q (uid %d) is a system account, not a real console user", u.Username, uid)
+		return nil, fmt.Errorf("resolved user %q (uid %d) is a system account, not a real user", u.Username, uid)
 	}
 	gid, err := strconv.Atoi(u.Gid)
 	if err != nil {

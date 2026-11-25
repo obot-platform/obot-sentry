@@ -36,7 +36,8 @@ defaults delete /Library/Preferences/ai.obot.obot-sentry 2>/dev/null || true
 # defaults delete empties the domain but leaves the plist behind.
 rm -f /Library/Preferences/ai.obot.obot-sentry.plist
 
-rm -rf "/Library/Application Support/obot/obot-sentry"
+rm -rf "/Library/Application Support/obot/obot-sentry" \
+	"/Library/Application Support/obot/obot-sentry-hook-install"
 for home in /Users/*; do
 	[[ -d "$home" ]] || continue
 	rm -rf "$home/Library/Application Support/obot/obot-sentry" \
