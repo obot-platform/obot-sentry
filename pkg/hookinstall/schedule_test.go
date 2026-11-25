@@ -61,6 +61,7 @@ func TestDecideDue(t *testing.T) {
 		inputs scheduleInputs
 		boot   time.Time
 		want   bool
+		reason string
 	}{
 		{name: "no state", state: nil, inputs: inputs, boot: boot, want: true},
 		{name: "recent run", state: state(5 * time.Minute), inputs: inputs, boot: boot, want: false},
@@ -72,6 +73,8 @@ func TestDecideDue(t *testing.T) {
 		{name: "upgraded binary", state: state(5 * time.Minute), inputs: scheduleInputs{Version: "v9.9.9", Enforce: true, Homes: inputs.Homes}, boot: boot, want: true},
 		{name: "enforcement changed", state: state(5 * time.Minute), inputs: scheduleInputs{Enforce: false, Homes: inputs.Homes}, boot: boot, want: true},
 		{name: "new user profile", state: state(5 * time.Minute), inputs: scheduleInputs{Enforce: true, Homes: []string{"/Users/alice", "/Users/bob", "/Users/carol"}}, boot: boot, want: true},
+		{name: "listing failed mid-interval", state: state(5 * time.Minute), inputs: scheduleInputs{Enforce: true, HomesUnknown: true}, boot: boot, want: false},
+		{name: "listing failed after the interval", state: state(20 * time.Minute), inputs: scheduleInputs{Enforce: true, HomesUnknown: true}, boot: boot, want: true, reason: "interval elapsed"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			got := decideDue(tt.state, tt.inputs, interval, now, tt.boot)
@@ -80,6 +83,9 @@ func TestDecideDue(t *testing.T) {
 			}
 			if got.Reason == "" {
 				t.Fatal("decision has no reason")
+			}
+			if tt.reason != "" && got.Reason != tt.reason {
+				t.Fatalf("reason = %q, want %q", got.Reason, tt.reason)
 			}
 		})
 	}
@@ -304,5 +310,69 @@ func TestUninstallClearsScheduleState(t *testing.T) {
 	}
 	if st, err := loadScheduleState(runDir); st != nil || err != nil {
 		t.Fatalf("schedule state after uninstall = %+v, %v; want none", st, err)
+	}
+}
+
+func TestRunIfDueListingFailureIsNotAProfileChange(t *testing.T) {
+	machineRoot := realTempDir(t)
+	runDir := t.TempDir()
+	listErr := errors.New("dscl failed")
+	now := time.Date(2026, 11, 25, 12, 0, 0, 0, time.UTC)
+	inputs := newScheduleInputs(false, []*TargetUser{{HomeDir: "/Users/alice"}})
+
+	newInstaller := func() (*Installer, *bytes.Buffer) {
+		var out bytes.Buffer
+		return &Installer{
+			GOOS:                "darwin",
+			Privilege:           func() error { return nil },
+			ResolveExe:          func() (string, error) { return macExe, nil },
+			ResolveUsers:        func() (UserSet, error) { return UserSet{}, listErr },
+			ProvisionIdentity:   func() (string, error) { return "/id", nil },
+			ResolveDestinations: tempDestinations(machineRoot),
+			RunDir:              func() (string, error) { return runDir, nil },
+			IfDue:               true,
+			Interval:            15 * time.Minute,
+			Now:                 func() time.Time { return now },
+			BootTime:            func() (time.Time, error) { return now.Add(-time.Hour), nil },
+			Out:                 &out,
+		}, &out
+	}
+
+	// Mid-interval: not due, nothing converged, but the failure is still reported.
+	if err := saveScheduleState(runDir, inputs, now.Add(-5*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	inst, out := newInstaller()
+	if err := inst.Run(t.Context()); !errors.Is(err, listErr) {
+		t.Fatalf("err = %v, want the listing error", err)
+	}
+	if !strings.Contains(out.String(), "not due") {
+		t.Fatalf("a listing failure mid-interval made the run due:\n%s", out.String())
+	}
+	if _, err := os.Stat(filepath.Join(machineRoot, "Cursor/hooks.json")); err == nil {
+		t.Fatal("a not-due run converged machine policy")
+	}
+
+	// After the interval: machine policy converges for the right reason, and
+	// nothing is recorded, so the next poll retries.
+	if err := saveScheduleState(runDir, inputs, now.Add(-20*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	inst, out = newInstaller()
+	if err := inst.Run(t.Context()); !errors.Is(err, listErr) {
+		t.Fatalf("err = %v, want the listing error", err)
+	}
+	if _, err := os.Stat(filepath.Join(machineRoot, "Cursor/hooks.json")); err != nil {
+		t.Fatalf("machine policy not converged once due: %v\n%s", err, out.String())
+	}
+	logData, err := os.ReadFile(filepath.Join(runDir, RunLogName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(logData), `reason="interval elapsed"`) || strings.Contains(string(logData), "user profiles changed") {
+		t.Fatalf("log should give the interval, not a profile change, as the reason:\n%s", logData)
+	}
+	if st, _ := loadScheduleState(runDir); st == nil || !st.LastRunAt.Equal(now.Add(-20*time.Minute)) {
+		t.Fatalf("a run whose listing failed recorded state: %+v", st)
 	}
 }

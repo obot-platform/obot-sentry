@@ -37,6 +37,9 @@ type scheduleInputs struct {
 	Version string
 	Enforce bool
 	Homes   []string
+	// HomesUnknown is set when listing users failed: an empty Homes then
+	// says nothing about whether profiles changed, so it is not compared.
+	HomesUnknown bool
 }
 
 func newScheduleInputs(enforce bool, users []*TargetUser) scheduleInputs {
@@ -67,7 +70,7 @@ func decideDue(state *scheduleState, inputs scheduleInputs, interval time.Durati
 		return dueDecision{true, "obot-sentry version changed"}
 	case state.Enforce != inputs.Enforce:
 		return dueDecision{true, "enforcement setting changed"}
-	case !slices.Equal(state.Homes, inputs.Homes):
+	case !inputs.HomesUnknown && !slices.Equal(state.Homes, inputs.Homes):
 		return dueDecision{true, "user profiles changed"}
 	case now.Sub(state.LastRunAt)+dueSlack >= interval:
 		return dueDecision{true, "interval elapsed"}

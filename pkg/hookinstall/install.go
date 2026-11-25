@@ -234,6 +234,7 @@ func (i *Installer) run(ctx context.Context, goos string, out io.Writer, log *sl
 
 	if i.IfDue {
 		inputs := newScheduleInputs(i.Enforce, users.Users)
+		inputs.HomesUnknown = listErr != nil
 		decision := i.due(runDir, inputs, startedAt, log)
 		if !decision.Due {
 			_, _ = fmt.Fprintf(out, "obot-sentry %s: not due (%s); skipping\n", i.commandName(), decision.Reason)
