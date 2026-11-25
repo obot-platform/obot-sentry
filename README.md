@@ -309,10 +309,12 @@ Kiro runs no hooks in a workspace the user hasn't trusted, or in a window with
 no folder open, so calls made there are neither enforced nor audited. A folder
 trusted after Kiro starts stays unhooked until Kiro restarts
 ([kirodotdev/Kiro#11884](https://github.com/kirodotdev/Kiro/issues/11884)). The
-Kiro CLI runs these hooks only on its v3 agent engine (`kiro-cli chat --v3`, or
-`chat.agentEngine` set to `v3`). Its default v2 engine ignores `~/.kiro/hooks`,
-so CLI sessions on v2 are neither enforced nor audited. obot-sentry does not
-change the engine setting.
+Kiro CLI runs these hooks only on its v3 agent engine. Its v2 engine runs no
+hooks at all, so CLI sessions on v2 are neither enforced nor audited. Recent CLI
+versions use v3 for interactive sessions by default, but use v2 for
+`--no-interactive` or piped sessions, when resuming a v2 session, or when the
+user chooses it with `--v2` or the `chat.agentEngine` setting. obot-sentry does
+not change the engine setting.
 
 ### Turning it off
 
