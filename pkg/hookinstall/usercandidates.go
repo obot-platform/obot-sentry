@@ -38,6 +38,11 @@ func resolveCandidates(cands []userCandidate, timeout time.Duration) UserSet {
 		ch := make(chan resolved, 1)
 		results[i] = ch
 		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					ch <- resolved{nil, fmt.Errorf("internal error: %v", r)}
+				}
+			}()
 			u, err := c.resolve()
 			ch <- resolved{u, err}
 		}()

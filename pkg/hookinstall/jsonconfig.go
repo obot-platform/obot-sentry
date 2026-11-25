@@ -70,11 +70,51 @@ func parseJSONConfig(data []byte) (*jsonConfig, error) {
 		}
 		return &jsonConfig{root: v, bom: bom}, nil
 	}
+	if err := checkJSONDepth(body, maxJSONDepth); err != nil {
+		return nil, err
+	}
 	v, err := hujson.Parse(body)
 	if err != nil {
 		return nil, fmt.Errorf("parsing JSON config: %w", err)
 	}
 	return &jsonConfig{root: v, bom: bom}, nil
+}
+
+// maxJSONDepth is far beyond any real agent settings file, which nest under ten
+// levels. hujson recurses once per level with no limit, and a deep enough
+// document overflows the goroutine stack: a fatal error recover cannot catch,
+// which would kill the privileged run for every user after the one who planted
+// it, well within maxConfigBytes.
+const maxJSONDepth = 256
+
+// checkJSONDepth refuses a document nested deeper than max, skipping strings
+// and both comment forms hujson accepts.
+func checkJSONDepth(data []byte, max int) error {
+	depth := 0
+	for i := 0; i < len(data); i++ {
+		switch c := data[i]; {
+		case c == '"':
+			for i++; i < len(data) && data[i] != '"'; i++ {
+				if data[i] == '\\' {
+					i++
+				}
+			}
+		case c == '/' && i+1 < len(data) && data[i+1] == '/':
+			for i += 2; i < len(data) && data[i] != '\n'; i++ {
+			}
+		case c == '/' && i+1 < len(data) && data[i+1] == '*':
+			for i += 2; i+1 < len(data) && (data[i] != '*' || data[i+1] != '/'); i++ {
+			}
+			i++
+		case c == '{' || c == '[':
+			if depth++; depth > max {
+				return fmt.Errorf("refusing JSON config nested deeper than %d levels", max)
+			}
+		case c == '}' || c == ']':
+			depth--
+		}
+	}
+	return nil
 }
 
 // pack serializes the (possibly mutated) document, reproducing untouched input

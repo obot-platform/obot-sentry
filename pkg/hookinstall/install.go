@@ -248,6 +248,14 @@ func (i *Installer) run(ctx context.Context, goos string, out io.Writer, log *sl
 		// its outcome: any of them can rewrite files with its inputs, so the
 		// next poll has to compare against them. A failed run is marked so
 		// that the next poll retries it.
+		//
+		// The run is marked failed before it converges and the outcome
+		// overwrites that, so a run that dies partway (killed by the
+		// scheduler's time limit or Stop-ScheduledTask, or crashed) leaves a
+		// failed record rather than the previous success.
+		if markErr := saveFailedRunState(runDir, prior, inputs); markErr != nil {
+			log.Warn("recording run start failed", "err", logErr(markErr))
+		}
 		defer func() {
 			var saveErr error
 			if err == nil && listErr == nil {
@@ -448,7 +456,7 @@ func converge(ctx context.Context, plan Plan) ([]Result, error) {
 		userPlan.Destinations, userPlan.Users = perUser, []*TargetUser{u}
 		userResults, _, err := runUnit(ctx, userPlan, u, machineFailed)
 		if err != nil {
-			// Only a cancelled run gets here.
+			// A cancelled run or a panic in the unit gets here.
 			userResults = failedRows(perUser, u, err)
 		}
 		results = append(results, userResults...)
@@ -471,6 +479,13 @@ func runUnit(ctx context.Context, unitPlan Plan, u *TargetUser, priorFailed map[
 	}
 	done := make(chan outcome, 1)
 	go func() {
+		// A panic in a goroutine kills the process, and with it every unit
+		// after this one; report it as this unit's error instead.
+		defer func() {
+			if r := recover(); r != nil {
+				done <- outcome{err: fmt.Errorf("internal error: %v", r)}
+			}
+		}()
 		changes, err := buildChanges(unitCtx, unitPlan)
 		if err != nil {
 			done <- outcome{err: err}
@@ -689,7 +704,7 @@ func commitChange(ctx context.Context, read configReader, c plannedChange) Resul
 		if err := ctx.Err(); err != nil {
 			return failedResult(c, err)
 		}
-		if err := commitConfigFile(c.dest.Scope, c.user, c.absPath, c.data); err != nil {
+		if err := commitConfigFile(ctx, c.dest.Scope, c.user, c.absPath, c.data); err != nil {
 			return failedResult(c, err)
 		}
 	}

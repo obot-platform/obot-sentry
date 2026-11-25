@@ -128,7 +128,10 @@ func nameAccounts(users []*TargetUser, timeout time.Duration) {
 			continue
 		}
 		pending++
-		go func() { done <- named{i, accountName(sid)} }()
+		go func() {
+			defer func() { _ = recover() }()
+			done <- named{i, accountName(sid)}
+		}()
 	}
 	deadline := time.NewTimer(timeout)
 	defer deadline.Stop()

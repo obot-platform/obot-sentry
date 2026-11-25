@@ -1,6 +1,7 @@
 package hookinstall
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -162,7 +163,7 @@ func readConfigFile(scope Scope, u *TargetUser, absPath string) ([]byte, bool, e
 // already read it, so a link planted since then is refused. Ownership changes
 // go through descriptors, never paths, so nothing the user swaps in at a path
 // can be handed to them.
-func commitConfigFile(scope Scope, u *TargetUser, absPath string, data []byte) error {
+func commitConfigFile(ctx context.Context, scope Scope, u *TargetUser, absPath string, data []byte) error {
 	root, rel, err := openConfigRoot(scope, homeOf(u), absPath)
 	if err != nil {
 		return err
@@ -196,7 +197,7 @@ func commitConfigFile(scope Scope, u *TargetUser, absPath string, data []byte) e
 	if scope == ScopeUser {
 		owner = u
 	}
-	if err := writeAtomic(root, rel, absPath, data, filePerm, owner); err != nil {
+	if err := writeAtomic(ctx, root, rel, absPath, data, filePerm, owner); err != nil {
 		return err
 	}
 	if scope == ScopeMachine {
@@ -246,7 +247,7 @@ func dirChain(dir string) []string {
 
 // writeAtomic replaces rel under root with data. absPath is the same file as
 // the user knows it, and is the only path its errors name.
-func writeAtomic(root *os.Root, rel, absPath string, data []byte, perm os.FileMode, owner *TargetUser) error {
+func writeAtomic(ctx context.Context, root *os.Root, rel, absPath string, data []byte, perm os.FileMode, owner *TargetUser) error {
 	// The pid keeps concurrent installers off each other's in-flight write; the
 	// rename is atomic, so whichever commits last wins with identical content.
 	tmp := filepath.Join(filepath.Dir(rel), fmt.Sprintf(".%s.%d.obot-sentry-tmp", filepath.Base(rel), os.Getpid()))
@@ -263,6 +264,12 @@ func writeAtomic(root *os.Root, rel, absPath string, data []byte, perm os.FileMo
 	if err := writeAndClose(f, data, perm, owner); err != nil {
 		_ = root.Remove(tmp)
 		return fmt.Errorf("writing temporary file for %q: %w", absPath, withoutRootPath(err))
+	}
+	// The write and sync can stall past a unit's deadline; an abandoned unit
+	// must not publish.
+	if err := ctx.Err(); err != nil {
+		_ = root.Remove(tmp)
+		return err
 	}
 	if err := root.Rename(tmp, rel); err != nil {
 		_ = root.Remove(tmp)

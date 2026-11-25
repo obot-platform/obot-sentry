@@ -4,6 +4,7 @@ package hookinstall
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"syscall"
 )
@@ -40,10 +41,13 @@ func fchownToUser(f *os.File, u *TargetUser) error {
 	return f.Chown(u.UID, u.GID)
 }
 
-// chownCreatedDir opens with O_NOFOLLOW|O_DIRECTORY so that if the user swapped
-// a link in for the new directory, the link's target is not handed to them.
+// chownCreatedDir hands the user the directory this run just created. os.Root
+// follows a symlink that stays inside the root even when O_NOFOLLOW is passed,
+// so a user who swaps a link in for the new directory can point it at another
+// directory in their home. The descriptor is therefore checked to still be
+// what this run created: a directory owned by this process's user, and empty.
 func chownCreatedDir(root *os.Root, d string, u *TargetUser) error {
-	f, err := root.OpenFile(d, os.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW, 0)
+	f, err := root.OpenFile(d, os.O_RDONLY|syscall.O_DIRECTORY, 0)
 	if err != nil {
 		return err
 	}
@@ -52,8 +56,12 @@ func chownCreatedDir(root *os.Root, d string, u *TargetUser) error {
 	if err != nil {
 		return err
 	}
-	if !info.IsDir() {
-		return fmt.Errorf("refusing %q: not a directory", d)
+	st, ok := info.Sys().(*syscall.Stat_t)
+	if !info.IsDir() || !ok || int(st.Uid) != os.Geteuid() {
+		return fmt.Errorf("refusing %q: not the directory this run created", d)
+	}
+	if names, err := f.Readdirnames(1); len(names) > 0 || (err != nil && err != io.EOF) {
+		return fmt.Errorf("refusing %q: not the empty directory this run created", d)
 	}
 	return f.Chown(u.UID, u.GID)
 }

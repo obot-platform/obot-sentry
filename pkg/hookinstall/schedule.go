@@ -1,6 +1,7 @@
 package hookinstall
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -175,7 +176,7 @@ func writeRunFile(dir, name string, data []byte) error {
 	}
 	defer func() { _ = root.Close() }()
 	path := filepath.Join(dir, name)
-	if err := writeAtomic(root, name, path, data, 0o600, nil); err != nil {
+	if err := writeAtomic(context.Background(), root, name, path, data, 0o600, nil); err != nil {
 		return err
 	}
 	claimRunFile(path)
